@@ -759,6 +759,20 @@ test('audit：生命周期命中与豁免', () => {
   assert.ok(!titles.some((f) => f.endsWith('b.js')), 'ctx.effect 包裹的不该报')
 })
 
+test('audit：clearTimeout 收口的定时器不算未清理（白描实测回归）', () => {
+  // 白描 tools.ts 的子进程超时定时器经 finish() 统一 clearTimeout，
+  // 旧清理标记表没有 clearTimeout 仍被报「未绑定清理逻辑」
+  const dir = tmpPluginDir('audit-clear-timeout')
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 't-a6', version: '1.0.0' }))
+  fs.mkdirSync(path.join(dir, 'src'), { recursive: true })
+  fs.writeFileSync(
+    path.join(dir, 'src', 'a.js'),
+    `export function run(child, ms) { const t = setTimeout(() => child.kill(), ms); child.on('close', () => clearTimeout(t)) }\n`
+  )
+  const report = auditPlugin(dir)
+  assert.ok(!report.findings.some((f) => /清理逻辑/.test(f.title)), 'clearTimeout 收口不该报未清理')
+})
+
 test('audit：guide 交叉把已移除包 import 映射成弹性建议', () => {
   const dir = tmpPluginDir('audit-guide')
   fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 't-a5', version: '1.0.0' }))

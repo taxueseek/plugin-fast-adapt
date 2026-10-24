@@ -118,7 +118,10 @@ export function auditPlugin(pluginDir, { scanResult = null } = {}) {
     // 维度 4：生命周期清理
     const hasListener = chainNames.has('event.on') || callNames.has('on') || callNames.has('setInterval') || chainNames.has('watch')
     if (hasListener) {
-      const hasCleanup = memberNames.has('dispose') || callNames.has('clearInterval') || callNames.has('off') || chainNames.has('effect.dispose')
+      // clearTimeout 与 clearInterval 同样是清理标记：白描插件实测，
+      // 子进程超时定时器经 finish() 收口 clearTimeout，旧标记表漏了它仍被报
+      const hasCleanup =
+        memberNames.has('dispose') || callNames.has('clearInterval') || callNames.has('clearTimeout') || callNames.has('off') || chainNames.has('effect.dispose')
       // effect 判断走状态机（memberAccess）：注释里写 ctx.effect 不算真用了
       const usesEffect = memberNames.has('effect')
       if (!hasCleanup && !usesEffect) {
