@@ -268,6 +268,30 @@ export function parseVersion(v) {
   return { major: parts[0], minor: parts[1], patch: parts[2], pre: pre || null, raw: cleaned }
 }
 
+// prerelease 段按 semver 逐段比：纯数字段按数值比（rc.10 > rc.9，不是字典序），
+// 字母段按字典序，数字段低于字母段；段数少者更低（rc.3 < rc.3.1）。
+function comparePrerelease(a, b) {
+  const as = a.split('.')
+  const bs = b.split('.')
+  const n = Math.max(as.length, bs.length)
+  for (let i = 0; i < n; i++) {
+    const x = as[i]
+    const y = bs[i]
+    if (x === undefined) return -1
+    if (y === undefined) return 1
+    const xNum = /^\d+$/.test(x)
+    const yNum = /^\d+$/.test(y)
+    if (xNum && yNum) {
+      if (x !== y) return Number(x) < Number(y) ? -1 : 1
+    } else if (xNum !== yNum) {
+      return xNum ? -1 : 1
+    } else if (x !== y) {
+      return x < y ? -1 : 1
+    }
+  }
+  return 0
+}
+
 export function compareVersions(a, b) {
   const va = typeof a === 'string' ? parseVersion(a) : a
   const vb = typeof b === 'string' ? parseVersion(b) : b
@@ -277,7 +301,7 @@ export function compareVersions(a, b) {
   if (va.pre === vb.pre) return 0
   if (!va.pre) return 1
   if (!vb.pre) return -1
-  return va.pre < vb.pre ? -1 : 1
+  return comparePrerelease(va.pre, vb.pre)
 }
 
 export function isPrerelease(v) {

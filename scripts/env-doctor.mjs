@@ -19,17 +19,33 @@ const DSH_DIR = path.join(HOME, '.dsh')
 
 // ── 全局安装发现（不写死单一路径） ─────────────────────────────────────────
 
-function candidateGlobalRoots() {
-  const roots = []
+// 全局 node_modules 候选根。spawn 一次 npm root -g 要 60-120ms，旧实现每次
+// 探测都 spawn（一个进程里跑两遍），是 env-doctor 的主要耗时。这里静态路径
+// 零成本先行，全都探不到 @deepseek-ai 目录时才问 npm 兜底（自定义 prefix、
+// volta、asdf 一类安装位），结果缓存供整个进程复用。
+// Windows 下 npm/dsh 是 .cmd 批处理，spawn 必须走 shell 才找得到（Node 官方
+// 文档：.bat/.cmd 需 shell 选项）；POSIX 保持 shell:false 不变。
+const SPAWN_SHELL = process.platform === 'win32' ? true : false
+
+let globalRootsCache = null
+
+// platform/env 可注入，供自检做 Windows 模拟；带注入的调用不写缓存，
+// 模拟结果不会污染本进程后续的真实探测。
+export function candidateGlobalRoots({ platform = process.platform, env = process.env } = {}) {
+  const simulated = platform !== process.platform || env !== process.env
+  if (globalRootsCache && !simulated) return globalRootsCache
+  const roots = [
+    path.join(HOME, '.local', 'lib', 'node_modules'),
+    '/usr/local/lib/node_modules',
+    '/opt/homebrew/lib/node_modules',
+  ]
+  // Windows npm 默认前缀是 %APPDATA%\npm，node_modules 在其下；
+  // 先探这里可以免掉一次 npm spawn
+  if (platform === 'win32' && env.APPDATA) {
+    roots.push(path.join(env.APPDATA, 'npm', 'node_modules'))
+  }
   try {
-    const npmRoot = execFileSync('npm', ['root', '-g'], { encoding: 'utf8' }).trim()
-    if (npmRoot) roots.push(npmRoot)
-  } catch {}
-  roots.push(path.join(HOME, '.local', 'lib', 'node_modules'))
-  roots.push('/usr/local/lib/node_modules')
-  roots.push('/opt/homebrew/lib/node_modules')
-  try {
-    const nvmDir = process.env.NVM_DIR || path.join(HOME, '.nvm')
+    const nvmDir = env.NVM_DIR || path.join(HOME, '.nvm')
     const versions = path.join(nvmDir, 'versions', 'node')
     if (fs.existsSync(versions)) {
       for (const v of fs.readdirSync(versions)) {
@@ -37,7 +53,15 @@ function candidateGlobalRoots() {
       }
     }
   } catch {}
-  return [...new Set(roots.filter(Boolean))]
+  if (!roots.some((r) => fs.existsSync(path.join(r, '@deepseek-ai')))) {
+    try {
+      const npmRoot = execFileSync('npm', ['root', '-g'], { encoding: 'utf8', shell: SPAWN_SHELL }).trim()
+      if (npmRoot) roots.push(npmRoot)
+    } catch {}
+  }
+  const result = [...new Set(roots.filter(Boolean))]
+  if (!simulated) globalRootsCache = result
+  return result
 }
 
 function readPackageJson(dir) {
@@ -56,7 +80,7 @@ function findGlobalDsh() {
     }
   }
   try {
-    const out = execFileSync('dsh', ['--version'], { encoding: 'utf8' }).trim()
+    const out = execFileSync('dsh', ['--version'], { encoding: 'utf8', shell: SPAWN_SHELL }).trim()
     const m = out.match(/(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)/)
     if (m) return { version: m[1], location: null, source: 'dsh --version' }
   } catch {}
@@ -87,7 +111,6 @@ function scanOverlay(profile, globalVersion) {
     packages.push({ name: `@deepseek-ai/${name}`, version: pkg.version, dir: path.join(nodeModules, name) })
   }
 
-  const globalPkgDir = path.join(DSH_DIR, 'profiles', profile, 'node_modules', '@deepseek-ai')
   const findings = []
   for (const pkg of packages) {
     const reasons = []
@@ -121,8 +144,6 @@ function scanOverlay(profile, globalVersion) {
     }
   }
 
-  // 全局同名包查询走缓存，避免重复遍历
-  void globalPkgDir
   return findings
 }
 
@@ -218,7 +239,13 @@ export function diagnoseActivation(targetDir, installedPlugins) {
     try {
       const text = fs.readFileSync(patchFile, 'utf8')
       const nameEsc = pkg.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-      disabled = new RegExp(`name:\\s*['"]?${nameEsc}['"]?[\\s\\S]*?disabled:\\s*true`).test(text)
+      // 判定 disabled 限定在同一个条目块内：按列表项「- 」为界切块，
+      // 防止本插件条目被后面其他插件条目的 disabled: true 跨条目误伤
+      // （误伤会跳过 Silent Pending 风险检查，把该报的吞掉）。
+      const nameRe = new RegExp(`name:\\s*['"]?${nameEsc}['"]?`)
+      disabled = text
+        .split(/(?=^\s*-\s)/m)
+        .some((block) => nameRe.test(block) && /disabled:\s*true/.test(block))
     } catch {}
     const registered = patchEntries.some((e) => e.includes(pkg.name))
     return { profile, registered, disabled }
@@ -276,6 +303,7 @@ export function probeEnvironment(targetDir = process.cwd()) {
 
   const running = []
   try {
+    // ps 是 POSIX 命令；Windows 上没有，try/catch 退化为空清单（不误报）
     const ps = execFileSync('ps', ['-eo', 'pid,etime,command'], { encoding: 'utf8' })
     for (const line of ps.split('\n')) {
       if (/\bdsh\b/.test(line) && /web|desktop|serve/.test(line) && !/ps -eo/.test(line)) {

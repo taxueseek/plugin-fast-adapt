@@ -11,6 +11,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { printJson } from './lib/scanner.mjs'
 
 class MockContext {
@@ -131,8 +132,11 @@ export async function runQuickSmoke(pluginRoot) {
   const startTime = Date.now()
 
   try {
-    // cache-busting：同一进程内多次冒烟不读 ESM 缓存
-    const mod = await import(`file://${entryPath}?t=${Date.now()}-${Math.random().toString(36).slice(2)}`)
+    // cache-busting：同一进程内多次冒烟不读 ESM 缓存。
+    // 入口 URL 走 pathToFileURL：手拼 `file://${path}` 在 Windows 盘符路径
+    // （C:\...）下是非法 URL，动态 import 直接抛错。
+    const entryUrl = `${pathToFileURL(entryPath).href}?t=${Date.now()}-${Math.random().toString(36).slice(2)}`
+    const mod = await import(entryUrl)
     const pluginTarget = mod.default || mod
 
     if (pluginTarget.inject) {

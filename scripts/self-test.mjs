@@ -16,7 +16,7 @@ import { resolveTargetVersion, fetchNpmMetadata } from './guide-sync.mjs'
 import { anchorMatches } from './code-scan.mjs'
 import { runQuickSmoke } from './quick-smoke.mjs'
 import { auditPlugin } from './plugin-audit.mjs'
-import { extractInjects, diagnoseActivation } from './env-doctor.mjs'
+import { extractInjects, diagnoseActivation, candidateGlobalRoots } from './env-doctor.mjs'
 
 const tests = []
 function test(name, fn) {
@@ -217,6 +217,30 @@ test('prerelease 排序正确', () => {
   assert.strictEqual(compareVersions('0.2.0', '0.2.1-rc.3'), -1)
 })
 
+test('双位数 prerelease 段按数值比较（rc.10 > rc.9，防字典序回归）', () => {
+  assert.strictEqual(compareVersions('0.2.1-rc.10', '0.2.1-rc.9'), 1, 'rc.10 应大于 rc.9')
+  assert.strictEqual(compareVersions('0.2.1-rc.9', '0.2.1-rc.10'), -1)
+  assert.strictEqual(compareVersions('0.3.0-alpha.2', '0.3.0-alpha.10'), -1, 'alpha.10 应大于 alpha.2')
+  assert.strictEqual(compareVersions('0.2.1-rc.10', '0.2.1'), -1, '正式版仍高于任何预发布')
+})
+
+test('listGuideVersions 对双位数 prerelease 排序正确', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fast-adapt-guidesort-'))
+  try {
+    for (const v of ['v0.2.1-rc.10', 'v0.2.1-rc.9', 'v0.2.1-rc.2']) {
+      fs.mkdirSync(path.join(dir, v), { recursive: true })
+    }
+    const versions = listGuideVersions(dir)
+    assert.deepStrictEqual(
+      versions,
+      ['v0.2.1-rc.2', 'v0.2.1-rc.9', 'v0.2.1-rc.10'],
+      `rc.10 应排在 rc.9 之后: ${JSON.stringify(versions)}`
+    )
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('识别 prerelease', () => {
   assert.strictEqual(parseVersion('0.2.1-rc.3').pre, 'rc.3')
   assert.strictEqual(parseVersion('0.2.1').pre, null)
@@ -397,6 +421,58 @@ test('版本窗口外的 guide 被排除', () => {
   }
 })
 
+test('import 主包不命中已移除的兄弟包（防前缀误报回归）', () => {
+  // 官方 39 个包名全以 @deepseek-ai/dsh 开头：旧的反向前缀匹配会把
+  // import 主包的插件全部误报成 critical（2026-10-24 复现后收掉）
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fast-adapt-prefix-'))
+  try {
+    fs.mkdirSync(path.join(dir, 'src'), { recursive: true })
+    fs.writeFileSync(
+      path.join(dir, 'src', 'index.ts'),
+      `import { ctx } from '@deepseek-ai/dsh'\nexport const apply = () => ctx.tools.register({ name: 'x' })\n`
+    )
+    const guides = [
+      {
+        version: '0.2.1-rc.3',
+        topic: 'x',
+        title: 't',
+        change: '@deepseek-ai/dsh-settings is removed.',
+        migration: '1. Remove @deepseek-ai/dsh-settings imports.',
+        anchors: { packages: ['@deepseek-ai/dsh-settings'], members: [], codes: [] },
+      },
+    ]
+    const r = scanPlugin(dir, guides)
+    assert.strictEqual(r.findingCount, 0, `import 主包不该命中兄弟包移除: ${JSON.stringify(r.findings)}`)
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('import 已移除包的子路径仍命中（保召回）', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fast-adapt-subpath-'))
+  try {
+    fs.mkdirSync(path.join(dir, 'src'), { recursive: true })
+    fs.writeFileSync(
+      path.join(dir, 'src', 'index.ts'),
+      `import { legacy } from '@deepseek-ai/dsh-settings/lib/legacy'\nexport const apply = () => void legacy\n`
+    )
+    const guides = [
+      {
+        version: '0.2.1-rc.3',
+        topic: 'x',
+        title: 't',
+        change: '@deepseek-ai/dsh-settings is removed.',
+        migration: '1. Remove @deepseek-ai/dsh-settings imports.',
+        anchors: { packages: ['@deepseek-ai/dsh-settings'], members: [], codes: [] },
+      },
+    ]
+    const r = scanPlugin(dir, guides)
+    assert.ok(r.findings.some((f) => f.kind === 'package'), '子路径 import 仍应命中')
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('真实指南目录能列出版本（若本机有 clone）', () => {
   const candidates = [
     process.env.DSH_HARNESS_CLONE,
@@ -485,6 +561,26 @@ test('SOP 与 SKILL 引用的原版文件不漂移', () => {
   assert.ok(checked >= 8, `应至少核对 8 处引用，实际 ${checked} 处——SOP 可能被清空了`)
 })
 
+test('文档宣称的断言数与实际一致（防手工漂移）', () => {
+  // 这个数字已漂过两次（49→50→54 都是事后手补）；现在让自检拦住它
+  const root = path.resolve(import.meta.dirname, '..')
+  const docs = ['SKILL.md', 'README.md', 'README.en.md'].map((f) => path.join(root, f))
+  let checked = 0
+  for (const doc of docs) {
+    const text = fs.readFileSync(doc, 'utf8')
+    const numbers = [
+      ...text.matchAll(/(\d+)\s*项断言/g),
+      ...text.matchAll(/(\d+)\s*assertions/g),
+    ].map((m) => Number(m[1]))
+    assert.ok(numbers.length > 0, `${path.basename(doc)} 应写明断言数，否则本断言失去保护对象`)
+    for (const n of numbers) {
+      assert.strictEqual(n, tests.length, `${path.basename(doc)} 宣称 ${n} 项断言，实际 ${tests.length} 项`)
+    }
+    checked += numbers.length
+  }
+  assert.ok(checked >= 5, `应至少核对 5 处断言数，实际 ${checked} 处`)
+})
+
 // ── guide-sync dist-tags 缓存 ────────────────────────────────────────────────
 // 本机网络查 npm registry 曾实测 15s 超时失败；缓存命中应为 0 网络依赖。
 
@@ -526,7 +622,8 @@ test('缓存过期后重新拉网络并落盘', async () => {
   fs.writeFileSync(cache, JSON.stringify({ fetchedAt: Date.now() - 2 * 60 * 60 * 1000, data: { 'dist-tags': { latest: '0.2.0' } } }))
   let fetchCalls = 0
   const meta = await fetchNpmMetadata({
-    fetcher: async () => { fetchCalls++; return { ok: true, json: async () => ({ 'dist-tags': { latest: '0.2.1-rc.3', next: '0.2.1-rc.4' } }) } },
+    // dist-tags 专用端点直接返回标签对象（不再是全量包文档）
+    fetcher: async () => { fetchCalls++; return { ok: true, json: async () => ({ latest: '0.2.1-rc.3', next: '0.2.1-rc.4' }) } },
     cachePath: cache,
   })
   assert.strictEqual(fetchCalls, 1, '过期后应重新拉一次')
@@ -691,6 +788,50 @@ test('diagnoseActivation：产物缺失 → ERROR，挂载缺失 → WARN', () =
   const mounted = diagnoseActivation(dir, [{ profile: 'web', patchFile: '/nonexistent', patchEntries: [`{ id: 't-act', name: 't-act' }`] }])
   assert.strictEqual(mounted.verdict, 'OK')
   assert.strictEqual(mounted.perProfile[0].registered, true)
+})
+
+test('diagnoseActivation：disabled 判定不跨条目误伤', () => {
+  // 旧惰性正则会被后面其他插件条目的 disabled: true 误伤，
+  // 误伤会跳过本插件的 Silent Pending 风险检查
+  const dir = tmpPluginDir('act-dis')
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'alpha-plugin', version: '1.0.0', main: 'lib/index.js' }))
+  fs.mkdirSync(path.join(dir, 'lib'), { recursive: true })
+  fs.writeFileSync(path.join(dir, 'lib', 'index.js'), 'export function apply() {}\n')
+  const patch = path.join(dir, 'patch.yml')
+  fs.writeFileSync(patch, [
+    'plugins:',
+    '  - insert:',
+    '      name: alpha-plugin',
+    '      from: file:./alpha',
+    '  - insert:',
+    '      name: beta-plugin',
+    '      from: file:./beta',
+    '      disabled: true',
+    '',
+  ].join('\n'))
+  const r = diagnoseActivation(dir, [{ profile: 'web', patchFile: patch, patchEntries: ['name: alpha-plugin', 'name: beta-plugin disabled: true'] }])
+  assert.strictEqual(r.perProfile[0].disabled, false, '后面条目的 disabled:true 不该误伤 alpha-plugin')
+})
+
+// ── 跨平台模拟（Windows 真机验证待做，先锁住平台分支的行为） ────────────────
+
+test('Windows 模拟：%APPDATA% 静态根被探到，不依赖 npm spawn', () => {
+  const appData = tmpPluginDir('winroot')
+  const nm = path.join(appData, 'npm', 'node_modules')
+  fs.mkdirSync(path.join(nm, '@deepseek-ai', 'dsh'), { recursive: true })
+  fs.writeFileSync(
+    path.join(nm, '@deepseek-ai', 'dsh', 'package.json'),
+    JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.2.1-rc.3' })
+  )
+  const roots = candidateGlobalRoots({ platform: 'win32', env: { APPDATA: appData } })
+  assert.ok(roots.includes(nm), `应包含 %APPDATA%\\npm\\node_modules: ${JSON.stringify(roots)}`)
+})
+
+test('模拟调用不污染真实平台的全局根缓存', () => {
+  const before = candidateGlobalRoots()
+  candidateGlobalRoots({ platform: 'win32', env: { APPDATA: '/tmp/does-not-exist-xyz' } })
+  const after = candidateGlobalRoots()
+  assert.deepStrictEqual(after, before, '模拟调用不应改变真实探测结果')
 })
 
 // ── 性能回归门（防 lineAt 平方级退化） ───────────────────────────────────────

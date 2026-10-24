@@ -16,7 +16,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { scanSource } from './scanner.mjs'
+import { scanSource, compareVersions } from './scanner.mjs'
 
 export function parseGuideMarkdown(text) {
   const frontmatter = {}
@@ -209,6 +209,8 @@ export function loadGuides(guideRoot, version) {
 
 // 官方指南目录下的全部版本，按 semver 升序。
 // 目录名带 v 前缀（v0.2.1-alpha.2），比较时剥掉。
+// 排序复用 scanner 的 compareVersions：这里曾自带一份字典序实现，
+// rc.10 会排到 rc.9 前面，两处必须同源。
 export function listGuideVersions(guideRoot) {
   if (!fs.existsSync(guideRoot)) return []
   const bare = (name) => name.replace(/^v/, '')
@@ -217,18 +219,7 @@ export function listGuideVersions(guideRoot) {
     .filter((e) => e.isDirectory())
     .map((e) => e.name)
     .filter((name) => /^v?\d+\.\d+\.\d+/.test(name))
-    .sort((a, b) => {
-      const [na, nb] = [bare(a), bare(b)]
-      const [pa, pb] = [na.split('-'), nb.split('-')]
-      const [va, vb] = [pa[0].split('.').map(Number), pb[0].split('.').map(Number)]
-      for (let i = 0; i < 3; i++) {
-        if (va[i] !== vb[i]) return va[i] - vb[i]
-      }
-      if (pa[1] === pb[1]) return 0
-      if (!pa[1]) return 1
-      if (!pb[1]) return -1
-      return pa[1] < pb[1] ? -1 : 1
-    })
+    .sort((a, b) => compareVersions(bare(a), bare(b)))
 }
 
 // 供自检使用：确认解析器不会把注释里的同名词当成锚点

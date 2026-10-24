@@ -13,10 +13,12 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
-import { printJson, compareVersions, parseVersion } from './lib/scanner.mjs'
+import { printJson, compareVersions } from './lib/scanner.mjs'
 import { listGuideVersions } from './lib/guide-parser.mjs'
 
-const NPM_REGISTRY = 'https://registry.npmjs.org/@deepseek-ai/dsh'
+// dist-tags 专用端点只回标签对象（实测 67 字节）；全量包文档是 267KB，
+// 而这里只用到 dist-tags，网络、解析、缓存落盘全是白付的。
+const DIST_TAGS_URL = 'https://registry.npmjs.org/-/package/@deepseek-ai/dsh/dist-tags'
 const HARNESS_REPO = 'https://github.com/deepseek-ai/deepseek-harness.git'
 const CACHE_ROOT = path.join(os.homedir(), '.cache', 'dsh-plugin-fast-adapt')
 
@@ -35,9 +37,14 @@ export async function fetchNpmMetadata({ fetcher = null, maxAgeMs = METADATA_TTL
 
   const doFetch = fetcher || ((url, init) => fetch(url, init))
   try {
-    const res = await doFetch(NPM_REGISTRY, { signal: AbortSignal.timeout(15000) })
+    const res = await doFetch(DIST_TAGS_URL, { signal: AbortSignal.timeout(15000) })
     if (!res.ok) throw new Error(`npm registry 返回 ${res.status}`)
-    const data = await res.json()
+    const tags = await res.json()
+    if (!tags || typeof tags !== 'object' || !Object.keys(tags).length) {
+      throw new Error('dist-tags 响应为空')
+    }
+    // 缓存仍存 {'dist-tags': {...}} 形状，旧版全量文档缓存可直接续用
+    const data = { 'dist-tags': tags }
     writeCachedMetadata(cachePath, { fetchedAt: Date.now(), data })
     return { ...data, _metadataSource: 'network' }
   } catch (err) {
@@ -64,7 +71,7 @@ function writeCachedMetadata(cachePath, entry) {
 }
 
 // 本机版本 → 官方通道位置 → 建议目标
-export function resolveTargetVersion(localVersion, distTags, versions) {
+export function resolveTargetVersion(localVersion, distTags) {
   const channels = ['latest', 'next', 'alpha'].filter((c) => distTags?.[c])
   const channelEntries = channels.map((c) => ({ channel: c, version: distTags[c] }))
 
@@ -78,7 +85,6 @@ export function resolveTargetVersion(localVersion, distTags, versions) {
     }
   }
 
-  const local = parseVersion(localVersion)
   const newer = channelEntries
     .filter((c) => compareVersions(c.version, localVersion) > 0)
     .sort((a, b) => compareVersions(a.version, b.version))

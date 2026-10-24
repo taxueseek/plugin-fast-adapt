@@ -153,7 +153,7 @@ export function scanPlugin(pluginDir, guides, { localVersion = null, targetVersi
       memberBuckets.get(prep.last).push(prep)
     }
 
-    return { guide, introduced, memberBuckets, codes }
+    return { guide, memberBuckets, codes }
   })
 
   const findings = []
@@ -178,11 +178,21 @@ export function scanPlugin(pluginDir, guides, { localVersion = null, targetVersi
     const scanned = scanSource(source)
     const relFile = path.relative(pluginDir, file)
 
+    // 成员命中：成员访问和裸调用都算（installBundle(...) 是调用不是 a.b 形式）。
+    // 清单与 guide 无关，提到指南循环外只构造一次。
+    const memberHits = [
+      ...scanned.memberAccess.map((m) => ({ name: m.member, dotted: `${m.object}.${m.member}`, line: m.line })),
+      ...scanned.calls.map((c) => ({ name: c.name, dotted: c.name, line: c.line })),
+    ]
+
     for (const { guide, memberBuckets, codes } of guideIndex) {
-      // 包名命中
+      // 包名命中：只认「等于锚点」或「锚点的子路径」。
+      // 不做反向前缀（pkg.startsWith(imp.source)）：官方包名全以 @deepseek-ai/dsh
+      // 开头，import 主包 @deepseek-ai/dsh 会因此撞上已移除的 dsh-settings 一类
+      // 兄弟包，把没踩雷的插件报成 critical（2026-10-24 复现后去掉）。
       for (const imp of scanned.imports) {
         for (const pkg of guide.anchors.packages) {
-          if (imp.source === pkg || imp.source.startsWith(`${pkg}/`) || pkg.startsWith(imp.source)) {
+          if (imp.source === pkg || imp.source.startsWith(`${pkg}/`)) {
             findings.push({
               file: relFile,
               line: imp.line,
@@ -198,11 +208,6 @@ export function scanPlugin(pluginDir, guides, { localVersion = null, targetVersi
         }
       }
 
-      // 成员命中：成员访问和裸调用都算（installBundle(...) 是调用不是 a.b 形式）
-      const memberHits = [
-        ...scanned.memberAccess.map((m) => ({ name: m.member, dotted: `${m.object}.${m.member}`, line: m.line })),
-        ...scanned.calls.map((c) => ({ name: c.name, dotted: c.name, line: c.line })),
-      ]
       for (const hit of memberHits) {
         const bucket = memberBuckets.get(hit.name)
         if (!bucket) continue
