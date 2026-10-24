@@ -162,9 +162,15 @@ function findReplacements(migrationText) {
     }
   }
 
-  // 宽松：with/using/by 后面的符号一律视为新符号
-  for (const m of migrationText.matchAll(/\b(?:with|using|by)\s+`?([a-zA-Z_][\w$]*(?:\.[a-zA-Z_][\w$]*)*)/g)) {
+  // 宽松：with/using/by/into 后面的符号一律视为新符号，随后的「and Y」同伴
+  // 也是新符号。实测教训（白描插件，v0.2.0-rc.2 指南）："Move … into
+  // meta.title and meta.description" 的 meta.description 是迁移目标，
+  // 只抓 into 后第一个符号会漏掉 and 同伴，把新写法当待报锚点误报 high。
+  const LOOSE_NEW =
+    /\b(?:with|using|by|into)\s+`?([a-zA-Z_][\w$]*(?:\.[a-zA-Z_][\w$]*)*)`?(?:\s+and\s+`?([a-zA-Z_][\w$]*(?:\.[a-zA-Z_][\w$]*)*)`?)?/g
+  for (const m of migrationText.matchAll(LOOSE_NEW)) {
     if (m[1]) pairs.push([null, m[1]])
+    if (m[2]) pairs.push([null, m[2]])
   }
 
   return pairs

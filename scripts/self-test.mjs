@@ -16,7 +16,7 @@ import { resolveTargetVersion, fetchNpmMetadata } from './guide-sync.mjs'
 import { anchorMatches } from './code-scan.mjs'
 import { runQuickSmoke } from './quick-smoke.mjs'
 import { auditPlugin } from './plugin-audit.mjs'
-import { extractInjects, diagnoseActivation, candidateGlobalRoots } from './env-doctor.mjs'
+import { extractInjects, diagnoseActivation, candidateGlobalRoots, parsePatchEntries } from './env-doctor.mjs'
 
 const tests = []
 function test(name, fn) {
@@ -189,6 +189,17 @@ test('识别替换对，新符号进 introduced', () => {
   )
   assert.ok(a.introduced.includes('startActivation'), `startActivation 应为新符号: ${JSON.stringify(a.introduced)}`)
   assert.ok(!a.members.includes('startActivation'), '新符号不该留在待报锚点里')
+})
+
+test('迁移目标 Move … into X and Y 全部进 introduced（白描实测回归）', () => {
+  // v0.2.0-rc.2 真实指南句式：meta.description 是迁移目标，
+  // 旧识别只抓 into 后第一个符号，and 同伴被当待报锚点误报 high
+  const a = extractAnchors(
+    'A subpath is not a package, so the next release never reads a package.json for it. Its title and description come only from locale files.',
+    "1. Move the subpath manifest's name and description into meta.title and meta.description of the subpath locale files, and export them."
+  )
+  assert.ok(a.introduced.includes('meta.description'), `and 同伴应进 introduced: ${JSON.stringify(a.introduced)}`)
+  assert.ok(!a.members.includes('meta.description'), `迁移目标不该留在待报锚点: ${JSON.stringify(a.members)}`)
 })
 
 test('常量锚点只从 Change 段抽，Migration 里的示例值不算', () => {
@@ -811,6 +822,30 @@ test('diagnoseActivation：disabled 判定不跨条目误伤', () => {
   ].join('\n'))
   const r = diagnoseActivation(dir, [{ profile: 'web', patchFile: patch, patchEntries: ['name: alpha-plugin', 'name: beta-plugin disabled: true'] }])
   assert.strictEqual(r.perProfile[0].disabled, false, '后面条目的 disabled:true 不该误伤 alpha-plugin')
+})
+
+test('parsePatchEntries：多行 insert 与 id 覆盖条目算挂载，注释条目不算', () => {
+  // 实测 web profile：wide-research 条目的 name 在 - id: 下一行，
+  // 旧单行正则把活跃的 argo-dsh 误判成「未挂载」
+  const text = [
+    '# 注释掉的插件不算',
+    "# - id: mcp-argo",
+    "#   name: '@deepseek-ai/dsh-mcp-client'",
+    '- insert:',
+    '    - id: client-runtime',
+    "      name: '@deepseek-ai/dsh-client-runtime'",
+    '- id: wide-research',
+    "  name: '@taxueseek/argo-dsh'",
+    '  config:',
+    '    llm:',
+    '      name: MiniMax M3',
+    '',
+  ].join('\n')
+  const entries = parsePatchEntries(text)
+  assert.ok(entries.some((e) => e.includes('@deepseek-ai/dsh-client-runtime')), `多行 insert 应被识别: ${JSON.stringify(entries)}`)
+  assert.ok(entries.some((e) => e.includes('@taxueseek/argo-dsh')), `id 覆盖条目应被识别: ${JSON.stringify(entries)}`)
+  assert.ok(!entries.some((e) => e.includes('dsh-mcp-client')), '注释条目不该算挂载')
+  assert.ok(!entries.some((e) => e.includes('MiniMax')), '深层 config 的模型名不该进条目清单')
 })
 
 // ── 跨平台模拟（Windows 真机验证待做，先锁住平台分支的行为） ────────────────
