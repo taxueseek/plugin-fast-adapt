@@ -75,8 +75,22 @@ export function extractAnchors(changeText, migrationText) {
   const blob = `${changeText}\n${migrationText}`
   const anchors = { packages: new Set(), members: new Set(), codes: new Set() }
 
+  // 语义门（2026-10-24 实测误报复盘）：包名只有与「移除/改名」动词同句才进 package 锚点。
+  // Change 段大量提及包名只是语境引用——tool-presentation-mode 的
+  // 「The mode fields of @deepseek-ai/dsh-tools accept only native or ptc」讲的是字段取值，
+  // 包没被移除；无差别抽取会把所有 import 该包的插件误报成 critical。
+  const REMOVAL_RE =
+    /\b(removed|remove|retired|renamed|deleted|dropped|no longer|replaced by|moved to)\b/i
+  const sentenceHasRemoval = (text, pkg) => {
+    for (const sentence of text.split(/(?<=[.!?])\s+|\n+/)) {
+      if (sentence.includes(pkg) && REMOVAL_RE.test(sentence)) return true
+    }
+    return false
+  }
   for (const m of blob.matchAll(/@deepseek-ai\/[a-z0-9][\w-]*/g)) {
-    anchors.packages.add(m[0])
+    if (sentenceHasRemoval(changeText, m[0]) || sentenceHasRemoval(migrationText, m[0])) {
+      anchors.packages.add(m[0])
+    }
   }
 
   // 完整点链优先：抽 ctx.tools.presentAs 而不是 ctx.tools + tools.presentAs。

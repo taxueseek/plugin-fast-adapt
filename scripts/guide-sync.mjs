@@ -107,15 +107,17 @@ export function resolveTargetVersion(localVersion, distTags, versions) {
     }
   }
 
-  // 取最近的下一个版本，不跨大版本盲升
-  const target = newer[0]
+  // target 取官方所有通道的最高版本，不是「比本机新的最低一个」：
+  // 后者在多通道场景会选中 alpha 这类低质量通道（实测 0.1.0-rc.6 → alpha.5，
+  // 而宿主实际跑的是 next 的 rc.3），适配目标跟着宿主真实版本走才有意义。
+  const target = [...channelEntries].sort((a, b) => compareVersions(b.version, a.version))[0]
   return {
     verdict: 'upgrade-available',
     localVersion,
     channels: channelEntries,
     target: target.version,
     targetChannel: target.channel,
-    reason: `本机 ${localVersion} → 建议跟随 ${target.channel} 通道的 ${target.version}。`,
+    reason: `本机 ${localVersion} → 官方最高 ${target.channel} 通道的 ${target.version}。`,
   }
 }
 

@@ -103,16 +103,31 @@ Change 段描述的是「什么变了」，里面的连字符字符串才是真�
 | --- | --- | --- |
 | `up-to-date-on-channel` | 本机版本等于某通道版本 | 无目标版本，收工 |
 | `ahead-of-upstream` | 本机高于所有通道 | 无目标版本，收工 |
-| `upgrade-available` | 有通道版本高于本机 | 取最低的那个高版本 |
+| `upgrade-available` | 有通道版本高于本机 | 取官方所有通道的最高版本 |
 | `unknown-local` | 没检测到本机版本 | 退回 `latest`，标注需人工确认 |
 
-取「最低的那个高版本」而不是最新版，是为了不跨大版本盲升。
+取官方所有通道的最高版本（2026-10-24 实测修正：旧逻辑取「最低的高版本」，
+在多通道场景会选中 alpha 通道的 0.2.1-alpha.5，而宿主实际跑的是 next 的 0.2.1-rc.3——
+适配目标跟着宿主真实版本走才有意义，选 alpha 会漏掉 rc 线的变更）。
 
 prerelease 比较要正确处理：`0.2.1-rc.3 > 0.2.1-rc.2`，但 `0.2.1-rc.3 < 0.2.1`（正式版高于同名预发布版）。
+
+## 五点五、包名词义门（第五层降噪，2026-10-24 实测新增）
+
+**规则**：包名锚点只收「包名与移除/改名动词同句」的提及（removed / retired / renamed /
+deleted / dropped / no longer / replaced by / moved to），对 Change 和 Migration 两段分别
+逐句判定。
+
+**实测依据**：dsh-files（SDK 对齐 0.2.1-rc.3 的最潮插件）被报 3 处 critical package 命中，
+逐一核对全是语境引用——v0.2.1-alpha.1/tool-presentation-mode 的 Change 写的是
+「The `mode` fields of `@deepseek-ai/dsh-tools` accept only `native` or `ptc`」，
+讲的是字段取值，包没被移除。旧的无差别抽取把所有 import dsh-tools 的插件全报成
+「import 了已移除包」。加语义门后 dsh-files 3 → 0，dsh-ledger 1 → 0。
 
 ## 六、已知局限
 
 - **官方指南不覆盖所有破坏性变更**。它记录的是官方认为需要通知的变更。包废弃（如 `@deepseek-ai/dsh-client-runtime`）在实测的指南里查不到，那一类要靠 `env-doctor` 的覆盖层巡检兜。
 - **同名符号仍可能撞车**。规则 3 和第四节能挡掉大部分，但 `path.resolve()` 和 `runtime.resolve()` 这种只能靠人看上下文判断。
 - **不验证运行时行为**。这个技能只做静态匹配，不加载插件、不跑沙箱。要验证「改完能不能跑」，需要真宿主冷启动。
+- **包名替换对识别不到 @scope 形式**。Migration 里「renamed to `@deepseek-ai/xxx`」的新包名不进 introduced（替换对正则不匹配含 `@`/`/` 的符号），import 新包仍可能被报，靠人看上下文。
 - **`--clone` 需要网络**。npm registry 和 git clone 都有超时，失败会明确报错。

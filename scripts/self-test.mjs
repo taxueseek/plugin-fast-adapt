@@ -165,6 +165,23 @@ test('无锚点的 guide 不产生条目', () => {
   assert.strictEqual(a.packages.length + a.members.length + a.codes.length, 0)
 })
 
+test('语境引用的包名不进 package 锚点（2026-10-24 实测回归：tool-presentation-mode 把 dsh-tools 误报成 critical）', () => {
+  // 讲的是 mode 字段取值，包没被移除——import 该包的插件不该报
+  const a = extractAnchors(
+    'The `mode` fields of `@deepseek-ai/dsh-tools` and `@deepseek-ai/dsh-agent-tool-presentation` accept only `native` or `ptc`.',
+    '1. Replace mode: both with mode: native.'
+  )
+  assert.ok(!a.packages.includes('@deepseek-ai/dsh-tools'), `语境引用不该进锚点: ${JSON.stringify(a.packages)}`)
+})
+
+test('与移除动词同句的包名进 package 锚点', () => {
+  const a = extractAnchors(
+    'The package `@deepseek-ai/dsh-client-runtime` is removed from the official roster; plugins must not declare it.',
+    '1. Remove the import of @deepseek-ai/dsh-client-runtime from your client half.'
+  )
+  assert.ok(a.packages.includes('@deepseek-ai/dsh-client-runtime'), `真移除应进锚点: ${JSON.stringify(a.packages)}`)
+})
+
 test('识别替换对，新符号进 introduced', () => {
   const a = extractAnchors(
     'ctx.subagents.start() is removed; use startActivation().',
@@ -214,10 +231,17 @@ test('本机等于官方 next 通道 → 判定为最新，不给目标版本', 
   assert.strictEqual(r.currentChannel, 'next')
 })
 
-test('本机低于 latest → 建议跟随最近下一个版本', () => {
+test('本机低于官方 → 目标是官方最高通道，不选低质量通道', () => {
   const r = resolveTargetVersion('0.1.7-rc.2', TAGS)
   assert.strictEqual(r.verdict, 'upgrade-available')
-  assert.strictEqual(r.target, '0.2.1-alpha.5', `应选最低的高版本，实得 ${r.target}`)
+  assert.strictEqual(r.target, '0.2.1-rc.3', `应选官方最高（next 的 rc.3），实得 ${r.target}`)
+})
+
+test('本机跨大段落后 → 目标仍是官方最高，不落回 alpha（2026-10-24 实测回归：旧逻辑选了 alpha.5 漏掉 rc.2/rc.3 的变更）', () => {
+  const r = resolveTargetVersion('0.1.0-rc.6', TAGS)
+  assert.strictEqual(r.verdict, 'upgrade-available')
+  assert.strictEqual(r.target, '0.2.1-rc.3', `应选官方最高（next 的 rc.3），实得 ${r.target}`)
+  assert.strictEqual(r.targetChannel, 'next')
 })
 
 test('本机高于官方所有通道 → 判定为领先', () => {
@@ -235,7 +259,7 @@ test('检测不到本机版本 → 退回 latest 并标明', () => {
 test('通道去重且按版本排序', () => {
   const r = resolveTargetVersion('0.1.0', { latest: '0.2.1-rc.2', next: '0.2.1-rc.2', alpha: '0.2.1-alpha.5' })
   assert.strictEqual(r.verdict, 'upgrade-available')
-  assert.strictEqual(r.target, '0.2.1-alpha.5')
+  assert.strictEqual(r.target, '0.2.1-rc.2', `应选官方最高（latest/next 的 rc.2），实得 ${r.target}`)
 })
 
 // ── 5. 端到端：真实插件 × 真实指南 ────────────────────────────────────────
@@ -585,6 +609,25 @@ test('audit：peer 范围无 -0 放行报 HIGH，有 -0 不报', () => {
   const f = report.findings.find((x) => /prerelease 宿主/.test(x.title))
   assert.ok(f, '^0.2.0 拒绝 prerelease 应报')
   assert.strictEqual(f.severity, 'HIGH')
+})
+
+test('audit：* 通配不报，prerelease 双队列报 tuple 口径', () => {
+  const dir = tmpPluginDir('audit-peer2')
+  fs.mkdirSync(path.join(dir, 'src'), { recursive: true })
+  fs.writeFileSync(path.join(dir, 'src', 'index.js'), 'export function apply() {}\n')
+
+  // * 收一切包括 prerelease，报「拒绝 prerelease」是误报
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 't-a5', version: '1.0.0', peerDependencies: { '@deepseek-ai/dsh-tools': '*' } }))
+  let report = auditPlugin(dir)
+  assert.ok(!report.findings.some((f) => /peer 范围|peer 双队列/.test(f.title)), '通配 * 不该报')
+
+  // 双队列已带 prerelease 标签：报 tuple 规则口径（^0.2.0-rc.1 不收 0.2.1-rc.x），
+  // 修法是提 floor，不是泛泛的「拒绝 prerelease」
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 't-a5', version: '1.0.0', peerDependencies: { '@deepseek-ai/dsh-tools': '^0.1.0-rc.6 || ^0.2.0-rc.1' } }))
+  report = auditPlugin(dir)
+  const t = report.findings.find((x) => /peer 双队列/.test(x.title))
+  assert.ok(t, '双队列不含 0.2.1 线应报 tuple 口径')
+  assert.ok(/tuple/.test(t.detail), 'detail 应含 tuple 规则与提 floor 修法')
 })
 
 test('audit：注释里的 ctx.effect 不豁免真实的无清理监听', () => {

@@ -73,8 +73,9 @@ node scripts/plugin-audit.mjs <插件目录> --guide <guide-root> <本机版本>
 - 完整点链优先，丢掉 `ctx.tools` 这种过于通用的父链
 - 通用词（`register`、`resolve`、`readFile`）和短名不进锚点表；识别「旧 → 新」替换对，插件用了新符号说明已适配，不再报
 - 常量锚点只从 `Change` 段抽；匹配时要求对象部分互为后缀，`engines.dsh` 不会撞 `result.dsh`
+- 包名词义门：包名只在与移除/改名动词同句时才成为锚点，语境引用（「The mode fields of X accept only …」讲字段取值）不算——实测 dsh-files 的 3 处 critical 全是这类误报，加门后归零
 
-规则与实测依据见 [references/heuristics.md](references/heuristics.md)。冒烟验证会披露 Mock 兜底：输出里的 `mockFallbacks` 列出插件摸到但 Mock 没提供的属性，这个列表越长，冒烟结果可信度越低——**冒烟通过 ≠ 宿主兼容**，这句话写在输出里，不只写在文档里。
+命中带 `severity`（package=critical、member=high、code=medium，先修排前面的）和 `evidence`（命中行原文，核对误报不用开文件）。规则与实测依据见 [references/heuristics.md](references/heuristics.md)。冒烟验证会披露 Mock 兜底：输出里的 `mockFallbacks` 列出插件摸到但 Mock 没提供的属性，这个列表越长，冒烟结果可信度越低——**冒烟通过 ≠ 宿主兼容**，这句话写在输出里，不只写在文档里。
 
 ## 安装
 
@@ -142,4 +143,4 @@ npm test   # node scripts/self-test.mjs，50 项断言
 
 ## 与原项目的分工
 
-两个项目互补而非替代：原项目继续维护升级卡片库、统一工作流和 benchmark；本项目管「新版适配」主路径。官方指南覆盖不到的历史走廊（v0.1.7-rc.2 之前），本项目的 SOP 引用原项目的卡片和脚本——有 guide 的段用本项目的 `code-scan`，没 guide 的段用原项目的 `plan-migration.mjs` 和卡片，运行时验证用原项目的 `verify-runtime.mjs`。
+两个项目互补而非替代：原项目继续维护升级卡片库、统一工作流和 benchmark；本项目管「新版适配」主路径。宿主升级后的整批插件巡检走原项目的 [plugin-fleet-sweep](https://github.com/oh-my-dsh/dsh-plugin-upgrade-skill/tree/main/skills/plugin-fleet-sweep)（批量管广度），筛出的个体回到本项目六步流水线深查（本 skill 管深度）。官方指南覆盖不到的历史走廊（v0.1.7-rc.2 之前），本项目的 SOP 引用原项目的卡片和脚本——有 guide 的段用本项目的 `code-scan`，没 guide 的段用原项目的 `plan-migration.mjs` 和卡片，运行时验证用原项目的 `verify-runtime.mjs`。

@@ -137,16 +137,27 @@ export function auditPlugin(pluginDir, { scanResult = null } = {}) {
   // peer 范围弹性：不收 prerelease 宿主的写法在 rc/alpha 线上直接装不上
   if (pkg.peerDependencies) {
     for (const [name, range] of Object.entries(pkg.peerDependencies)) {
-      if (name.startsWith('@deepseek-ai/') && !String(range).includes('-0')) {
-        report.findings.push({
-          dimension: 'resilience',
-          severity: 'HIGH',
-          file: 'package.json',
-          title: `peer 范围拒绝 prerelease 宿主 (${name}: "${range}")`,
-          detail: 'semver 的 ^0.2.0 不收 0.2.1-alpha.1 一类预发布版；要跟预发布线需写含 -0 放行的范围，如 ">=0.1.0-0 <0.3.0"。',
-        })
-        deduct('resilience', 60, 15)
-      }
+      const r = String(range)
+      if (!name.startsWith('@deepseek-ai/') || r.includes('-0') || r.includes('*')) continue
+      // 已带 prerelease 标签的双队列（^0.2.0-rc.1 一类）报的是 tuple 规则：
+      // 按 semver，^0.2.0-rc.1 只收 0.2.0-rc.x，不收 0.2.1-rc.x——
+      // 宿主跨到 0.2.1 线时同样装不上，但修法是把队列 floor 提到目标线，不是加宽放行。
+      const hasPreTag = /\d-[a-z]/.test(r)
+      report.findings.push({
+        dimension: 'resilience',
+        severity: 'HIGH',
+        file: 'package.json',
+        title: hasPreTag
+          ? `peer 双队列不含 0.2.1 线宿主 (${name}: "${r}")`
+          : `peer 范围拒绝 prerelease 宿主 (${name}: "${r}")`,
+        detail: hasPreTag
+          ? 'semver 的 prerelease tuple 规则：^0.2.0-rc.1 只收 0.2.0-rc.x，不收 0.2.1-rc.x。宿主升 0.2.1 线时把对应队列的 floor 提到目标线，如 "^0.1.0-rc.6 || ^0.2.1-rc.3"。'
+          : 'semver 的 ^0.2.1 不收 0.2.1-rc.3 一类预发布版，三种修法按场景选：' +
+            '只跟一条预发布线 → floor 带上标签，如 "^0.2.1-rc.3"；' +
+            '要同时兼容新旧两代宿主 → 双队列，如 "^0.1.0-rc.6 || ^0.2.1-rc.3"；' +
+            '想全收预发布 → -0 放行，如 ">=0.1.0-0 <0.3.0"（最宽，也最不精确）。',
+      })
+      deduct('resilience', 60, 15)
     }
   }
 

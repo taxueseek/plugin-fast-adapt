@@ -119,6 +119,13 @@ function pickMigrationSteps(guide, symbol) {
   return scored.slice(0, 2).map((s) => `步骤 ${s.index}: ${s.step.replace(/\s+/g, ' ').slice(0, 400)}`)
 }
 
+// 命中分级（对齐 plugin-audit 的扣分语言，先修排前面的）：
+//   critical = package，import 已移除/已改名包，装载必炸
+//   high     = member，调用已移除方法或字段，运行时才炸
+//   medium   = code，字符串里出现已变更的错误码/事件名，最可能撞同名
+const SEVERITY_BY_KIND = { package: 'critical', member: 'high', code: 'medium' }
+const KIND_ORDER = { package: 0, member: 1, code: 2 }
+
 export function scanPlugin(pluginDir, guides, { localVersion = null, targetVersion = null } = {}) {
   const roots = pickScanRoots(pluginDir)
   const files = roots.flatMap((r) => findSourceFiles(r))
@@ -157,6 +164,16 @@ export function scanPlugin(pluginDir, guides, { localVersion = null, targetVersi
     const source = fs.readFileSync(file, 'utf8')
     scannedFiles++
     scannedLines += source.split('\n').length
+    const sourceLines = source.split('\n')
+
+    // witnesses 式最小复现：命中行原文（trim 后截 160 字符），
+    // 报告自含上下文，核对「是不是误报」不用再开文件。
+    const evidenceOf = (line) => {
+      const text = sourceLines[line - 1]
+      if (text === undefined) return null
+      const trimmed = text.trim()
+      return trimmed.length > 160 ? `${trimmed.slice(0, 157)}…` : trimmed || null
+    }
 
     const scanned = scanSource(source)
     const relFile = path.relative(pluginDir, file)
@@ -171,6 +188,8 @@ export function scanPlugin(pluginDir, guides, { localVersion = null, targetVersi
               line: imp.line,
               symbol: imp.source,
               kind: 'package',
+              severity: SEVERITY_BY_KIND.package,
+              evidence: evidenceOf(imp.line),
               guide: `${guide.version}/${guide.topic}`,
               title: guide.title,
               migration: pickMigrationSteps(guide, pkg),
@@ -194,6 +213,8 @@ export function scanPlugin(pluginDir, guides, { localVersion = null, targetVersi
               line: hit.line,
               symbol: hit.dotted,
               kind: 'member',
+              severity: SEVERITY_BY_KIND.member,
+              evidence: evidenceOf(hit.line),
               guide: `${guide.version}/${guide.topic}`,
               title: guide.title,
               migration: pickMigrationSteps(guide, hit.name),
@@ -211,6 +232,8 @@ export function scanPlugin(pluginDir, guides, { localVersion = null, targetVersi
               line: str.line,
               symbol: code,
               kind: 'code',
+              severity: SEVERITY_BY_KIND.code,
+              evidence: evidenceOf(str.line),
               guide: `${guide.version}/${guide.topic}`,
               title: guide.title,
               migration: pickMigrationSteps(guide, code),
@@ -245,8 +268,17 @@ export function scanPlugin(pluginDir, guides, { localVersion = null, targetVersi
     guidesConsidered: relevant.length,
     window: { localVersion, targetVersion },
     findingCount: unique.length,
+    bySeverity: Object.entries(
+      unique.reduce((acc, f) => ((acc[f.severity] = (acc[f.severity] || 0) + 1), acc), {})
+    ),
     findingsByGuide: Object.fromEntries([...byGuide.entries()].sort()),
-    findings: unique.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line),
+    // 先按 severity（package > member > code），同级别内按文件与行号
+    findings: unique.sort(
+      (a, b) =>
+        KIND_ORDER[a.kind] - KIND_ORDER[b.kind] ||
+        a.file.localeCompare(b.file) ||
+        a.line - b.line
+    ),
   }
 }
 
@@ -271,10 +303,11 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.met
   const result = scanPluginFromGuideRoot(pluginDir, guideRoot, { localVersion, targetVersion })
   printJson(result)
 
+  const sev = Object.fromEntries(result.bySeverity.map(([k, v]) => [k, v]))
   process.stderr.write(
     `\n扫描 ${result.scannedFiles} 个文件 / ${result.scannedLines} 行\n` +
     `参考指南版本: ${result.guideVersionsAvailable.join(', ') || '无'}\n` +
     `纳入考虑的 guide 条目: ${result.guidesConsidered}\n` +
-    `命中: ${result.findingCount} 处，涉及 ${Object.keys(result.findingsByGuide).length} 条官方变更\n`
+    `命中: ${result.findingCount} 处（critical(package) ${sev.critical || 0} / high(member) ${sev.high || 0} / medium(code) ${sev.medium || 0}），涉及 ${Object.keys(result.findingsByGuide).length} 条官方变更\n`
   )
 }

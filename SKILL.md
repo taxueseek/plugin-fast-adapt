@@ -53,7 +53,7 @@ node scripts/guide-sync.mjs <本机版本>
 
 | 判定 | 含义 | 下一步 |
 | --- | --- | --- |
-| `upgrade-available` | 官方有更高版本 | 取 `target` 继续 |
+| `upgrade-available` | 有通道版本高于本机 | 取 `target`（官方所有通道的最高版本）继续 |
 | `up-to-date-on-channel` | 本机已是某通道的最新版 | 无需适配，收工 |
 | `ahead-of-upstream` | 本机比官方所有通道都新 | 无需适配，收工 |
 | `unknown-local` | 没检测到本机版本 | 默认跟 `latest`，但要人工确认 |
@@ -82,7 +82,7 @@ node scripts/code-scan.mjs <插件目录> <upgrade-guide 目录> <本机版本> 
 - `migration`：官方给的修法原文（从该指南的 Migration 段抽出来的相关步骤）
 - `findingCount` / `guidesConsidered`：命中数与参考的指南条数
 
-命中分三类：`package`（import 了已移除或已改名的包）、`member`（调用了已移除的方法或字段）、`code`（字符串里出现已变更的错误码或事件名）。
+命中分三类并带 `severity`：`package`（import 了已移除或已改名的包，critical，装载必炸）、`member`（调用了已移除的方法或字段，high，运行时炸）、`code`（字符串里出现已变更的错误码或事件名，medium，最可能撞同名）。findings 先按 severity 排再按文件行号；每条带 `evidence`（命中行原文）。包名锚点有语义门：只在与移除/改名动词同句时才成为锚点，语境引用不算。
 
 ### 第五步（可选）：修完秒验
 
@@ -116,6 +116,10 @@ node scripts/plugin-audit.mjs <插件目录> --guide <guide-root> <本机版本>
 | Cordis 教程、API、cookbook | 官方仓库 `deepseek-harness/docs/` 的 cordis-tutorial、cordis-api、cookbook |
 | 起步脚手架 | 社区模板 bugmaker2/dsh-plugin-template（102★）等 |
 | 造完之后 | 回本 skill：quick-smoke 秒验 → env-doctor 看启用就绪 → plugin-audit 体检 → code-scan 对目标版本核查 |
+
+## 批量场景：整批已装插件的宿主升级巡检
+
+本 skill 一次深查一个插件。宿主刚升级、要把整批已装插件全量过一遍时，先用原仓库 [plugin-fleet-sweep](https://github.com/oh-my-dsh/dsh-plugin-upgrade-skill/tree/main/skills/plugin-fleet-sweep) 做批量筛查，筛出有问题的插件再逐个回到本 skill 的六步流水线深查——批量管广度，本 skill 管深度。
 
 ## 老插件：官方指南覆盖不到时
 

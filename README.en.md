@@ -76,8 +76,9 @@ A naive first version reported 12 findings on a real plugin; on inspection **all
 - Full member chains win; overly generic parent chains like `ctx.tools` are dropped
 - Generic words (`register`, `resolve`, `readFile`) and short names never become anchors; "old → new" replacement pairs are recognized, so a plugin already using the new symbol is not reported
 - Constant anchors come only from the `Change` section; matching requires the object parts to be mutual suffixes, so `engines.dsh` never collides with `result.dsh`
+- Package semantic gate: a package name becomes an anchor only when mentioned in a sentence with a removal/renaming verb — contextual mentions ("The mode fields of X accept only …", about field values) do not count. All 3 criticals reported on dsh-files were of this kind; the gate zeroed them
 
-The rules and the measurements behind them are in [references/heuristics.md](references/heuristics.md). The smoke test discloses its mock fallbacks: the `mockFallbacks` list in the output names every property the plugin touched but the mock does not provide — the longer that list, the less the result can be trusted. **A passing smoke test is not host compatibility**, and the tool says so in its output, not just in the docs.
+Each finding carries a `severity` (package=critical, member=high, code=medium — fix the front of the list first) and an `evidence` line (the source line itself, so checking for false positives needs no file opening). The rules and the measurements behind them are in [references/heuristics.md](references/heuristics.md). The smoke test discloses its mock fallbacks: the `mockFallbacks` list in the output names every property the plugin touched but the mock does not provide — the longer that list, the less the result can be trusted. **A passing smoke test is not host compatibility**, and the tool says so in its output, not just in the docs.
 
 ## Install
 
@@ -145,4 +146,4 @@ The official upgrade guide only goes back to dsh-v0.1.7-rc.2. For older plugins,
 
 ## Division of work with upstream
 
-The two projects complement each other: upstream keeps the card library, the unified workflow and the benchmark; this project owns the "adapt to a new version" main path. For historical corridors the official guide does not cover (before v0.1.7-rc.2), this project's SOP references upstream's cards and scripts — segments with a guide use this project's `code-scan`, segments without use upstream's `plan-migration.mjs` and cards, and runtime verification uses upstream's `verify-runtime.mjs`.
+The two projects complement each other: upstream keeps the card library, the unified workflow and the benchmark; this project owns the "adapt to a new version" main path. A fleet-wide sweep after a host upgrade goes to upstream's [plugin-fleet-sweep](https://github.com/oh-my-dsh/dsh-plugin-upgrade-skill/tree/main/skills/plugin-fleet-sweep) (breadth), and each flagged plugin comes back to this project's six-step pipeline for a deep pass (depth). For historical corridors the official guide does not cover (before v0.1.7-rc.2), this project's SOP references upstream's cards and scripts — segments with a guide use this project's `code-scan`, segments without use upstream's `plan-migration.mjs` and cards, and runtime verification uses upstream's `verify-runtime.mjs`.
