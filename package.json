@@ -1,6 +1,6 @@
 {
   "name": "plugin-fast-adapt",
-  "version": "1.0.0",
+  "version": "0.0.1",
   "private": true,
   "description": "DSH 插件适配与破坏性变更核查：直连官方升级指南，零外部依赖",
   "type": "module",
