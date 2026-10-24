@@ -438,14 +438,23 @@ test('SOP 与 SKILL 引用的原版文件不漂移', () => {
     path.join(skillDir, 'SKILL.md'),
     path.join(skillDir, 'references', 'legacy-migration-sop.md'),
   ]
-  const linkRe = /(\.\.\/(?:\.\.\/plugin-upgrade|references)\/[\w/.-]+)|\((references\/[\w/.-]+)\)/g
+  // 独立仓库后，对原版文件的引用走 GitHub URL（前缀固定，防手滑改错仓）；
+  // 本仓库内部引用仍走 references/ 相对路径，本地文件必须真实存在。
+  const upstreamPrefix = 'https://github\\.com/oh-my-dsh/dsh-plugin-upgrade-skill/tree/main/skills/'
+  const linkRe = new RegExp(`\\((${upstreamPrefix}[\\w/.-]+)\\)|\\((references\\/[\\w/.-]+)\\)`, 'g')
   let checked = 0
   for (const doc of docs) {
     const text = fs.readFileSync(doc, 'utf8')
     for (const m of text.matchAll(linkRe)) {
-      const rel = m[1] || m[2]
-      const target = path.resolve(path.dirname(doc), rel)
-      assert.ok(fs.existsSync(target), `${path.basename(doc)} 引用的 ${rel} 不存在（死链）`)
+      const upstreamUrl = m[1]
+      if (upstreamUrl) {
+        assert.ok(upstreamUrl.startsWith('https://github.com/oh-my-dsh/dsh-plugin-upgrade-skill/tree/main/skills/'),
+          `${path.basename(doc)} 引用的原版 URL 前缀不对：${upstreamUrl}`)
+      } else {
+        const rel = m[2]
+        const target = path.resolve(path.dirname(doc), rel)
+        assert.ok(fs.existsSync(target), `${path.basename(doc)} 引用的 ${rel} 不存在（死链）`)
+      }
       checked++
     }
   }

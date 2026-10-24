@@ -1,6 +1,6 @@
 ---
 name: plugin-fast-adapt
-description: DSH 插件适配与破坏性变更核查，兼造插件路由与性能架构审计。查 DeepSeek 官方最新版本，取该版本的官方升级指南，扫描本机插件代码，报出哪些地方踩了破坏性变更并给出官方修法；同时巡检本机 DSH 环境（profiles 覆盖层旧包残留、已装插件、运行中宿主、插件启用就绪度）。修完可秒级冒烟验证，升级时可顺带做插件性能与架构审计。老版本插件（官方指南覆盖不到 v0.1.7-rc.2 之前的走廊）转迁移 SOP，对照姊妹 skill 的人工卡片走廊走七阶段流程。当需要把 DSH 插件适配到新版本或老版本、从零创建 DSH 插件、排查升级后插件报错、核查插件是否用了已移除的包或 API、检查 ~/.dsh 覆盖层有无旧包残留、给插件做性能与架构体检时使用。触发词：适配 DSH 插件、升级插件、插件不兼容、dsh 升级后报错、插件用了废弃 API、检查覆盖层旧包、老版本 DSH 适配、历史走廊迁移、创建 DSH 插件、写 DSH 插件、插件冒烟测试、插件性能审计、插件装了没生效。
+description: DSH 插件适配与破坏性变更核查，兼造插件路由与性能架构审计。查 DeepSeek 官方最新版本，取该版本的官方升级指南，扫描本机插件代码，报出哪些地方踩了破坏性变更并给出官方修法；同时巡检本机 DSH 环境（profiles 覆盖层旧包残留、已装插件、运行中宿主、插件启用就绪度）。修完可秒级冒烟验证，升级时可顺带做插件性能与架构审计。老版本插件（官方指南覆盖不到 v0.1.7-rc.2 之前的走廊）转迁移 SOP，对照原仓库 plugin-upgrade 的人工卡片走廊走七阶段流程。当需要把 DSH 插件适配到新版本或老版本、从零创建 DSH 插件、排查升级后插件报错、核查插件是否用了已移除的包或 API、检查 ~/.dsh 覆盖层有无旧包残留、给插件做性能与架构体检时使用。触发词：适配 DSH 插件、升级插件、插件不兼容、dsh 升级后报错、插件用了废弃 API、检查覆盖层旧包、老版本 DSH 适配、历史走廊迁移、创建 DSH 插件、写 DSH 插件、插件冒烟测试、插件性能审计、插件装了没生效。
 ---
 
 # plugin-fast-adapt
@@ -92,7 +92,7 @@ node scripts/quick-smoke.mjs <插件目录>
 
 纯内存模拟 Cordis 上下文，动态载入插件入口，毫秒到秒级验证：模块能加载、`apply` 契约能执行、工具能注册。改完代码后先跑它，挂了立刻回改，不用等真宿主冷启动。
 
-**边界**：冒烟通过 ≠ 宿主兼容。Mock 只覆盖 logger/tools/effect/on 等常见面；输出里的 `mockFallbacks` 列出了插件摸到但 Mock 没提供的属性——这个列表越长，本次结果可信度越低。真冷启动验证用姊妹 skill 的 `verify-runtime.mjs`。
+**边界**：冒烟通过 ≠ 宿主兼容。Mock 只覆盖 logger/tools/effect/on 等常见面；输出里的 `mockFallbacks` 列出了插件摸到但 Mock 没提供的属性——这个列表越长，本次结果可信度越低。真冷启动验证用原仓库 plugin-upgrade 的 `verify-runtime.mjs`。
 
 ### 第六步（可选）：升级时顺带做性能与架构体检
 
@@ -111,7 +111,7 @@ node scripts/plugin-audit.mjs <插件目录> --guide <guide-root> <本机版本>
 
 | 需求 | 去 where |
 | --- | --- |
-| 仓库模式与插件形态分类（tool / LLM adapter / hook / service 四类 form 的写法） | 姊妹 skill 同仓库的 `../plugin-write/SKILL.md`，按 form 读对应 reference |
+| 仓库模式与插件形态分类（tool / LLM adapter / hook / service 四类 form 的写法） | [原仓库 plugin-write skill](https://github.com/oh-my-dsh/dsh-plugin-upgrade-skill/tree/main/skills/plugin-write) 的 SKILL.md，按 form 读对应 reference |
 | 公共命名规范与注册表冲突检查（`dsh-plugin.naming.json`） | plugin-write 的 naming-conventions 与 registry-check reference |
 | Cordis 教程、API、cookbook | 官方仓库 `deepseek-harness/docs/` 的 cordis-tutorial、cordis-api、cookbook |
 | 起步脚手架 | 社区模板 bugmaker2/dsh-plugin-template（102★）等 |
@@ -119,7 +119,7 @@ node scripts/plugin-audit.mjs <插件目录> --guide <guide-root> <本机版本>
 
 ## 老插件：官方指南覆盖不到时
 
-官方 upgrade-guide 最早只到 dsh-v0.1.7-rc.2。插件更老、目标版本更老，或跨大段历史走廊时，`code-scan` 会报 `guidesConsidered = 0`——这时转 [老插件迁移 SOP](references/legacy-migration-sop.md)：用姊妹 skill plugin-upgrade 的人工卡片走廊（dsh-v0.1.0-rc.8 起 19 条边 + 跳版卡）当差异来源，按七阶段 checklist 走：定模式 → 只读准备 → 幽灵宿主检查 → 组装走廊 → 七类触点 → 计划确认 → 六层验证。两套工具的分工速查也在 SOP 里：有 guide 的段用本 skill 的 `code-scan`，没 guide 的段用原版的 `plan-migration.mjs` 和卡片，运行时验证用原版的 `verify-runtime.mjs`。
+官方 upgrade-guide 最早只到 dsh-v0.1.7-rc.2。插件更老、目标版本更老，或跨大段历史走廊时，`code-scan` 会报 `guidesConsidered = 0`——这时转 [老插件迁移 SOP](references/legacy-migration-sop.md)：用原仓库 [plugin-upgrade skill](https://github.com/oh-my-dsh/dsh-plugin-upgrade-skill/tree/main/skills/plugin-upgrade) 的人工卡片走廊（dsh-v0.1.0-rc.8 起 19 条边 + 跳版卡）当差异来源，按七阶段 checklist 走：定模式 → 只读准备 → 幽灵宿主检查 → 组装走廊 → 七类触点 → 计划确认 → 六层验证。两套工具的分工速查也在 SOP 里：有 guide 的段用本 skill 的 `code-scan`，没 guide 的段用原版的 `plan-migration.mjs` 和卡片，运行时验证用原版的 `verify-runtime.mjs`。
 
 ## 怎么读结果
 
@@ -141,10 +141,10 @@ node scripts/plugin-audit.mjs <插件目录> --guide <guide-root> <本机版本>
 ## 自检
 
 ```sh
-npm run test:fast-adapt
+npm test
 ```
 
-49 项断言，覆盖扫描器不误报（注释和字符串里的同名词不算命中）、不漏报、版本启发式、替换对识别、端到端命中、SOP 引用完整性、dist-tags 缓存三态、冒烟验证、四维审计、启用诊断、扫描性能回归门。零网络、零外部依赖，任何机器上都能跑。
+50 项断言，覆盖扫描器不误报（注释和字符串里的同名词不算命中）、不漏报、版本启发式、替换对识别、端到端命中、SOP 引用完整性、dist-tags 缓存三态、冒烟验证、四维审计、启用诊断、扫描性能回归门。零网络、零外部依赖，任何机器上都能跑。
 
 ## 脚本清单
 

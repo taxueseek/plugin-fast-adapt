@@ -1,0 +1,18 @@
+{
+  "name": "plugin-fast-adapt",
+  "version": "1.0.0",
+  "private": true,
+  "description": "DSH 插件适配与破坏性变更核查：直连官方升级指南，零外部依赖",
+  "type": "module",
+  "scripts": {
+    "test": "node scripts/self-test.mjs"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/taxueseek/plugin-fast-adapt.git"
+  }
+}
