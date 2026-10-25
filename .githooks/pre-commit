@@ -1,0 +1,5 @@
+#!/bin/sh
+# 提交前自检（约 2 秒）：拦测试红与下游技能面漂移——改完真源忘了 sync-skill
+# 时在 commit 这一刻被拦，而不是等有人跑 npm test 才发现。
+# 启用（一次性，本仓根目录）：git config core.hooksPath .githooks
+npm test --silent
