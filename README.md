@@ -29,7 +29,7 @@ DSH 插件适配与破坏性变更核查，兼从零造插件脚手架。查官�
 | 弱模型表现 | 全套卡片进上下文，-3.07 pp | 六个独立脚本，每步只产出一份小输出 |
 | 代码级扫描 | 无 | 锚点匹配 + 四层降噪（见下文实测） |
 | 依赖 | — | 零外部依赖：Node 内置模块 + `git`/`npm` 命令 |
-| 自检 | — | 73 项断言，零网络，任何机器能跑 |
+| 自检 | — | 79 项断言，零网络，任何机器能跑 |
 
 ## 六步流程
 
@@ -101,7 +101,13 @@ node scripts/scaffold.mjs taxueseek/my-tool --form tool|hook|service|config|llm-
 
 一条命令生成可冒烟骨架：package.json（免构建纯 ESM 不变量）、按形态的最小可跑入口、`cordis.patch.yml` 挂载条目、`dsh-plugin.naming.json` 命名投影（collision-resistant 规则全量推导，生成物已过上游 validate-names 的 `--strict` 校验）。tool/hook 两形态零依赖当场冒烟（生成即验证注册）；service/config/llm-adapter 依赖宿主 `@deepseek-ai/*` 基类，诚实跳过并标注装包后手动跑。目标目录非空即拒绝，非法 coordinate 在写盘前拒绝。
 
-骨架只保证结构与命名合规，能力实现仍以 [plugin-write](https://github.com/oh-my-dsh/dsh-plugin-upgrade-skill/tree/main/skills/plugin-write) 的五份 form reference 为契约真源。
+骨架只保证结构与命名合规，能力实现仍以 [plugin-write](https://github.com/oh-my-dsh/dsh-plugin-upgrade-skill/tree/main/skills/plugin-write) 的五份 form reference 为契约真源。写完能力后一条命令过体检门：
+
+```sh
+node scripts/write-gate.mjs <插件目录>   # 出生证：硬门禁自动判，软指标透传待裁量
+```
+
+硬门禁仅三条（入口产物存在、冒烟通过、对官方指南 critical 零命中），fail 即退出码 1；audit 分数、high/medium 命中、mockFallbacks、未挂载 profile 全部进 discretion 区标「人工裁量」，不替用户说「合格」。指南自动发现走 guide-sync 缓存（零网络），新插件核查面是全部历史走廊；刚 scaffold 完加 `--skip-smoke` 免重复冒烟。
 
 ## 依赖
 
@@ -112,16 +118,17 @@ node scripts/scaffold.mjs taxueseek/my-tool --form tool|hook|service|config|llm-
 自检：
 
 ```sh
-npm test   # node scripts/self-test.mjs，73 项断言
+npm test   # node scripts/self-test.mjs，79 项断言
 ```
 
-覆盖扫描器不误报（注释和字符串里的同名词不算命中）、不漏报、版本启发式、替换对识别、端到端命中、SOP 引用完整性、dist-tags 缓存三态、冒烟验证、四维审计、启用诊断、创作脚手架（五形态生成、命名投影语法、冒烟闭环、挂载层可识别、非法输入与非空目录拒绝）、扫描性能回归门。零网络、零外部依赖，任何机器上都能跑。
+覆盖扫描器不误报（注释和字符串里的同名词不算命中）、不漏报、版本启发式、替换对识别、端到端命中、SOP 引用完整性、dist-tags 缓存三态、冒烟验证、四维审计、启用诊断、创作脚手架（五形态生成、命名投影语法、冒烟闭环、挂载层可识别、非法输入与非空目录拒绝）、创作体检门（硬门禁拦截、软指标不越权判红、跳过语义、scaffold 衔接）、扫描性能回归门。零网络、零外部依赖，任何机器上都能跑。
 
 ## 脚本
 
 | 脚本 | 职责 |
 | --- | --- |
 | `scripts/scaffold.mjs` | 从零造插件：一条命令生成五形态可冒烟骨架（package.json 不变量＋形态入口＋挂载层＋命名投影），生成即验证 |
+| `scripts/write-gate.mjs` | 造完即验：编排冒烟＋启用就绪＋四维体检＋官方指南核查出「出生证」；硬门禁仅三条自动判，软指标只透传不拍板 |
 | `scripts/env-doctor.mjs` | 探测本机 DSH 环境（版本、覆盖层、插件、进程、启用就绪度） |
 | `scripts/env-heal.mjs` | 覆盖层旧包自愈（默认 dry-run） |
 | `scripts/guide-sync.mjs` | 定目标版本 + 取官方升级指南（dist-tags 带 1 小时缓存，失败降级旧缓存） |

@@ -279,7 +279,7 @@ export function apply(ctx) {
 `
 }
 
-function readmeTemplate(names, form, harnessVersion, smokeNote) {
+function readmeTemplate(names, form, harnessVersion) {
   const REF_ROOT = 'https://github.com/oh-my-dsh/dsh-plugin-upgrade-skill/tree/main/skills/plugin-write'
   return `# ${names.packageName}
 
@@ -293,7 +293,7 @@ DSH ${form} 形态插件骨架，由 [dsh-plugin-fast-adapt](https://github.com/
 
 ## 下一步
 
-1. **冒烟**：${smokeNote}
+1. **写完能力后过体检门**：\`node <fast-adapt>/scripts/write-gate.mjs .\` —— 冒烟＋启用就绪＋四维体检＋官方指南核查一条命令出报告（刚生成完可加 \`--skip-smoke\` 免重复冒烟）
 2. **环境核查**：\`node <fast-adapt>/scripts/env-doctor.mjs .\` 看启用就绪度与覆盖层
 3. **体检**：\`node <fast-adapt>/scripts/plugin-audit.mjs .\` 四维打分
 4. **命名完整校验**（碰撞推荐 + registry 查询，可选联网）：
@@ -322,16 +322,12 @@ export async function scaffoldPlugin({ coordinate, form, outDir, harnessVersion 
 
   const detected = harnessVersion === undefined ? detectHarnessVersion() : harnessVersion
 
-  const smokeNote = SMOKEABLE_FORMS.has(form)
-    ? 'node <fast-adapt>/scripts/quick-smoke.mjs .（零依赖，直接跑）'
-    : '本形态依赖宿主 @deepseek-ai/* 基类，装包后跑 node <fast-adapt>/scripts/quick-smoke.mjs .'
-
   const files = [
     ['package.json', packageJsonTemplate(names, form, detected)],
     ['lib/index.js', entryTemplate(form, names)],
     ['cordis.patch.yml', patchYmlTemplate(names)],
     ['dsh-plugin.naming.json', namingManifestTemplate(names)],
-    ['README.md', readmeTemplate(names, form, detected, smokeNote)],
+    ['README.md', readmeTemplate(names, form, detected)],
     ['.gitignore', 'node_modules/\n'],
   ]
   for (const [rel, content] of files) {
@@ -368,8 +364,8 @@ export async function scaffoldPlugin({ coordinate, form, outDir, harnessVersion 
     },
     smoke,
     nextSteps: [
-      smokeNote,
-      'node scripts/env-doctor.mjs <outDir>  # 启用就绪度',
+      '写完能力后跑: node scripts/write-gate.mjs <outDir>  # 出生证：冒烟＋启用就绪＋四维体检＋指南核查（刚生成完可加 --skip-smoke 免重复冒烟）',
+      'node scripts/env-doctor.mjs <outDir>  # 单看启用就绪度',
       '上游 validate-names / query-registry 做完整命名校验（可选联网）',
     ],
   }

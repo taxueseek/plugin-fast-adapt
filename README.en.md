@@ -29,7 +29,7 @@ The authoritative description of breaking changes lives in the vendor harness re
 | Weaker models | Full card library in context, -3.07 pp | Six independent scripts, one small output each |
 | Code-level scanning | None | Anchor matching + four noise-reduction layers (measured below) |
 | Dependencies | — | Zero external: Node built-ins + `git`/`npm` commands |
-| Self-test | — | 73 assertions, zero network, runs on any machine |
+| Self-test | — | 79 assertions, zero network, runs on any machine |
 
 ## Six steps
 
@@ -104,7 +104,13 @@ node scripts/scaffold.mjs <namespace>/<name> --form tool|hook|service|config|llm
 
 One command emits a smoke-testable skeleton: package.json (build-free pure-ESM invariants), a minimal runnable entry per form, a `cordis.patch.yml` mounting row, and a `dsh-plugin.naming.json` with collision-resistant naming projections derived in full (the output passes upstream validate-names in `--strict` mode). The tool and hook forms are dependency-free and smoke-tested on the spot; service, config and llm-adapter need host `@deepseek-ai/*` base classes, so scaffolding honestly skips their smoke run and says so. Non-empty target directories and invalid coordinates are rejected before anything is written.
 
-The skeleton guarantees structure and naming compliance only; capability implementation still follows the five form references of [plugin-write](https://github.com/oh-my-dsh/dsh-plugin-upgrade-skill/tree/main/skills/plugin-write).
+The skeleton guarantees structure and naming compliance only; capability implementation still follows the five form references of [plugin-write](https://github.com/oh-my-dsh/dsh-plugin-upgrade-skill/tree/main/skills/plugin-write). When the capability is written, gate it in one command:
+
+```sh
+node scripts/write-gate.mjs <plugin-dir>   # birth certificate: hard gates auto-judged, soft metrics passed through
+```
+
+There are only three hard gates (entry artifact exists, smoke passes, zero critical findings against the official guide); a failing one exits 1. Audit scores, high/medium findings, mockFallbacks and the not-yet-mounted fact all land in the discretion section labelled for human judgment — the tool never says "qualified" on your behalf. Guide discovery reuses the guide-sync cache (zero network); a new plugin is scanned against the full historical corridor; pass `--skip-smoke` right after scaffolding to skip the duplicate smoke run.
 
 ## Dependencies
 
@@ -115,16 +121,17 @@ No TypeScript, no AST library, no HTTP client. Runs on Node 22.13+ (`import.meta
 Self-test:
 
 ```sh
-npm test   # node scripts/self-test.mjs, 73 assertions
+npm test   # node scripts/self-test.mjs, 79 assertions
 ```
 
-Covers scanner false positives (names in comments and strings are not hits), false negatives, version heuristics, replacement-pair recognition, end-to-end findings, SOP reference integrity, dist-tags cache states, smoke verification, the four-dimension audit, activation diagnostics, the plugin scaffolder (all five forms, naming-projection grammar, smoke closure, patch-layer recognizability, invalid-input and non-empty-target rejection) and a scanner performance gate. Zero network, zero external dependencies, runs on any machine.
+Covers scanner false positives (names in comments and strings are not hits), false negatives, version heuristics, replacement-pair recognition, end-to-end findings, SOP reference integrity, dist-tags cache states, smoke verification, the four-dimension audit, activation diagnostics, the plugin scaffolder (all five forms, naming-projection grammar, smoke closure, patch-layer recognizability, invalid-input and non-empty-target rejection), the write gate (hard-gate interception, soft metrics never overrule, skip semantics, scaffold handoff) and a scanner performance gate. Zero network, zero external dependencies, runs on any machine.
 
 ## Scripts
 
 | Script | Responsibility |
 | --- | --- |
 | `scripts/scaffold.mjs` | Scaffold a plugin from zero: one command emits a smoke-testable skeleton in any of the five forms (package.json invariants + form entry + patch layer + naming projections), verified on creation |
+| `scripts/write-gate.mjs` | Gate a finished plugin: orchestrates smoke + activation readiness + four-dimension audit + official-guide scan into a birth certificate; only three hard gates auto-judge, soft metrics pass through untouched |
 | `scripts/env-doctor.mjs` | Probe the local DSH environment (version, overlay, plugins, processes, activation readiness) |
 | `scripts/env-heal.mjs` | Heal stale overlay packages (dry-run by default) |
 | `scripts/guide-sync.mjs` | Resolve the target version and fetch the official guide (dist-tags cached 1 h, degrades to stale cache) |

@@ -16,8 +16,9 @@ import { resolveTargetVersion, fetchNpmMetadata } from './guide-sync.mjs'
 import { anchorMatches } from './code-scan.mjs'
 import { runQuickSmoke } from './quick-smoke.mjs'
 import { auditPlugin } from './plugin-audit.mjs'
-import { extractInjects, diagnoseActivation, candidateGlobalRoots, parsePatchEntries } from './env-doctor.mjs'
+import { extractInjects, diagnoseActivation, candidateGlobalRoots, parsePatchEntries, probeEnvironment } from './env-doctor.mjs'
 import { scaffoldPlugin, projectNames, detectHarnessVersion, UsageError } from './scaffold.mjs'
+import { runWriteGate } from './write-gate.mjs'
 
 const tests = []
 function test(name, fn) {
@@ -702,6 +703,106 @@ test('scaffold：显式 harness 版本优先于本机探测', async () => {
 test('scaffold：Windows 模拟下宿主探测不依赖 POSIX 布局', () => {
   const winVersion = detectHarnessVersion({ platform: 'win32', env: { APPDATA: 'X:\\npm' } })
   assert.ok(winVersion === null || typeof winVersion === 'string', 'win 模拟探测应安全返回，不抛路径异常')
+})
+
+// ── 创作体检门（造完即验）────────────────────────────────────────────────────
+// 核心设计是判定分层：硬门禁只有三条（entry/smoke/critical），fail 才判红；
+// audit 分数、high/medium 命中、WARN 全部只透传进 discretion 不拍板。
+// 断言围绕两件事：硬门禁真的拦得住，软指标真的不越权。
+
+const gateEnvWithoutDsh = (dir) => {
+  // 真实探测但抹掉宿主版本：指南自动发现必走不到缓存，code-scan 诚实跳过。
+  // 自检因此不依赖本机 ~/.cache/dsh-plugin-fast-adapt/ 的状态，任何机器同绿。
+  const env = probeEnvironment(dir)
+  return { ...env, globalDsh: null }
+}
+
+test('write-gate：tool 骨架出生证——硬门禁全过、软指标只进裁量区', async () => {
+  const result = await scaffoldTo('gate-pass', { coordinate: 'taxueseek/gate-pass', form: 'tool', harnessVersion: '0.2.1-rc.3' })
+  const gate = await runWriteGate(result.outDir, { detectEnv: gateEnvWithoutDsh })
+  assert.strictEqual(gate.verdict, 'pass')
+  const gates = Object.fromEntries(gate.hardGates.map((g) => [g.gate, g]))
+  assert.strictEqual(gates.entry.pass, true)
+  assert.strictEqual(gates.smoke.pass, true)
+  assert.ok(!('code-scan-critical' in gates), '无宿主版本时应不设 critical 门而非放行')
+  assert.ok(gate.skipped.some((s) => s.step === 'code-scan'), 'code-scan 应诚实跳过并给补法')
+  assert.ok(gate.discretion.some((d) => d.item === 'audit-scores'), 'audit 分数应在裁量区')
+  assert.ok(gate.discretion.some((d) => d.item === 'not-installed'), '未挂载 profile 应报事实不判红')
+})
+
+test('write-gate：入口缺失硬门禁拦截', async () => {
+  const result = await scaffoldTo('gate-broken', { coordinate: 'taxueseek/gate-broken', form: 'tool', harnessVersion: '0.2.1-rc.3' })
+  fs.rmSync(path.join(result.outDir, 'lib', 'index.js'))
+  const gate = await runWriteGate(result.outDir, { detectEnv: gateEnvWithoutDsh })
+  assert.strictEqual(gate.verdict, 'fail')
+  const gates = Object.fromEntries(gate.hardGates.map((g) => [g.gate, g]))
+  assert.strictEqual(gates.entry.pass, false)
+  assert.strictEqual(gates.smoke.pass, false)
+})
+
+test('write-gate：critical 命中（import 已移除包）拦截硬门禁', async () => {
+  const result = await scaffoldTo('gate-critical', { coordinate: 'taxueseek/gate-critical', form: 'tool', harnessVersion: '0.2.1-rc.3' })
+  fs.writeFileSync(
+    path.join(result.outDir, 'lib', 'extra.js'),
+    `import { x } from '@deepseek-ai/dsh-removed-in-history'\nexport const y = x\n`
+  )
+  // 假指南根：<guideRoot>/v<version>/<topic>/guide.md，锚点写已移除包
+  const guideRoot = tmpPluginDir('gate-guides')
+  scaffoldDirs.push(guideRoot)
+  const guideDir = path.join(guideRoot, 'v0.2.1-rc.3', 'package-removal')
+  fs.mkdirSync(guideDir, { recursive: true })
+  fs.writeFileSync(
+    path.join(guideDir, 'guide.md'),
+    [
+      '---',
+      'kind: upgrade-guide',
+      'description: "test fixture"',
+      '---',
+      '# Removed package',
+      '',
+      '## Change',
+      '',
+      'The package @deepseek-ai/dsh-removed-in-history was removed.',
+      '',
+      '## Migration',
+      '',
+      '1. Remove the import of @deepseek-ai/dsh-removed-in-history.',
+      '',
+    ].join('\n')
+  )
+  const gate = await runWriteGate(result.outDir, { guideRoot, detectEnv: gateEnvWithoutDsh })
+  assert.strictEqual(gate.verdict, 'fail', 'import 已移除包必须判红')
+  const criticalGate = gate.hardGates.find((g) => g.gate === 'code-scan-critical')
+  assert.ok(criticalGate, '显式 --guide 时应设 critical 门')
+  assert.strictEqual(criticalGate.pass, false)
+})
+
+test('write-gate：audit 扣分不越权判红（软指标分层的关键回归）', async () => {
+  const result = await scaffoldTo('gate-audit', { coordinate: 'taxueseek/gate-audit', form: 'tool', harnessVersion: '0.2.1-rc.3' })
+  // 造一个 performance 会扣分的文件（同步 I/O），audit 分数必然 <100
+  fs.writeFileSync(
+    path.join(result.outDir, 'lib', 'heavy.js'),
+    `import fs from 'node:fs'\nexport function readAll(p) { return fs.readFileSync(p, 'utf8') }\n`
+  )
+  const gate = await runWriteGate(result.outDir, { detectEnv: gateEnvWithoutDsh })
+  const auditItem = gate.discretion.find((d) => d.item === 'audit-scores')
+  assert.ok(auditItem.data.scores.performance < 100, 'fixture 应真的触发 audit 扣分，否则本断言失去对象')
+  assert.strictEqual(gate.verdict, 'pass', 'audit 扣分是裁量项，不能影响硬门禁判定')
+})
+
+test('write-gate：--skip-smoke 跳过后 smoke 不进门禁且给原因', async () => {
+  const result = await scaffoldTo('gate-skip', { coordinate: 'taxueseek/gate-skip', form: 'tool', harnessVersion: '0.2.1-rc.3' })
+  const gate = await runWriteGate(result.outDir, { skipSmoke: true, detectEnv: gateEnvWithoutDsh })
+  assert.ok(!gate.hardGates.some((g) => g.gate === 'smoke'), '跳过后不该有 smoke 门')
+  assert.ok(gate.skipped.some((s) => s.step === 'smoke'), '跳过要给原因')
+})
+
+test('scaffold 衔接：nextSteps 与生成 README 都指向体检门', async () => {
+  const result = await scaffoldTo('gate-link', { coordinate: 'taxueseek/gate-link', form: 'tool', harnessVersion: '0.2.1-rc.3' })
+  assert.ok(result.nextSteps.some((s) => s.includes('write-gate.mjs')), 'nextSteps 应指向 write-gate')
+  const readme = fs.readFileSync(path.join(result.outDir, 'README.md'), 'utf8')
+  assert.ok(readme.includes('write-gate.mjs'), '生成的 README 应指向 write-gate')
+  assert.ok(readme.includes('--skip-smoke'), 'README 应说明重复冒烟的免跑方式')
 })
 
 // ── guide-sync dist-tags 缓存 ────────────────────────────────────────────────

@@ -127,7 +127,11 @@ node scripts/scaffold.mjs <namespace>/<name> --form tool|hook|service|config|llm
 | 五形态完整契约（execute 义务、waterfall 语义、Schema 规则、协议义务清单） | [原仓库 plugin-write skill](https://github.com/oh-my-dsh/dsh-plugin-upgrade-skill/tree/main/skills/plugin-write) 的五份 form reference |
 | 公共命名规范与注册表冲突检查 | plugin-write 的 naming-conventions 与 registry-check reference（validate-names / query-registry 两脚本） |
 | Cordis 教程、API、cookbook | 官方仓库 `deepseek-harness/docs/` 的 cordis-tutorial、cordis-api、cookbook |
-| 造完之后 | 回本 skill：quick-smoke 秒验 → env-doctor 看启用就绪 → plugin-audit 体检 → code-scan 对目标版本核查 |
+| 造完之后 | 一条命令过体检门：`node scripts/write-gate.mjs <插件目录>` —— 冒烟＋启用就绪＋四维体检＋官方指南核查出「出生证」报告（也可拆开单跑：quick-smoke 秒验 → env-doctor 看启用就绪 → plugin-audit 体检 → code-scan 对目标版本核查） |
+
+### 体检门的判定分层（write-gate）
+
+硬门禁只有三条，fail 即退出码 1：入口产物存在、冒烟通过、对官方指南 critical 零命中。其余全部只透传不拍板——audit 四维分数与 MEDIUM 清单、scan 的 high/medium 命中（带 evidence）、mockFallbacks、尚未挂载 profile 的事实，全部进 discretion 区标「人工裁量」，因为 plugin-audit 的诚实保留信号（如宿主契约下同步是唯一合法写法）和 env-doctor 的未决语义 WARN 替用户判「合格」就是把裁量题伪装成判定题。指南自动发现：显式 `--guide` 优先，否则用本机宿主版本查 guide-sync 缓存（零网络），都没有就诚实跳过并给补法。新插件核查面是全部历史走廊（localVersion=null 窗口放行全部指南）：新代码不该 import 任何已被移除的包，不管哪个版本移除的。刚 scaffold 完加 `--skip-smoke` 免重复冒烟。
 
 ## 批量场景：整批已装插件的宿主升级巡检
 
@@ -160,7 +164,7 @@ node scripts/scaffold.mjs <namespace>/<name> --form tool|hook|service|config|llm
 npm test
 ```
 
-73 项断言，覆盖扫描器不误报（注释和字符串里的同名词不算命中）、不漏报、版本启发式、替换对识别、端到端命中、SOP 引用完整性、dist-tags 缓存三态、冒烟验证、四维审计、启用诊断、创作脚手架（五形态生成与冒烟闭环、命名投影语法、挂载层可识别、非法输入与非空目录拒绝）、跨平台模拟（Windows 根探测与缓存隔离）、文档断言数防漂移、扫描性能回归门。零网络、零外部依赖，任何机器上都能跑（Windows 分支已做模拟验证，真机待验）。
+79 项断言，覆盖扫描器不误报（注释和字符串里的同名词不算命中）、不漏报、版本启发式、替换对识别、端到端命中、SOP 引用完整性、dist-tags 缓存三态、冒烟验证、四维审计、启用诊断、创作脚手架（五形态生成与冒烟闭环、命名投影语法、挂载层可识别、非法输入与非空目录拒绝）、创作体检门（硬门禁拦截、软指标不越权判红、跳过语义、scaffold 衔接）、跨平台模拟（Windows 根探测与缓存隔离）、文档断言数防漂移、扫描性能回归门。零网络、零外部依赖，任何机器上都能跑（Windows 分支已做模拟验证，真机待验）。
 
 ## 脚本清单
 
