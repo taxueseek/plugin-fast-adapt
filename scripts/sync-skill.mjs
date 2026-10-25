@@ -15,6 +15,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
 const TOOL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -84,6 +85,25 @@ export function syncSkill({ srcRoot = TOOL_ROOT, destRoot, dryRun = false } = {}
   return { srcRoot, destRoot: dest, written, dryRun }
 }
 
+// 同步后给镜像仓的提交命令建议：add 路径取 dest 相对其 git 仓根（只加同步路径，
+// 防夹带），commit 主题带真源当前 commit——手敲这两处最容易错。不自动提交，
+// git 的控制权留给用户；任一侧不是 git 仓时返回 null 静默跳过。
+export function suggestCommitCommand({ srcRoot = TOOL_ROOT, destRoot } = {}) {
+  try {
+    // realpath 两侧再算相对路径：macOS 的 /var → /private/var 一类软链会让
+    // git 返回的仓根与调用方路径前缀不一致，relative 直接给出跨目录的错路径
+    const realDest = fs.realpathSync(destRoot)
+    const repoRoot = fs.realpathSync(
+      execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: destRoot, encoding: 'utf8' }).trim()
+    )
+    const rel = path.relative(repoRoot, realDest)
+    const short = execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: srcRoot, encoding: 'utf8' }).trim()
+    return `git -C "${repoRoot}" add "${rel}" && git -C "${repoRoot}" commit -m "chore(fast-adapt): 同步独立仓 ${short}"`
+  } catch {
+    return null
+  }
+}
+
 function parseArgv(argv) {
   const flags = { dest: null, check: false, dryRun: false }
   for (let i = 0; i < argv.length; i++) {
@@ -115,5 +135,9 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.met
   }
   const result = syncSkill({ destRoot: flags.dest, dryRun: flags.dryRun })
   process.stderr.write(`\n${result.dryRun ? '[dry-run] 将写入' : '已写入'} ${result.written.length} 个文件 → ${result.destRoot}\n`)
+  if (!flags.dryRun) {
+    const suggestion = suggestCommitCommand({ destRoot: result.destRoot })
+    if (suggestion) process.stderr.write(`建议镜像仓提交（只 add 同步路径，防夹带；不自动提交）:\n  ${suggestion}\n`)
+  }
   process.exit(0)
 }
