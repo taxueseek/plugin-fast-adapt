@@ -55,6 +55,8 @@ node scripts/env-heal.mjs --apply   # 真的移动（移到 ~/.dsh/.trash/<日�
 node scripts/guide-sync.mjs <本机版本>
 ```
 
+**上游盯梢（--check）**：`node scripts/guide-sync.mjs --check` 零参数可直接接 cron/launchd/agent 轮询——自动探测本机宿主版本，退出码语义化（1=上游有新版，0=无需动作，2=判定失败），有新版时顺手把该版官方指南预取进缓存（下次 run.mjs 零等待）。工具不自带定时器，接线方式由用户定。
+
 它读 npm 的 `dist-tags`（`latest` / `next` / `alpha`），然后判断本机在官方通道里的位置：
 
 | 判定 | 含义 | 下一步 |
@@ -174,7 +176,7 @@ node scripts/sync-skill.mjs --dest <下游技能目录> --check   # 只查漂移
 node scripts/sync-skill.mjs --dest <下游技能目录>            # 同步
 ```
 
-独立仓拆分后，`dsh-plugin-upgrade-skill/skills/plugin-fast-adapt` 留了一份静态副本；两份都是真文件时下游会静默滞后（2026-10-25 实测：主仓已加客户端半三层判定，下游还缺 `lib/client-graph.mjs`、`SKILL.md` 也旧），滞后副本被误跑时查不出新问题。同步面固定为技能读者真正会用的文件：`SKILL.md`、`README.md`、`README.en.md`、`references/**`、`scripts/**`（`package.json` 不入技能面）。`--check` 报缺失与内容漂移，`--dry-run` 只打印不落盘。
+独立仓拆分后，`dsh-plugin-upgrade-skill/skills/plugin-fast-adapt` 留了一份静态副本；两份都是真文件时下游会静默滞后（2026-10-25 实测：主仓已加客户端半三层判定，下游还缺 `lib/client-graph.mjs`、`SKILL.md` 也旧），滞后副本被误跑时查不出新问题。同步面固定为技能读者真正会用的文件：`SKILL.md`、`README.md`、`README.en.md`、`references/**`、`scripts/**`（`package.json` 不入技能面）。`--check` 报缺失与内容漂移，`--dry-run` 只打印不落盘。同步完成后打印建议的镜像仓提交命令（只 add 同步路径防夹带、commit 主题带真源短 commit；两侧路径先 realpath，防 macOS /var 软链前缀错位），不自动提交。
 
 ## 造插件：从零开始
 
@@ -236,7 +238,9 @@ node scripts/scaffold.mjs <namespace>/<name> --form tool|hook|service|config|llm
 npm test
 ```
 
-119 项断言，覆盖扫描器不误报（注释和字符串里的同名词不算命中）、不漏报、真实 semver 范围判定（prerelease tuple 规则，本轮与宿主自带 semver 对拍的 30 例锚点回归）、扫描窗口计算（宿主包 peer 精确匹配、cordis/schemastery 版本线不混入、倒挂守卫回退留痕）、目标形态判定（dsh 命名空间/生态依赖证据、非插件 N/A、工具仓跳过 Cordis 生命周期）、import type 区分、宿主实测核查分级、描述漂移检测、指南出处锚点（guideFile/guideLine 落盘往返）、接缝查询双源结论（一致已移除/宿主仍在报分歧/无记录如实说/探不到宿主不伪造）、运行日志×宿主日志交叉核对、--real-smoke 桥接档位（fail→退出码 2、tail 归因透传）、一键编排与运行日志（写入/索引/脱敏往返、phases 三态、dirty 标记、90 天保留清理）、版本启发式、替换对识别、端到端命中、SOP 引用完整性、dist-tags 缓存三态、冒烟验证（含未声明 inject 契约拦截与 Mock 缺口披露）、四维审计（含 peer 修补建议）、启用诊断（宿主半 Silent Pending＋客户端半三层判定：声明/产物/注入名册死链）、创作脚手架（五形态生成与冒烟闭环、命名投影语法、挂载层可识别、非法输入与非空目录拒绝）、创作体检门（硬门禁拦截、软指标不越权判红、跳过语义、scaffold 衔接）、日志诊断（startup 头部/失败插件/等待服务/信号/跨文件汇总）、下游同步漂移检查＋真机零漂移拦截、跨平台模拟（Windows 根探测与缓存隔离）、文档断言数防漂移、扫描性能回归门。零网络、零外部依赖，任何机器上都能跑（Windows 分支已做模拟验证，真机待验）。
+122 项断言，覆盖扫描器不误报（注释和字符串里的同名词不算命中）、不漏报、真实 semver 范围判定（prerelease tuple 规则，本轮与宿主自带 semver 对拍的 30 例锚点回归）、扫描窗口计算（宿主包 peer 精确匹配、cordis/schemastery 版本线不混入、倒挂守卫回退留痕）、目标形态判定（dsh 命名空间/生态依赖证据、非插件 N/A、工具仓跳过 Cordis 生命周期）、import type 区分、宿主实测核查分级、描述漂移检测、指南出处锚点（guideFile/guideLine 落盘往返）、接缝查询双源结论（一致已移除/宿主仍在报分歧/无记录如实说/探不到宿主不伪造）、运行日志×宿主日志交叉核对、--real-smoke 桥接档位（fail→退出码 2、tail 归因透传、失败指路）、一键编排与运行日志（写入/索引/脱敏往返、phases 三态、dirty 标记、90 天保留清理）、上游盯梢退出码（upgrade-available→1 其余→0）、同步提交命令建议（git 仓给只 add 同步路径的命令、非 git 静默跳过）、版本启发式、替换对识别、端到端命中、SOP 引用完整性、dist-tags 缓存三态、冒烟验证（含未声明 inject 契约拦截与 Mock 缺口披露）、四维审计（含 peer 修补建议）、启用诊断（宿主半 Silent Pending＋客户端半三层判定：声明/产物/注入名册死链）、创作脚手架（五形态生成与冒烟闭环、命名投影语法、挂载层可识别、非法输入与非空目录拒绝）、创作体检门（硬门禁拦截、软指标不越权判红、跳过语义、scaffold 衔接）、日志诊断（startup 头部/失败插件/等待服务/信号/跨文件汇总）、下游同步漂移检查＋真机零漂移拦截、self-test 体积门禁（超 2200 行即红）、跨平台模拟（Windows 根探测与缓存隔离）、文档断言数防漂移、扫描性能回归门。零网络、零外部依赖，任何机器上都能跑（Windows 分支已做模拟验证，真机待验）。
+
+提交前门禁：`git config core.hooksPath .githooks`（一次性）启用 pre-commit 钩子，commit 时自动跑本自检——改完真源忘了 sync-skill 在这一刻被拦，不用等有人跑 npm test。
 
 ## 脚本清单
 
@@ -259,3 +263,4 @@ npm test
 | `scripts/lib/runlog.mjs` | 运行日志写入、索引与脱敏 |
 | `scripts/lib/client-graph.mjs` | 客户端半三层判定：dsh.client 声明校验、./client 产物解析、注入名册死链（强弱证据分档） |
 | `references/legacy-migration-sop.md` | 老插件迁移 SOP（官方指南覆盖不到时的对照手册） |
+| `references/ci-snippet.md` | 插件仓 CI 门禁模板（把「升级后插件报错」提前到提交时：冒烟/typecheck 硬门＋体检软门） |

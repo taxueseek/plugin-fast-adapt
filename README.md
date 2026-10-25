@@ -29,7 +29,7 @@ DSH 插件适配与破坏性变更核查，兼从零造插件脚手架。查官�
 | 弱模型表现 | 全套卡片进上下文，-3.07 pp | 六个独立脚本，每步只产出一份小输出 |
 | 代码级扫描 | 无 | 锚点匹配 + 四层降噪（见下文实测） |
 | 依赖 | — | 零外部依赖：Node 内置模块 + `git`/`npm` 命令 |
-| 自检 | — | 119 项断言，零网络，任何机器能跑 |
+| 自检 | — | 122 项断言，零网络，任何机器能跑 |
 
 ## 流程
 
@@ -51,6 +51,9 @@ node scripts/env-doctor.mjs <插件目录>
 
 # 2. 定目标版本：官方最新是什么、本机该不该跟
 node scripts/guide-sync.mjs <本机版本>
+
+# 2b. 上游盯梢（可直接接 cron/agent 轮询）：1=有新版（顺手预取指南），0=无需动作
+node scripts/guide-sync.mjs --check
 
 # 3. 取该版本的官方升级指南（优先复用本机 clone，没有才拉取）
 node scripts/guide-sync.mjs <本机版本> --clone
@@ -142,10 +145,14 @@ node scripts/write-gate.mjs <插件目录>   # 出生证：硬门禁自动判，
 自检：
 
 ```sh
-npm test   # node scripts/self-test.mjs，119 项断言
+npm test   # node scripts/self-test.mjs，122 项断言
 ```
 
-覆盖扫描器不误报（注释和字符串里的同义词不算命中）、不漏报、版本启发式、替换对识别、端到端命中（含官方指南文件＋行号出处锚点）、接缝查询双源结论（一致已移除/宿主仍在报分歧/无记录如实说）、运行日志×宿主日志交叉核对、--real-smoke 桥接档位（fail→退出码 2）、SOP 引用完整性、dist-tags 缓存三态、冒烟验证（含未声明 inject 契约拦截）、四维审计（含 peer 修补）、启用诊断、创作脚手架（五形态生成、命名投影语法、冒烟闭环、挂载层可识别、非法输入与非空目录拒绝）、创作体检门（硬门禁拦截、软指标不越权判红、跳过语义、scaffold 衔接）、日志诊断、下游同步漂移检查＋真机零漂移拦截、扫描性能回归门。零网络、零外部依赖，任何机器上都能跑。
+开发者建议启用提交前门禁（一次性）：`git config core.hooksPath .githooks`——commit 时自动跑自检，改完真源忘了 sync-skill 在这一刻被拦。
+
+覆盖扫描器不误报（注释和字符串里的同义词不算命中）、不漏报、版本启发式、替换对识别、端到端命中（含官方指南文件＋行号出处锚点）、接缝查询双源结论（一致已移除/宿主仍在报分歧/无记录如实说）、运行日志×宿主日志交叉核对、--real-smoke 桥接档位（fail→退出码 2、失败指路）、上游盯梢退出码、同步提交命令建议（只 add 同步路径防夹带）、SOP 引用完整性、dist-tags 缓存三态、冒烟验证（含未声明 inject 契约拦截）、四维审计（含 peer 修补）、启用诊断、创作脚手架（五形态生成、命名投影语法、冒烟闭环、挂载层可识别、非法输入与非空目录拒绝）、创作体检门（硬门禁拦截、软指标不越权判红、跳过语义、scaffold 衔接）、日志诊断、下游同步漂移检查＋真机零漂移拦截、self-test 体积门禁、扫描性能回归门。零网络、零外部依赖，任何机器上都能跑。
+
+给插件自己的仓库加提交时门禁（冒烟/typecheck 硬门＋体检软门），见 [references/ci-snippet.md](references/ci-snippet.md)。
 
 ## 脚本
 
@@ -170,6 +177,7 @@ npm test   # node scripts/self-test.mjs，119 项断言
 | `scripts/lib/runlog.mjs` | 运行日志写入、索引与脱敏 |
 | `references/legacy-migration-sop.md` | 老插件迁移 SOP（官方指南覆盖不到时的对照手册） |
 | `references/heuristics.md` | 扫描降噪规则与实测依据 |
+| `references/ci-snippet.md` | 插件仓 CI 门禁模板（冒烟/typecheck 硬门＋体检软门） |
 
 ## 安全姿态
 

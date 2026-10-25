@@ -14,7 +14,7 @@ import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { scanSource, compareVersions, parseVersion, satisfiesRange, computeWindow, isPluginForm } from './lib/scanner.mjs'
 import { parseGuideMarkdown, extractAnchors, listGuideVersions, loadGuides } from './lib/guide-parser.mjs'
-import { resolveTargetVersion, fetchNpmMetadata, runGuideSync, guideVersionFor } from './guide-sync.mjs'
+import { resolveTargetVersion, fetchNpmMetadata, runGuideSync, guideVersionFor, upstreamCheckExit } from './guide-sync.mjs'
 import { anchorMatches, verifyPackagesAgainstHost, pickScanRoots, scanPluginFromGuideRoot } from './code-scan.mjs'
 import { runQuickSmoke } from './quick-smoke.mjs'
 import { auditPlugin, peerPatchFor } from './plugin-audit.mjs'
@@ -24,7 +24,7 @@ import { scaffoldPlugin, projectNames, detectHarnessVersion, UsageError } from '
 import { runWriteGate } from './write-gate.mjs'
 import { listRuns, sanitizeRun, writeRunLog, pruneRuns } from './lib/runlog.mjs'
 import { parseStartupLog, parseMessages, diagnoseLogs } from './log-doctor.mjs'
-import { checkSkillSync, syncSkill } from './sync-skill.mjs'
+import { checkSkillSync, syncSkill, suggestCommitCommand } from './sync-skill.mjs'
 import { querySeams } from './seams.mjs'
 import { correlateRuns } from './run-log.mjs'
 
@@ -1436,6 +1436,7 @@ test('run --real-smoke：桥接 verify-runtime——fail 退出码 2，pass 退�
     assert.strictEqual(report.realSmoke.status, 'fail')
     assert.ok(report.realSmoke.tail.includes('fake failure attribution'), '应透传 verify-runtime 的归因尾部')
     assert.ok(report.realSmoke.hint.includes('四类归因'), 'fail 档应带归因提示')
+    assert.ok(String(err.stderr).includes('下一步'), '退出码 2 时 stderr 应带「下一步」指路')
   }
   const out = execFileSync(process.execPath, base, { encoding: 'utf8', env: { ...env, PFA_VERIFY_RUNTIME: passScript } })
   const passed = JSON.parse(out.slice(0, out.lastIndexOf('}') + 1))
@@ -1459,6 +1460,49 @@ test('下游技能面零漂移（真机拦截；下游目录不存在时跳过�
     result.clean,
     `下游技能面有漂移——缺失 [${result.missing.join(', ')}] 不同 [${result.differing.join(', ')}]；改完真源先跑 sync-skill 同步再提交（2026-10-25 README 漂移实录）`
   )
+})
+
+test('guide-sync 盯梢退出码：upgrade-available→1（轮询信号），其余判定与空值→0', () => {
+  assert.strictEqual(upstreamCheckExit({ verdict: 'upgrade-available', target: '0.2.2-rc.1' }), 1, '有新版是唯一需要动作的判定')
+  assert.strictEqual(upstreamCheckExit({ verdict: 'up-to-date-on-channel' }), 0)
+  assert.strictEqual(upstreamCheckExit({ verdict: 'ahead-of-upstream' }), 0)
+  assert.strictEqual(upstreamCheckExit({ verdict: 'unknown-local' }), 0)
+  assert.strictEqual(upstreamCheckExit(null), 0, '空判定不冒充有动作')
+})
+
+test('sync-skill 提交命令建议：git 仓给只 add 同步路径的命令，非 git 目录返回 null', () => {
+  const plain = tmpPluginDir('suggest-plain')
+  try {
+    assert.strictEqual(suggestCommitCommand({ srcRoot: SCRIPTS, destRoot: plain }), null, 'dest 非 git 仓应静默跳过')
+    assert.strictEqual(suggestCommitCommand({ srcRoot: plain, destRoot: plain }), null, 'src 非 git 仓应静默跳过')
+
+    const tool = tmpPluginDir('suggest-tool')
+    const mirror = tmpPluginDir('suggest-mirror')
+    fs.writeFileSync(path.join(tool, 'a.txt'), 'a')
+    fs.writeFileSync(path.join(mirror, 'b.txt'), 'b')
+    const gitInit = (dir) => execFileSync('git', ['init', '-q'], { cwd: dir })
+    gitInit(tool)
+    gitInit(mirror)
+    execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'add', 'a.txt'], { cwd: tool })
+    execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'init'], { cwd: tool })
+    const dest = path.join(mirror, 'skills', 'plugin-fast-adapt')
+    fs.mkdirSync(dest, { recursive: true })
+
+    const cmd = suggestCommitCommand({ srcRoot: tool, destRoot: dest })
+    const realMirror = fs.realpathSync(mirror)
+    assert.ok(cmd, '两侧都是 git 仓应给出命令')
+    assert.ok(cmd.includes(`git -C "${realMirror}" add "skills/plugin-fast-adapt"`), 'add 路径应为 dest 相对仓根（realpath 后防 /var 软链前缀错位）')
+    assert.ok(/同步独立仓 [0-9a-f]{7,}/.test(cmd), 'commit 主题应带真源短 commit')
+    fs.rmSync(tool, { recursive: true, force: true })
+    fs.rmSync(mirror, { recursive: true, force: true })
+  } finally {
+    fs.rmSync(plain, { recursive: true, force: true })
+  }
+})
+
+test('self-test 体积门禁：超 2200 行即红（触线时按节拆 scripts/self-test/，npm test 单命令零依赖不变）', () => {
+  const lines = fs.readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n').length
+  assert.ok(lines <= 2200, `self-test.mjs 已 ${lines} 行，超出 2200 门禁——按节拆进 scripts/self-test/ 配零依赖 runner，别让单文件无界生长`)
 })
 
 // ── 扫描窗口与目标形态（2026-10-25 dsh-image-gen 实录）──────────────────────

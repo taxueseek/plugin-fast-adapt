@@ -29,7 +29,7 @@ The authoritative description of breaking changes lives in the vendor harness re
 | Weaker models | Full card library in context, -3.07 pp | Six independent scripts, one small output each |
 | Code-level scanning | None | Anchor matching + four noise-reduction layers (measured below) |
 | Dependencies | — | Zero external: Node built-ins + `git`/`npm` commands |
-| Self-test | — | 119 assertions, zero network, runs on any machine |
+| Self-test | — | 122 assertions, zero network, runs on any machine |
 
 ## Pipeline
 
@@ -52,6 +52,10 @@ node scripts/env-doctor.mjs <plugin-dir>
 
 # 2. Resolve the target version: what is upstream's latest, should this machine follow it
 node scripts/guide-sync.mjs <local-version>
+
+# 2b. Upstream watch (cron/agent friendly): exit 1 = new version out (guides prefetched),
+#     0 = nothing to do, 2 = could not determine
+node scripts/guide-sync.mjs --check
 
 # 3. Fetch that version's official upgrade guide (reuses a local clone when present)
 node scripts/guide-sync.mjs <local-version> --clone
@@ -146,10 +150,14 @@ No TypeScript, no AST library, no HTTP client. Runs on Node 22.13+ (`import.meta
 Self-test:
 
 ```sh
-npm test   # node scripts/self-test.mjs, 119 assertions
+npm test   # node scripts/self-test.mjs, 122 assertions
 ```
 
-Covers scanner false positives (names in comments and strings are not hits), false negatives, version heuristics, replacement-pair recognition, end-to-end findings (with guide file + line provenance anchors), dual-source seam-query verdicts (agree-removed / host-still-present disagreement / honest no-record), run-log × host-log cross-checks, the --real-smoke bridge tier (fail → exit 2), SOP reference integrity, dist-tags cache states, smoke verification (including the undeclared-inject contract rejection), the four-dimension audit (including peer patches), activation diagnostics, the plugin scaffolder (all five forms, naming-projection grammar, smoke closure, patch-layer recognizability, invalid-input and non-empty-target rejection), the write gate (hard-gate interception, soft metrics never overrule, skip semantics, scaffold handoff), log diagnosis, downstream-sync drift checks plus a real-machine zero-drift gate and a scanner performance gate. Zero network, zero external dependencies, runs on any machine.
+Contributors should enable the pre-commit gate (one time): `git config core.hooksPath .githooks` — every commit runs the self-test, so a forgotten downstream sync is caught at commit time.
+
+Covers scanner false positives (names in comments and strings are not hits), false negatives, version heuristics, replacement-pair recognition, end-to-end findings (with guide file + line provenance anchors), dual-source seam-query verdicts (agree-removed / host-still-present disagreement / honest no-record), run-log × host-log cross-checks, the --real-smoke bridge tier (fail → exit 2 with a next-step pointer), the upstream-watch exit codes, the sync commit-command suggestion (adds only the synced path), SOP reference integrity, dist-tags cache states, smoke verification (including the undeclared-inject contract rejection), the four-dimension audit (including peer patches), activation diagnostics, the plugin scaffolder (all five forms, naming-projection grammar, smoke closure, patch-layer recognizability, invalid-input and non-empty-target rejection), the write gate (hard-gate interception, soft metrics never overrule, skip semantics, scaffold handoff), log diagnosis, downstream-sync drift checks plus a real-machine zero-drift gate, a self-test size gate and a scanner performance gate. Zero network, zero external dependencies, runs on any machine.
+
+To gate your own plugin's repository at commit time (smoke/typecheck as hard gates, audit as a soft report), see [references/ci-snippet.md](references/ci-snippet.md).
 
 ## Scripts
 
@@ -173,6 +181,7 @@ Covers scanner false positives (names in comments and strings are not hits), fal
 | `scripts/lib/guide-parser.mjs` | Official guide parsing and anchor extraction |
 | `references/legacy-migration-sop.md` | Legacy migration SOP (for ranges the official guide does not cover) |
 | `references/heuristics.md` | Scan noise-reduction rules and the measurements behind them |
+| `references/ci-snippet.md` | CI gate template for plugin repositories (smoke/typecheck hard gates + audit soft report) |
 
 ## Safety posture
 
