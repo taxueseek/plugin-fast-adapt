@@ -13,9 +13,9 @@ import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { scanSource, compareVersions, parseVersion, satisfiesRange, computeWindow, isPluginForm } from './lib/scanner.mjs'
-import { parseGuideMarkdown, extractAnchors, listGuideVersions } from './lib/guide-parser.mjs'
+import { parseGuideMarkdown, extractAnchors, listGuideVersions, loadGuides } from './lib/guide-parser.mjs'
 import { resolveTargetVersion, fetchNpmMetadata, runGuideSync, guideVersionFor } from './guide-sync.mjs'
-import { anchorMatches, verifyPackagesAgainstHost, pickScanRoots } from './code-scan.mjs'
+import { anchorMatches, verifyPackagesAgainstHost, pickScanRoots, scanPluginFromGuideRoot } from './code-scan.mjs'
 import { runQuickSmoke } from './quick-smoke.mjs'
 import { auditPlugin, peerPatchFor } from './plugin-audit.mjs'
 import { extractInjects, diagnoseActivation, candidateGlobalRoots, parsePatchEntries, probeEnvironment } from './env-doctor.mjs'
@@ -25,6 +25,8 @@ import { runWriteGate } from './write-gate.mjs'
 import { listRuns, sanitizeRun, writeRunLog, pruneRuns } from './lib/runlog.mjs'
 import { parseStartupLog, parseMessages, diagnoseLogs } from './log-doctor.mjs'
 import { checkSkillSync, syncSkill } from './sync-skill.mjs'
+import { querySeams } from './seams.mjs'
+import { correlateRuns } from './run-log.mjs'
 
 const SCRIPTS = path.dirname(fileURLToPath(import.meta.url))
 
@@ -1275,6 +1277,188 @@ test('run：离线全链编排产出统一报告并写日志；sanitize 脱敏�
   } finally {
     delete process.env.DSH_PFA_RUNS_DIR
   }
+})
+
+// ── 出处锚点 · seams 接缝查询 · run-log doctor · --real-smoke（2026-10-25 方案二）──
+
+// 落盘的指南夹具：loadGuides 侧产出 guideFile/titleLine，findings 原样携带，
+// 每个结论都能回溯到官方原文位置。
+function makeGuideRoot() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fast-adapt-guides-'))
+  const dir = path.join(root, 'v0.2.1-alpha.2', 'topic-anchor-fixture', 'guide.md')
+  fs.mkdirSync(path.dirname(dir), { recursive: true })
+  fs.writeFileSync(
+    dir,
+    `---\nkind: upgrade-guide\ndescription: "fixture"\n---\n# Fixture change\n\n## Change\n\nThe package @deepseek-ai/dsh-settings was removed. Call installBundle(spec) differently. Handle error 'fixture-gone-1'.\n\n## Migration\n\n1. Replace legacyEntryWay() with modernEntryWay().\n2. Use the new registry helper.\n`
+  )
+  return root
+}
+
+test('指南出处锚点：loadGuides 带文件与标题行号，findings 原样携带', () => {
+  const root = makeGuideRoot()
+  const plugin = makeFixture()
+  try {
+    const guides = loadGuides(root, 'v0.2.1-alpha.2')
+    assert.strictEqual(guides.length, 1, '夹具指南应被加载')
+    assert.strictEqual(guides[0].guideFile, 'v0.2.1-alpha.2/topic-anchor-fixture/guide.md')
+    assert.strictEqual(guides[0].titleLine, 5, '标题应在 frontmatter 后的第 5 行')
+
+    const r = scanPluginFromGuideRoot(plugin, root, {
+      localVersion: '0.2.1-alpha.1',
+      targetVersion: '0.2.1-alpha.2',
+      hostInfo: null,
+      verifyHost: false,
+    })
+    assert.ok(r.findings.length >= 1, '夹具插件的 installBundle 应命中')
+    for (const f of r.findings) {
+      assert.strictEqual(f.guideFile, 'v0.2.1-alpha.2/topic-anchor-fixture/guide.md', 'findings 应带指南文件锚点')
+      assert.strictEqual(f.guideLine, 5, 'findings 应带标题行号')
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+    fs.rmSync(plugin, { recursive: true, force: true })
+  }
+})
+
+// 假宿主：<nm>/@deepseek-ai/dsh（主包，含 installBundle 源码）＋ dsh-tools 在、
+// dsh-settings 不在。location 的契约与 findGlobalDsh 一致：宿主包目录（不是包内文件），
+// nodeModulesScope 取 dirname(dirname(location)) 才能落在 node_modules 上。
+function makeFakeHost() {
+  const nm = fs.mkdtempSync(path.join(os.tmpdir(), 'fast-adapt-nm-'))
+  const mk = (rel, content = '{}') => {
+    const file = path.join(nm, rel)
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, content)
+  }
+  mk('@deepseek-ai/dsh/package.json')
+  mk('@deepseek-ai/dsh/lib/index.js', 'export function installBundle(spec) { return spec }\n')
+  mk('@deepseek-ai/dsh-tools/package.json')
+  return { nm, hostInfo: { version: '0.2.1-rc.3', source: 'test', location: path.join(nm, '@deepseek-ai', 'dsh') } }
+}
+
+test('seams：包名查询给双源结论——一致已移除 / 宿主仍在报分歧依据 / 无记录看宿主', () => {
+  const root = makeGuideRoot()
+  const { nm, hostInfo } = makeFakeHost()
+  try {
+    // 指南声称移除 + 宿主实测没有 → 一致
+    const a = querySeams('@deepseek-ai/dsh-settings', { guideRoot: root, hostInfo })
+    assert.strictEqual(a.conclusion.verdict, 'agree-removed')
+    assert.strictEqual(a.hostEvidence.status, 'absent')
+    assert.ok(a.guideEvidence.some((e) => e.kind === 'removed-package'))
+    // 指南无记录 + 宿主里有（裸 dsh-* 名归一到 @deepseek-ai/ scope 再查）
+    const b = querySeams('dsh-tools', { guideRoot: root, hostInfo })
+    assert.strictEqual(b.hostEvidence.status, 'present', '裸 dsh-tools 应按套件包名查宿主')
+    assert.strictEqual(b.conclusion.verdict, 'host-present-no-guide-record')
+    // 指南无记录 + 宿主也没有
+    const c = querySeams('dsh-never-existed', { guideRoot: root, hostInfo })
+    assert.strictEqual(c.hostEvidence.status, 'absent')
+    assert.strictEqual(c.conclusion.verdict, 'host-absent-no-guide-record')
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+    fs.rmSync(nm, { recursive: true, force: true })
+  }
+})
+
+test('seams：符号查询给宿主文本弱证据与迁移目标档', () => {
+  const root = makeGuideRoot()
+  const { nm, hostInfo } = makeFakeHost()
+  try {
+    const member = querySeams('installBundle', { guideRoot: root, hostInfo })
+    assert.ok(member.guideEvidence.some((e) => e.kind === 'changed-member'), 'installBundle 应是 changed-member 锚点')
+    assert.strictEqual(member.hostEvidence.status, 'text-present', '宿主主包源码应有文本命中')
+    assert.ok(member.hostEvidence.caveat.includes('弱证据'), '文本证据要如实标注强度')
+
+    const introduced = querySeams('modernEntryWay', { guideRoot: root, hostInfo })
+    assert.strictEqual(introduced.conclusion.verdict, 'introduced', '迁移目标应识别为 introduced')
+
+    // 探不到宿主时不伪造：guide 有声称、host 无从实测 → unverified 而非 agree
+    const unverified = querySeams('@deepseek-ai/dsh-settings', { guideRoot: root, hostInfo: null })
+    assert.strictEqual(unverified.conclusion.verdict, 'guide-claim-unverified')
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+    fs.rmSync(nm, { recursive: true, force: true })
+  }
+})
+
+test('run-log doctor：运行日志 × 宿主启动日志交叉核对', () => {
+  const runsDir = tmpPluginDir('doctor-runs')
+  const logsDir = tmpPluginDir('doctor-logs')
+  fs.writeFileSync(
+    path.join(logsDir, 'startup-fixture.log'),
+    `WARNING: fixture\n\n{\n  timestamp: '2026-10-25T00:00:00.000Z',\n  dshVersion: '0.2.1-rc.3',\n  profile: 'web',\n  error: StartupError: dsh: startup failed: 1 required plugin did not activate\n\n  Failed plugins (1):\n    t-doc (required)\n      Package: t-doc\n      Error: cannot get property "webServer" without inject\n      at async file:///bin.js:252:23 {\n    [stack]: [Getter/Setter],\n    [message]: 'x'\n  }\n}\n`
+  )
+  process.env.DSH_PFA_RUNS_DIR = runsDir
+  try {
+    const cleanRun = { time: new Date().toISOString(), durationMs: 10, scan: { findingCount: 0, criticalOrHigh: 0 }, smoke: { success: true }, typecheck: { status: 'ok' }, audit: { overallScore: 100 } }
+    writeRunLog({ ...cleanRun, plugin: { name: 't-doc', version: '1.0.0' } }, { toolDir: null })
+    writeRunLog({ ...cleanRun, plugin: { name: 't-clean', version: '1.0.0' } }, { toolDir: null })
+
+    const report = correlateRuns({ logsDir })
+    const hit = report.plugins.find((p) => p.plugin === 't-doc')
+    const clean = report.plugins.find((p) => p.plugin === 't-clean')
+    assert.ok(hit, 't-doc 应在交叉核对里')
+    assert.ok(clean, 't-clean 应在交叉核对里')
+    assert.strictEqual(hit.hostLogHits.length, 1, 'startup 日志的 failedPlugins 应命中 t-doc')
+    assert.strictEqual(hit.hostLogHits[0].what, 'failed-plugin')
+    assert.strictEqual(hit.verdict, 'log-hit-scan-clean', '扫描干净但宿主报它 → 嫌疑在装载侧')
+    assert.ok(hit.advice.includes('env-doctor'), '建议应指向 env-doctor 的 activation')
+    assert.strictEqual(clean.verdict, 'host-log-clean')
+    assert.strictEqual(report.host.verdict, 'host-failure', 'undeclared-inject 信号应让宿主总判为 host-failure')
+  } finally {
+    delete process.env.DSH_PFA_RUNS_DIR
+    fs.rmSync(runsDir, { recursive: true, force: true })
+    fs.rmSync(logsDir, { recursive: true, force: true })
+  }
+})
+
+test('run --real-smoke：桥接 verify-runtime——fail 退出码 2，pass 退出码 0', () => {
+  if (process.platform === 'win32') {
+    process.stderr.write('  （跳过：win32 分支返回 skipped，桥接断言只在 POSIX 跑）\n')
+    return
+  }
+  const dir = tmpPluginDir('real-smoke')
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 't-real', version: '1.0.0' }))
+  fs.mkdirSync(path.join(dir, 'src'), { recursive: true })
+  fs.writeFileSync(path.join(dir, 'src', 'index.js'), 'export function apply() {}\n')
+  const fakeDir = tmpPluginDir('verify-fakes')
+  const failScript = path.join(fakeDir, 'verify-fail.mjs')
+  const passScript = path.join(fakeDir, 'verify-pass.mjs')
+  fs.writeFileSync(failScript, "console.log('plugin-code: fake failure attribution'); process.exit(1)\n")
+  fs.writeFileSync(passScript, "console.log('verify pass'); process.exit(0)\n")
+  const base = [path.join(SCRIPTS, 'run.mjs'), dir, '--offline', '--no-smoke', '--no-typecheck', '--no-log', '--real-smoke']
+  const env = { ...process.env, DSH_PFA_RUNS_DIR: path.join(fakeDir, 'runs'), PFA_VERIFY_RUNTIME: failScript }
+  try {
+    execFileSync(process.execPath, base, { encoding: 'utf8', env })
+    assert.fail('fail 档应退出码 2')
+  } catch (err) {
+    assert.strictEqual(err.status, 2, 'verify-runtime exit 1 → run.mjs 退出码 2')
+    const report = JSON.parse(String(err.stdout).slice(0, String(err.stdout).lastIndexOf('}') + 1))
+    assert.strictEqual(report.realSmoke.status, 'fail')
+    assert.ok(report.realSmoke.tail.includes('fake failure attribution'), '应透传 verify-runtime 的归因尾部')
+    assert.ok(report.realSmoke.hint.includes('四类归因'), 'fail 档应带归因提示')
+  }
+  const out = execFileSync(process.execPath, base, { encoding: 'utf8', env: { ...env, PFA_VERIFY_RUNTIME: passScript } })
+  const passed = JSON.parse(out.slice(0, out.lastIndexOf('}') + 1))
+  assert.strictEqual(passed.realSmoke.status, 'ok')
+  assert.ok(passed.realSmoke.durationMs >= 0)
+  try {
+    fs.rmSync(dir, { recursive: true, force: true })
+    fs.rmSync(fakeDir, { recursive: true, force: true })
+  } catch {}
+})
+
+test('下游技能面零漂移（真机拦截；下游目录不存在时跳过）', () => {
+  const selfRoot = path.resolve(SCRIPTS, '..')
+  const dest = process.env.PFA_DOWNSTREAM_DIR || path.resolve(SCRIPTS, '../../../dsh-plugin-upgrade-skill/skills/plugin-fast-adapt')
+  if (!fs.existsSync(dest) || path.resolve(dest) === selfRoot) {
+    process.stderr.write(`  （跳过：下游目录不存在或就是本仓，${dest}）\n`)
+    return
+  }
+  const result = checkSkillSync({ destRoot: dest })
+  assert.ok(
+    result.clean,
+    `下游技能面有漂移——缺失 [${result.missing.join(', ')}] 不同 [${result.differing.join(', ')}]；改完真源先跑 sync-skill 同步再提交（2026-10-25 README 漂移实录）`
+  )
 })
 
 // ── 扫描窗口与目标形态（2026-10-25 dsh-image-gen 实录）──────────────────────
