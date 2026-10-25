@@ -29,7 +29,7 @@ DSH 插件适配与破坏性变更核查，兼从零造插件脚手架。查官�
 | 弱模型表现 | 全套卡片进上下文，-3.07 pp | 六个独立脚本，每步只产出一份小输出 |
 | 代码级扫描 | 无 | 锚点匹配 + 四层降噪（见下文实测） |
 | 依赖 | — | 零外部依赖：Node 内置模块 + `git`/`npm` 命令 |
-| 自检 | — | 113 项断言，零网络，任何机器能跑 |
+| 自检 | — | 119 项断言，零网络，任何机器能跑 |
 
 ## 流程
 
@@ -37,7 +37,9 @@ DSH 插件适配与破坏性变更核查，兼从零造插件脚手架。查官�
 
 ```sh
 node scripts/run.mjs <插件目录>          # 环境→定版→指南→扫描→体检→冒烟→typecheck
+node scripts/run.mjs <插件目录> --real-smoke   # 再补一档：干净 profile 真装真启（桥接原仓库 verify-runtime）
 node scripts/run-log.mjs list           # 回看历史运行（含工具版本@commit）
+node scripts/run-log.mjs doctor         # 运行日志 × 宿主启动日志交叉核对（插件报错先跑它）
 node scripts/run-log.mjs sanitize --latest --out share.json   # 脱敏后才可外发
 ```
 
@@ -55,6 +57,10 @@ node scripts/guide-sync.mjs <本机版本> --clone
 
 # 4. 查插件踩了哪些变更
 node scripts/code-scan.mjs <插件目录> <upgrade-guide 目录> <本机版本> <目标版本>
+
+# 4b. 接缝查询：某个包/API 在官方指南与本机宿主里的双源结论
+#     （指南说没说 × 宿主 node_modules 实测在不在，双源一致才下「已移除」）
+node scripts/seams.mjs dsh-settings
 ```
 
 覆盖层有旧包残留时先自愈（默认 dry-run）：
@@ -93,7 +99,7 @@ node scripts/sync-skill.mjs --dest <下游技能目录> --check
 - 常量锚点只从 `Change` 段抽；匹配时要求对象部分互为后缀，`engines.dsh` 不会撞 `result.dsh`
 - 包名词义门：包名只在与移除/改名动词同句时才成为锚点，语境引用（「The mode fields of X accept only …」讲字段取值）不算——实测 dsh-files 的 3 处 critical 全是这类误报，加门后归零
 
-命中带 `severity`（package=critical、member=high、code=medium，先修排前面的）和 `evidence`（命中行原文，核对误报不用开文件）。规则与实测依据见 [references/heuristics.md](references/heuristics.md)。扫描根取源码根并集（`src` 与同级 `client`/`web`/`ui`），`lib`/`dist` 构建产物不重复扫。冒烟验证会披露 Mock 兜底：输出里的 `mockFallbacks` 列出插件摸到但 Mock 没提供的属性，这个列表越长，冒烟结果可信度越低——**冒烟通过 ≠ 宿主兼容**，这句话写在输出里，不只写在文档里。冒烟还按真 Cordis 契约拦未声明 `inject` 的宿主服务访问（`inject_contract` 阶段），不再让「装载即崩」的代码静默通过。
+命中带 `severity`（package=critical、member=high、code=medium，先修排前面的）、`evidence`（命中行原文，核对误报不用开文件）和出处锚点（`guideFile`/`guideLine`，直达官方指南原文位置）。规则与实测依据见 [references/heuristics.md](references/heuristics.md)。扫描根取源码根并集（`src` 与同级 `client`/`web`/`ui`），`lib`/`dist` 构建产物不重复扫。冒烟验证会披露 Mock 兜底：输出里的 `mockFallbacks` 列出插件摸到但 Mock 没提供的属性，这个列表越长，冒烟结果可信度越低——**冒烟通过 ≠ 宿主兼容**，这句话写在输出里，不只写在文档里。冒烟还按真 Cordis 契约拦未声明 `inject` 的宿主服务访问（`inject_contract` 阶段），不再让「装载即崩」的代码静默通过。要真宿主证据时用 `run.mjs --real-smoke`：桥接原仓库 plugin-upgrade 的 `verify-runtime.mjs`，干净 profile 安装→启动→四类归因（脚本不在本机时诚实跳过给补法）。
 
 ## 安装
 
@@ -136,17 +142,18 @@ node scripts/write-gate.mjs <插件目录>   # 出生证：硬门禁自动判，
 自检：
 
 ```sh
-npm test   # node scripts/self-test.mjs，113 项断言
+npm test   # node scripts/self-test.mjs，119 项断言
 ```
 
-覆盖扫描器不误报（注释和字符串里的同名词不算命中）、不漏报、版本启发式、替换对识别、端到端命中、SOP 引用完整性、dist-tags 缓存三态、冒烟验证（含未声明 inject 契约拦截）、四维审计（含 peer 修补）、启用诊断、创作脚手架（五形态生成、命名投影语法、冒烟闭环、挂载层可识别、非法输入与非空目录拒绝）、创作体检门（硬门禁拦截、软指标不越权判红、跳过语义、scaffold 衔接）、日志诊断、下游同步漂移检查、扫描性能回归门。零网络、零外部依赖，任何机器上都能跑。
+覆盖扫描器不误报（注释和字符串里的同义词不算命中）、不漏报、版本启发式、替换对识别、端到端命中（含官方指南文件＋行号出处锚点）、接缝查询双源结论（一致已移除/宿主仍在报分歧/无记录如实说）、运行日志×宿主日志交叉核对、--real-smoke 桥接档位（fail→退出码 2）、SOP 引用完整性、dist-tags 缓存三态、冒烟验证（含未声明 inject 契约拦截）、四维审计（含 peer 修补）、启用诊断、创作脚手架（五形态生成、命名投影语法、冒烟闭环、挂载层可识别、非法输入与非空目录拒绝）、创作体检门（硬门禁拦截、软指标不越权判红、跳过语义、scaffold 衔接）、日志诊断、下游同步漂移检查＋真机零漂移拦截、扫描性能回归门。零网络、零外部依赖，任何机器上都能跑。
 
 ## 脚本
 
 | 脚本 | 职责 |
 | --- | --- |
-| `scripts/run.mjs` | 一键编排全流程（环境→定版→指南→扫描→体检→冒烟→typecheck），出统一报告并写本地运行日志 |
-| `scripts/run-log.mjs` | 运行日志查看（list/show）与脱敏导出（sanitize） |
+| `scripts/run.mjs` | 一键编排全流程（环境→定版→指南→扫描→体检→冒烟→typecheck），出统一报告并写本地运行日志；`--real-smoke` 桥接原仓库 verify-runtime 补真冷启动档 |
+| `scripts/run-log.mjs` | 运行日志查看（list/show）、交叉核对（doctor：运行日志×宿主启动日志）与脱敏导出（sanitize） |
+| `scripts/seams.mjs` | 接缝查询：一个包名/API 符号在官方指南锚点表与本机宿主里的双源结论 |
 | `scripts/scaffold.mjs` | 从零造插件：一条命令生成五形态可冒烟骨架（package.json 不变量＋形态入口＋挂载层＋命名投影），生成即验证 |
 | `scripts/write-gate.mjs` | 造完即验：编排冒烟＋启用就绪＋四维体检＋官方指南核查出「出生证」；硬门禁仅三条自动判，软指标只透传不拍板 |
 | `scripts/env-doctor.mjs` | 探测本机 DSH 环境（版本、覆盖层、插件、进程、启用就绪度） |
@@ -166,7 +173,7 @@ npm test   # node scripts/self-test.mjs，113 项断言
 
 ## 安全姿态
 
-- `env-doctor`、`code-scan`、`plugin-audit`、`log-doctor` 完全只读
+- `env-doctor`、`code-scan`、`plugin-audit`、`log-doctor`、`seams`、`run-log` 完全只读
 - `env-heal` 默认 dry-run，真动手也是移动不删除（进 `~/.dsh/.trash/<日期>/`）
 - `sync-skill` 显式写下游技能目录，只复制固定技能面（`SKILL.md`/`README*`/`references`/`scripts`），`--check`/`--dry-run` 供先确认
 - 不改 DSH 本体，不动 `~/.dsh` 下的配置和 profile 声明
@@ -185,4 +192,4 @@ npm test   # node scripts/self-test.mjs，113 项断言
 
 ## 与原项目的分工
 
-两个项目互补而非替代：原项目继续维护升级卡片库、统一工作流和 benchmark；本项目管「新版适配」主路径。宿主升级后的整批插件巡检走原项目的 [plugin-fleet-sweep](https://github.com/oh-my-dsh/dsh-plugin-upgrade-skill/tree/main/skills/plugin-fleet-sweep)（批量管广度），筛出的个体回到本项目六步流水线深查（本 skill 管深度）。官方指南覆盖不到的历史走廊（v0.1.7-rc.2 之前），本项目的 SOP 引用原项目的卡片和脚本——有 guide 的段用本项目的 `code-scan`，没 guide 的段用原项目的 `plan-migration.mjs` 和卡片，运行时验证用原项目的 `verify-runtime.mjs`。
+两个项目互补而非替代：原项目继续维护升级卡片库、统一工作流和 benchmark；本项目管「新版适配」主路径。宿主升级后的整批插件巡检走原项目的 [plugin-fleet-sweep](https://github.com/oh-my-dsh/dsh-plugin-upgrade-skill/tree/main/skills/plugin-fleet-sweep)（批量管广度），筛出的个体回到本项目六步流水线深查（本 skill 管深度）。官方指南覆盖不到的历史走廊（v0.1.7-rc.2 之前），本项目的 SOP 引用原项目的卡片和脚本——有 guide 的段用本项目的 `code-scan`，没 guide 的段用原项目的 `plan-migration.mjs` 和卡片，运行时验证用原项目的 `verify-runtime.mjs`（本项目 `run.mjs --real-smoke` 已可直接桥接它）。

@@ -29,7 +29,7 @@ The authoritative description of breaking changes lives in the vendor harness re
 | Weaker models | Full card library in context, -3.07 pp | Six independent scripts, one small output each |
 | Code-level scanning | None | Anchor matching + four noise-reduction layers (measured below) |
 | Dependencies | — | Zero external: Node built-ins + `git`/`npm` commands |
-| Self-test | — | 113 assertions, zero network, runs on any machine |
+| Self-test | — | 119 assertions, zero network, runs on any machine |
 
 ## Pipeline
 
@@ -37,7 +37,9 @@ Run the whole chain with one command (recommended); every run writes a local log
 
 ```sh
 node scripts/run.mjs <plugin-dir>        # env → version → guide → scan → audit → smoke → typecheck
+node scripts/run.mjs <plugin-dir> --real-smoke   # plus one more tier: install & boot in a clean profile (bridges upstream verify-runtime)
 node scripts/run-log.mjs list           # review past runs (tool version@commit included)
+node scripts/run-log.mjs doctor         # cross-check run logs × host startup logs (first stop for "plugin erroring")
 node scripts/run-log.mjs sanitize --latest --out share.json   # sanitise before sharing
 ```
 
@@ -56,6 +58,10 @@ node scripts/guide-sync.mjs <local-version> --clone
 
 # 4. Find which changes the plugin hits
 node scripts/code-scan.mjs <plugin-dir> <upgrade-guide-dir> <local-version> <target-version>
+
+# 4b. Seam query: dual-source verdict for a package/API symbol across the official
+#     guide anchors and the local host install ("removed" is only concluded when both agree)
+node scripts/seams.mjs dsh-settings
 ```
 
 Heal stale overlay packages first when any are reported (dry-run by default):
@@ -97,7 +103,7 @@ A naive first version reported 12 findings on a real plugin; on inspection **all
 - Constant anchors come only from the `Change` section; matching requires the object parts to be mutual suffixes, so `engines.dsh` never collides with `result.dsh`
 - Package semantic gate: a package name becomes an anchor only when mentioned in a sentence with a removal/renaming verb — contextual mentions ("The mode fields of X accept only …", about field values) do not count. All 3 criticals reported on dsh-files were of this kind; the gate zeroed them
 
-Each finding carries a `severity` (package=critical, member=high, code=medium — fix the front of the list first) and an `evidence` line (the source line itself, so checking for false positives needs no file opening). The rules and the measurements behind them are in [references/heuristics.md](references/heuristics.md). Scan roots are the union of source roots (`src` plus sibling `client`/`web`/`ui`); build outputs (`lib`/`dist`) are not scanned twice. The smoke test discloses its mock fallbacks: the `mockFallbacks` list in the output names every property the plugin touched but the mock does not provide — the longer that list, the less the result can be trusted. **A passing smoke test is not host compatibility**, and the tool says so in its output, not just in the docs. The smoke test also rejects undeclared-`inject` host-service access at the `inject_contract` stage, matching the real Cordis contract, instead of letting load-time crashes pass silently.
+Each finding carries a `severity` (package=critical, member=high, code=medium — fix the front of the list first), an `evidence` line (the source line itself, so checking for false positives needs no file opening) and provenance anchors (`guideFile`/`guideLine`, pointing straight at the official guide's original location). The rules and the measurements behind them are in [references/heuristics.md](references/heuristics.md). Scan roots are the union of source roots (`src` plus sibling `client`/`web`/`ui`); build outputs (`lib`/`dist`) are not scanned twice. The smoke test discloses its mock fallbacks: the `mockFallbacks` list in the output names every property the plugin touched but the mock does not provide — the longer that list, the less the result can be trusted. **A passing smoke test is not host compatibility**, and the tool says so in its output, not just in the docs. The smoke test also rejects undeclared-`inject` host-service access at the `inject_contract` stage, matching the real Cordis contract, instead of letting load-time crashes pass silently. When you need real-host evidence, `run.mjs --real-smoke` bridges upstream plugin-upgrade's `verify-runtime.mjs`: install → boot → four-class attribution in a clean profile (honestly skipped with install guidance when the script is absent).
 
 ## Install
 
@@ -140,15 +146,18 @@ No TypeScript, no AST library, no HTTP client. Runs on Node 22.13+ (`import.meta
 Self-test:
 
 ```sh
-npm test   # node scripts/self-test.mjs, 113 assertions
+npm test   # node scripts/self-test.mjs, 119 assertions
 ```
 
-Covers scanner false positives (names in comments and strings are not hits), false negatives, version heuristics, replacement-pair recognition, end-to-end findings, SOP reference integrity, dist-tags cache states, smoke verification (including the undeclared-inject contract rejection), the four-dimension audit (including peer patches), activation diagnostics, the plugin scaffolder (all five forms, naming-projection grammar, smoke closure, patch-layer recognizability, invalid-input and non-empty-target rejection), the write gate (hard-gate interception, soft metrics never overrule, skip semantics, scaffold handoff), log diagnosis, downstream-sync drift checks and a scanner performance gate. Zero network, zero external dependencies, runs on any machine.
+Covers scanner false positives (names in comments and strings are not hits), false negatives, version heuristics, replacement-pair recognition, end-to-end findings (with guide file + line provenance anchors), dual-source seam-query verdicts (agree-removed / host-still-present disagreement / honest no-record), run-log × host-log cross-checks, the --real-smoke bridge tier (fail → exit 2), SOP reference integrity, dist-tags cache states, smoke verification (including the undeclared-inject contract rejection), the four-dimension audit (including peer patches), activation diagnostics, the plugin scaffolder (all five forms, naming-projection grammar, smoke closure, patch-layer recognizability, invalid-input and non-empty-target rejection), the write gate (hard-gate interception, soft metrics never overrule, skip semantics, scaffold handoff), log diagnosis, downstream-sync drift checks plus a real-machine zero-drift gate and a scanner performance gate. Zero network, zero external dependencies, runs on any machine.
 
 ## Scripts
 
 | Script | Responsibility |
 | --- | --- |
+| `scripts/run.mjs` | One-command orchestration of the full chain (env → version → guide → scan → audit → smoke → typecheck), unified report plus a local run log; `--real-smoke` bridges upstream verify-runtime for a real-cold-boot tier |
+| `scripts/run-log.mjs` | Run-log viewing (list/show), cross-checking (doctor: run logs × host startup logs) and sanitised export (sanitize) |
+| `scripts/seams.mjs` | Seam query: dual-source verdict for one package/API symbol across official guide anchors and the local host install |
 | `scripts/scaffold.mjs` | Scaffold a plugin from zero: one command emits a smoke-testable skeleton in any of the five forms (package.json invariants + form entry + patch layer + naming projections), verified on creation |
 | `scripts/write-gate.mjs` | Gate a finished plugin: orchestrates smoke + activation readiness + four-dimension audit + official-guide scan into a birth certificate; only three hard gates auto-judge, soft metrics pass through untouched |
 | `scripts/env-doctor.mjs` | Probe the local DSH environment (version, overlay, plugins, processes, activation readiness) |
@@ -167,7 +176,7 @@ Covers scanner false positives (names in comments and strings are not hits), fal
 
 ## Safety posture
 
-- `env-doctor`, `code-scan`, `plugin-audit` and `log-doctor` are strictly read-only
+- `env-doctor`, `code-scan`, `plugin-audit`, `log-doctor`, `seams` and `run-log` are strictly read-only
 - `env-heal` is dry-run by default and moves rather than deletes when applied (into `~/.dsh/.trash/<date>/`)
 - `sync-skill` writes to a downstream skill directory explicitly, copying only the fixed skill surface (`SKILL.md`/`README*`/`references`/`scripts`); `--check`/`--dry-run` let you inspect first
 - Never modifies DSH itself, nor config or profile declarations under `~/.dsh`
@@ -186,4 +195,4 @@ The official upgrade guide only goes back to dsh-v0.1.7-rc.2. For older plugins,
 
 ## Division of work with upstream
 
-The two projects complement each other: upstream keeps the card library, the unified workflow and the benchmark; this project owns the "adapt to a new version" main path. A fleet-wide sweep after a host upgrade goes to upstream's [plugin-fleet-sweep](https://github.com/oh-my-dsh/dsh-plugin-upgrade-skill/tree/main/skills/plugin-fleet-sweep) (breadth), and each flagged plugin comes back to this project's six-step pipeline for a deep pass (depth). For historical corridors the official guide does not cover (before v0.1.7-rc.2), this project's SOP references upstream's cards and scripts — segments with a guide use this project's `code-scan`, segments without use upstream's `plan-migration.mjs` and cards, and runtime verification uses upstream's `verify-runtime.mjs`.
+The two projects complement each other: upstream keeps the card library, the unified workflow and the benchmark; this project owns the "adapt to a new version" main path. A fleet-wide sweep after a host upgrade goes to upstream's [plugin-fleet-sweep](https://github.com/oh-my-dsh/dsh-plugin-upgrade-skill/tree/main/skills/plugin-fleet-sweep) (breadth), and each flagged plugin comes back to this project's six-step pipeline for a deep pass (depth). For historical corridors the official guide does not cover (before v0.1.7-rc.2), this project's SOP references upstream's cards and scripts — segments with a guide use this project's `code-scan`, segments without use upstream's `plan-migration.mjs` and cards, and runtime verification uses upstream's `verify-runtime.mjs` (directly bridgeable via this project's `run.mjs --real-smoke`).
