@@ -16,7 +16,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { printJson } from './lib/scanner.mjs'
 
-const DEFAULT_LOGS_DIR = path.join(os.homedir(), '.dsh', 'logs')
+export const DEFAULT_LOGS_DIR = path.join(os.homedir(), '.dsh', 'logs')
 
 // 信号表：每条给正则 + 可执行动作。命中即进诊断，动作是「怎么确认/怎么修」的第一步。
 const SIGNALS = [

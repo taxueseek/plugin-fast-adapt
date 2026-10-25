@@ -10,10 +10,12 @@
 //
 // 用法：
 //   node scripts/run.mjs <插件目录> [--target <版本>] [--from <版本>]
-//        [--no-clone] [--no-smoke] [--no-typecheck] [--no-log]
+//        [--no-clone] [--no-smoke] [--no-typecheck] [--no-log] [--real-smoke]
 //
 // 安全边界：quick-smoke 与 typecheck 都会执行插件自有的代码/脚本，
 // 只对自己的插件或审过的代码运行（与 SKILL.md 的冒烟边界一致）。
+// --real-smoke 额外把插件装进干净 profile 真启动宿主（verify-runtime.mjs），
+// 信任级与 quick-smoke 相同，且要求本机 PATH 里有 dsh。
 
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -96,6 +98,68 @@ function runTypecheck(pluginRoot, stages) {
       durationMs: Date.now() - started,
       tail: String(err.stdout || err.message || '').split('\n').slice(-12).join('\n'),
       hint: 'typecheck 红说明插件当前连编译都过不了——适配前先修构建（taxue-dsh-artisan 0.3.1 发布态即红，本轮实测）。',
+    }
+  }
+}
+
+// ── 真冷启动档位（--real-smoke）─────────────────────────────────────────────
+// Mock 冒烟的边界在 mockFallbacks 里自曝；真冷启动走原仓库 plugin-upgrade 的
+// verify-runtime.mjs（干净 profile 安装→启动→归因，POSIX-only）。
+// 找不到脚本就诚实跳过给补法，不静默降级也不伪造。
+const VERIFY_RUNTIME_EXIT = { 1: 'fail', 2: 'inconclusive', 3: 'skipped' }
+
+function resolveVerifyRuntime() {
+  if (process.env.PFA_VERIFY_RUNTIME) return process.env.PFA_VERIFY_RUNTIME
+  const candidates = [
+    // 真源的兄弟仓：GPT/Deepseek/plugin-fast-adapt → GPT/dsh-plugin-upgrade-skill
+    path.resolve(TOOL_DIR, '../../dsh-plugin-upgrade-skill/skills/plugin-upgrade/scripts/verify-runtime.mjs'),
+  ]
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return c
+  }
+  return null
+}
+
+function runRealSmoke(pluginRoot) {
+  if (process.platform === 'win32') {
+    return { skipped: true, reason: 'verify-runtime 声明 POSIX-only，Windows 跳过' }
+  }
+  const script = resolveVerifyRuntime()
+  if (!script) {
+    return {
+      skipped: true,
+      reason: '未找到 verify-runtime.mjs——装原仓库 plugin-upgrade（dsh-plugin-upgrade-skill），或用 PFA_VERIFY_RUNTIME 指定路径',
+    }
+  }
+  const started = Date.now()
+  try {
+    const out = execFileSync(process.execPath, [script, pluginRoot], {
+      encoding: 'utf8',
+      shell: SPAWN_SHELL,
+      maxBuffer: 32 * 1024 * 1024,
+      timeout: 420_000,
+    })
+    return {
+      status: 'ok',
+      script: path.relative(TOOL_DIR, script),
+      durationMs: Date.now() - started,
+      tail: out.split('\n').slice(-5).join('\n').trim(),
+    }
+  } catch (err) {
+    const label = VERIFY_RUNTIME_EXIT[err.status] ?? 'error'
+    return {
+      status: label,
+      exitCode: err.status ?? null,
+      timedOut: Boolean(err.timedOut),
+      script: path.relative(TOOL_DIR, script),
+      durationMs: Date.now() - started,
+      tail: String(err.stdout || err.message || '').split('\n').slice(-12).join('\n'),
+      hint:
+        label === 'fail'
+          ? '真冷启动失败——tail 是 verify-runtime 的归因输出，四类归因（插件代码/依赖解析/profile 配置/宿主运行时）以它为准'
+          : label === 'inconclusive'
+            ? '真冷启动不定论（exit 2）——看 tail 判断是需要换 profile 重探还是环境缺件'
+            : null,
     }
   }
 }
@@ -190,6 +254,9 @@ if (!flag('no-smoke')) {
 // 7. typecheck（默认开；执行插件自有的 typecheck script，与冒烟同信任级）
 if (!flag('no-typecheck')) runTypecheck(pluginDir, stages)
 
+// 8. 真冷启动（默认关；--real-smoke 显式启用，装进干净 profile 真启动宿主）
+const realSmoke = flag('real-smoke') ? runRealSmoke(pluginDir) : null
+
 const durationMs = Date.now() - startedAt
 const report = {
   time: new Date().toISOString(),
@@ -226,6 +293,7 @@ const report = {
     ? { success: smokeResult.success, durationMs: smokeResult.durationMs, registeredToolsCount: smokeResult.registeredToolsCount, mockFallbacks: smokeResult.mockFallbacks }
     : { skipped: true },
   typecheck: stages.typecheck ?? { skipped: true },
+  realSmoke,
   durationMs,
 }
 
@@ -244,6 +312,12 @@ if (report.smoke?.success != null) verdictLines.push(report.smoke.success ? `冒
 if (report.typecheck?.status === 'fail') verdictLines.push('typecheck 红——适配前先修构建')
 else if (report.typecheck?.status === 'ok') verdictLines.push('typecheck 通过')
 else if (report.typecheck?.status === 'skipped') verdictLines.push(`typecheck 跳过（${report.typecheck.reason}）`)
+if (realSmoke) {
+  if (realSmoke.skipped) verdictLines.push(`真冷启动跳过——${realSmoke.reason}`)
+  else if (realSmoke.status === 'ok') verdictLines.push(`真冷启动通过（${realSmoke.durationMs}ms，verify-runtime 四类归因全绿）`)
+  else if (realSmoke.status === 'fail') verdictLines.push('⚠ 真冷启动失败——看 realSmoke.tail 的归因')
+  else if (realSmoke.status === 'inconclusive') verdictLines.push('真冷启动不定论——看 realSmoke.tail')
+}
 
 // 8. 日志（--no-log 跳过）
 if (!flag('no-log')) {
@@ -253,4 +327,6 @@ if (!flag('no-log')) {
 
 printJson(report)
 process.stderr.write(`\n${verdictLines.join('\n')}\n`)
-process.exit(criticalOrHigh > 0 || report.typecheck?.status === 'fail' ? 2 : 0)
+process.exit(
+  criticalOrHigh > 0 || report.typecheck?.status === 'fail' || realSmoke?.status === 'fail' ? 2 : 0
+)
