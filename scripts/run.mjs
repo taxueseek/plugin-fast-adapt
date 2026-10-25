@@ -19,7 +19,7 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { printJson, peerFloor, parseVersion, compareVersions } from './lib/scanner.mjs'
+import { printJson, computeWindow } from './lib/scanner.mjs'
 import { probeEnvironment } from './env-doctor.mjs'
 import { auditPlugin } from './plugin-audit.mjs'
 import { writeRunLog } from './lib/runlog.mjs'
@@ -139,16 +139,19 @@ const offline = flag('offline')
 const versionResult = hostVersion && !offline ? runStep('guide-sync.mjs', [hostVersion], 'version', stages) : null
 const officialTarget = versionResult?.resolution?.target ?? null
 
-// 扫描窗口起点 = 插件 dsh-* peer 窗口的下限（插件的适配走廊从声明底到宿主版本）；
-// --from 可覆盖。终点 = --target 或宿主版本。
-const peerFloors = Object.entries(pluginPkg.peerDependencies || {})
-  .filter(([name]) => name.startsWith('@deepseek-ai/'))
-  .map(([, range]) => peerFloor(range))
-  .filter(Boolean)
-  .map((v) => parseVersion(v))
-  .sort(compareVersions)
-const windowLocal = valueOf('from') || peerFloors[0]?.raw || hostVersion
-const windowTarget = valueOf('target') || hostVersion || officialTarget
+// 扫描窗口：起点取插件在宿主包（@deepseek-ai/dsh 及 dsh-* 子包）上声明的
+// peer 下限，适配走廊从声明底到目标；--from 可覆盖，终点 = --target 或宿主版本。
+// cordis/schemastery 是独立版本线的库不算宿主包；倒挂（起点 > 终点）回退宿主
+// 版本并留痕（2026-10-25 dsh-image-gen 实录：混入库版本线后窗口 3.18.4 →
+// 0.2.1-rc.3 倒挂，扫描静默跳过还记满分）。
+const windowInfo = computeWindow({
+  peers: pluginPkg.peerDependencies || {},
+  hostVersion,
+  from: valueOf('from'),
+  target: valueOf('target') || hostVersion || officialTarget,
+})
+const windowLocal = windowInfo.local
+const windowTarget = windowInfo.target
 
 // 3. 指南（优先本机缓存；upgrade-available 时拉目标版本）
 let guideRoot = null
@@ -193,7 +196,7 @@ const report = {
   plugin: { name: pluginPkg.name, version: pluginPkg.version, dir: pluginDir },
   tool: { version: toolVersion },
   host: { version: hostVersion, officialTarget, versionVerdict: versionResult?.resolution?.verdict ?? null, versionReason: versionResult?.resolution?.reason ?? null },
-  window: { local: windowLocal, target: windowTarget },
+  window: { local: windowLocal, target: windowTarget, source: windowInfo.source, fallback: windowInfo.fallback },
   env: stages.env,
   version: versionResult?.resolution ?? null,
   guides: stages.guides?.output?.guides ?? null,
@@ -206,7 +209,16 @@ const report = {
         guidesConsidered: scanResult.guidesConsidered,
         findings: scanResult.findings,
       }
-    : { findingCount: null, skipped: true, reason: '无指南根或无窗口' },
+    : {
+        findingCount: null,
+        skipped: true,
+        reason: stages.guides?.error
+          ? `指南拉取失败: ${String(stages.guides.error).slice(0, 200)}`
+          : stages.scan?.error
+            ? `扫描执行失败: ${String(stages.scan.error).slice(0, 200)}`
+            : '无指南根或无窗口',
+        error: Boolean(stages.guides?.error || stages.scan?.error),
+      },
   audit: auditReport
     ? { scores: auditReport.scores, overallScore: auditReport.overallScore, findings: auditReport.findings, versionAdvice: auditReport.versionAdvice ?? null, peerPatch: auditReport.peerPatch ?? null }
     : null,
@@ -221,6 +233,9 @@ const report = {
 const criticalOrHigh = report.scan?.criticalOrHigh ?? 0
 const verdictLines = []
 verdictLines.push(`插件 ${pluginPkg.name}@${pluginPkg.version} × 宿主 ${hostVersion ?? '未知'}（窗口 ${windowLocal} → ${windowTarget}）`)
+if (report.window.fallback) {
+  verdictLines.push(`⚠ 扫描窗口倒挂（起点 ${report.window.fallback.rejectedFrom} > 终点 ${windowTarget}），已回退起点为宿主版本 ${report.window.fallback.to ?? '未知'}——peer 声明或 --from 有误，倒挂会让扫描静默跳过`)
+}
 if (report.host.versionVerdict === 'upgrade-available') verdictLines.push(`宿主可升级: 官方 ${officialTarget}（当前 ${hostVersion}）；本轮按在跑宿主适配，要跟新版重跑 --target ${officialTarget}`)
 if (criticalOrHigh > 0) verdictLines.push(`⚠ critical/high 命中 ${criticalOrHigh} 处——先清零再做优化`)
 else if (report.scan?.findingCount != null) verdictLines.push(`扫描命中 ${report.scan.findingCount} 处（无 critical/high）`)

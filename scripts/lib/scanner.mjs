@@ -427,6 +427,50 @@ export function isDshPackage(name) {
   return typeof name === 'string' && name.startsWith('@deepseek-ai/')
 }
 
+// 宿主版本线判定：只有 @deepseek-ai/dsh 及其 dsh-* 套件子包跟随宿主版本线；
+// 同 scope 的 @deepseek-ai/cordis（4.x）、@deepseek-ai/schemastery（3.x）是
+// 独立版本线的库，与宿主 0.x 线无关。把它们的 peer 下限算进扫描窗口会把
+// 起点顶到 3.18.4 一类的高位，窗口倒挂、扫描静默跳过（2026-10-25
+// dsh-image-gen 实录）。
+export const isDshHostPackage = (name) => name === '@deepseek-ai/dsh' || name.startsWith('@deepseek-ai/dsh-')
+
+// 扫描窗口：起点取插件在宿主包上声明的 peer 下限（适配走廊 (floor, target]），
+// 终点由调用方给（--target 或宿主版本）。来源三档：flag（--from 显式指定）
+// > peer（宿主包 peer 下限）> host（宿主当前版本）。
+// 倒挂（起点高于终点）说明声明或输入有误，回退宿主版本并在 fallback 留痕——
+// 不静默，否则下游只看到「无指南根或无窗口」却不知道为什么。
+export function computeWindow({ peers = {}, hostVersion = null, from = null, target = null }) {
+  const floors = Object.entries(peers)
+    .filter(([name]) => isDshHostPackage(name))
+    .map(([, range]) => peerFloor(range))
+    .filter(Boolean)
+    .map((v) => parseVersion(v))
+    .sort(compareVersions)
+  let local = from || floors[0]?.raw || hostVersion
+  let source = from ? 'flag' : floors.length ? 'peer' : 'host'
+  let fallback = null
+  if (local && target && compareVersions(local, target) > 0) {
+    fallback = { rejectedFrom: local, to: hostVersion, reason: '窗口倒挂（起点高于终点），回退宿主版本' }
+    local = hostVersion
+    source = 'host'
+  }
+  return { local, target, source, fallback }
+}
+
+// 目标形态判定：被查目录是不是 DSH 插件。证据只认生态信号——
+// package.json 的 dsh 命名空间（bundle 挂载层 / client 客户端半，scaffold
+// 骨架带 bundle、无 peer 也能命中），或 peer/dependencies 里任一
+// @deepseek-ai/* 包。main 入口太通用（任何 npm 包都有），不能当证据。
+// 非插件目标（纯工具仓）不适用启用就绪检查与 Cordis 生命周期规则
+// （2026-10-25 自审实录：工具仓被报 activation=ERROR、对普通脚本建议
+// ctx.effect，全是形态错配的误报）。
+export function isPluginForm(pkg) {
+  if (!pkg || typeof pkg !== 'object') return false
+  if (pkg.dsh != null) return true
+  const deps = { ...(pkg.peerDependencies || {}), ...(pkg.dependencies || {}) }
+  return Object.keys(deps).some(isDshPackage)
+}
+
 export function packageBase(name) {
   const parts = String(name).split('/')
   return parts.length > 1 ? `${parts[0]}/${parts[1]}` : parts[0]

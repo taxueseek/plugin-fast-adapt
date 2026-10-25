@@ -12,7 +12,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { scanSource, compareVersions, parseVersion, satisfiesRange } from './lib/scanner.mjs'
+import { scanSource, compareVersions, parseVersion, satisfiesRange, computeWindow, isPluginForm } from './lib/scanner.mjs'
 import { parseGuideMarkdown, extractAnchors, listGuideVersions } from './lib/guide-parser.mjs'
 import { resolveTargetVersion, fetchNpmMetadata, runGuideSync, guideVersionFor } from './guide-sync.mjs'
 import { anchorMatches, verifyPackagesAgainstHost, pickScanRoots } from './code-scan.mjs'
@@ -22,7 +22,7 @@ import { extractInjects, diagnoseActivation, candidateGlobalRoots, parsePatchEnt
 import { readClientDecl, clientExportPath, overlayMountedNames, isDeliberateRosterInsert, collectRoster, diagnoseClientHalf } from './lib/client-graph.mjs'
 import { scaffoldPlugin, projectNames, detectHarnessVersion, UsageError } from './scaffold.mjs'
 import { runWriteGate } from './write-gate.mjs'
-import { listRuns, sanitizeRun } from './lib/runlog.mjs'
+import { listRuns, sanitizeRun, writeRunLog, pruneRuns } from './lib/runlog.mjs'
 import { parseStartupLog, parseMessages, diagnoseLogs } from './log-doctor.mjs'
 import { checkSkillSync, syncSkill } from './sync-skill.mjs'
 
@@ -1243,12 +1243,17 @@ test('run：离线全链编排产出统一报告并写日志；sanitize 脱敏�
 
   const runsDir = tmpPluginDir('runs')
   const env = { ...process.env, DSH_PFA_RUNS_DIR: runsDir }
-  const out = execFileSync(process.execPath, [path.join(SCRIPTS, 'run.mjs'), dir, '--offline', '--no-smoke'], { encoding: 'utf8', env })
+  // --target 锁定终点：离线模式下终点默认取本机宿主版本，宿主旧于 peer 下限的
+  // 机器上会触发倒挂回退，把本用例变成机器相关；显式给终点让它处处确定
+  const out = execFileSync(process.execPath, [path.join(SCRIPTS, 'run.mjs'), dir, '--offline', '--no-smoke', '--target', '0.2.1-rc.3'], { encoding: 'utf8', env })
   const report = JSON.parse(out.slice(0, out.lastIndexOf('}') + 1))
   assert.strictEqual(report.plugin.name, 't-run')
   assert.strictEqual(report.audit.overallScore, 100, '干净插件应满分')
   assert.strictEqual(report.typecheck.status, 'ok', 'typecheck 步骤应执行成功')
   assert.strictEqual(report.scan.skipped, true, '离线模式扫描跳过')
+  // 窗口来源留痕：peer 声明了宿主包（dsh-tools 是 dsh-* 子包），起点取其下限
+  assert.strictEqual(report.window.local, '0.2.1-rc.1')
+  assert.strictEqual(report.window.source, 'peer')
 
   // 日志落盘 + 索引可列；工具版本与 commit 进索引（防「跑的是哪版工具」不可观测）
   // listRuns 在本进程读，本进程也要指向同一个临时日志根
@@ -1270,6 +1275,162 @@ test('run：离线全链编排产出统一报告并写日志；sanitize 脱敏�
   } finally {
     delete process.env.DSH_PFA_RUNS_DIR
   }
+})
+
+// ── 扫描窗口与目标形态（2026-10-25 dsh-image-gen 实录）──────────────────────
+// 同 scope 的 cordis(4.x)/schemastery(3.x) 是独立版本线的库，不是宿主包；
+// 旧实现按 @deepseek-ai/ 前缀全收，窗口起点被顶到 3.18.4，倒挂后扫描静默跳过。
+// 同日自审实录：工具仓被 activation 报 ERROR、被 Cordis 生命周期规则报 MEDIUM，
+// 全是「没有目标形态判定」的形态错配。
+
+test('computeWindow：宿主包 peer 优先，cordis/schemastery 版本线不混入', () => {
+  const w = computeWindow({
+    peers: { '@deepseek-ai/cordis': '>=4.0.0 <5', '@deepseek-ai/schemastery': '>=3.18.4 <4', '@deepseek-ai/dsh': '>=0.1.0-0 <0.3.0' },
+    hostVersion: '0.2.1-rc.3',
+    target: '0.2.1-rc.3',
+  })
+  assert.strictEqual(w.local, '0.1.0-0', '起点应取宿主包 peer 下限，不是库版本线的 3.18.4')
+  assert.strictEqual(w.source, 'peer')
+  assert.strictEqual(w.fallback, null)
+})
+
+test('computeWindow：无宿主包 peer（dsh-image-gen 形态）回退宿主版本', () => {
+  const w = computeWindow({
+    peers: { '@deepseek-ai/cordis': '>=4.0.0 <5', '@deepseek-ai/schemastery': '>=3.18.4 <4' },
+    hostVersion: '0.2.1-rc.3',
+    target: '0.2.1-rc.3',
+  })
+  assert.strictEqual(w.local, '0.2.1-rc.3')
+  assert.strictEqual(w.source, 'host')
+})
+
+test('computeWindow：倒挂守卫——起点高于终点时回退并留痕，不静默', () => {
+  const w = computeWindow({ peers: {}, hostVersion: '0.2.1-rc.3', from: '3.18.4', target: '0.2.1-rc.3' })
+  assert.strictEqual(w.local, '0.2.1-rc.3')
+  assert.strictEqual(w.source, 'host')
+  assert.strictEqual(w.fallback.rejectedFrom, '3.18.4')
+  assert.strictEqual(w.fallback.to, '0.2.1-rc.3')
+})
+
+test('computeWindow：--from 显式指定优先于 peer 下限', () => {
+  const w = computeWindow({ peers: { '@deepseek-ai/dsh': '>=0.1.0-0' }, hostVersion: '0.2.1-rc.3', from: '0.2.0-rc.1', target: '0.2.1-rc.3' })
+  assert.strictEqual(w.local, '0.2.0-rc.1')
+  assert.strictEqual(w.source, 'flag')
+})
+
+test('isPluginForm：生态依赖或 dsh 命名空间才算插件形态，main 不算证据', () => {
+  assert.strictEqual(isPluginForm({ name: 'plain-tool', version: '0.1.0' }), false)
+  assert.strictEqual(isPluginForm({ name: 'has-main', main: 'lib/index.js' }), false, 'main 太通用，不能当插件证据')
+  assert.strictEqual(isPluginForm({ peerDependencies: { '@deepseek-ai/cordis': '>=4.0.0 <5' } }), true)
+  assert.strictEqual(isPluginForm({ dependencies: { '@deepseek-ai/dsh': '^0.2.1' } }), true)
+  assert.strictEqual(isPluginForm({ dsh: { client: './client' } }), true, '客户端半声明是插件')
+  assert.strictEqual(isPluginForm({ dsh: { bundle: { patch: './cordis.patch.yml' } } }), true, 'scaffold 骨架带 bundle 挂载层、无 peer，也是插件')
+  assert.strictEqual(isPluginForm(null), false)
+})
+
+test('diagnoseActivation：非插件目标记 N/A，不误报 ERROR（自审实录）', () => {
+  const dir = tmpPluginDir('act-na')
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'plain-tool', version: '1.0.0' }))
+  const act = diagnoseActivation(dir, [])
+  assert.strictEqual(act.checked, false)
+  assert.strictEqual(act.verdict, 'N/A')
+})
+
+test('auditPlugin：工具仓形态跳过 Cordis 生命周期维度', () => {
+  const dir = tmpPluginDir('audit-tool')
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'plain-tool', version: '1.0.0' }))
+  fs.writeFileSync(path.join(dir, 'index.js'), 'setInterval(() => {}, 1000)\nexport function apply() {}\n')
+  const r = auditPlugin(dir, { hostLibText: null })
+  assert.strictEqual(r.targetForm, 'tool')
+  assert.strictEqual(r.scores.lifecycle, 100)
+  assert.ok(!r.findings.some((f) => f.dimension === 'lifecycle'), '对普通脚本建议 ctx.effect 是形态错配噪音')
+})
+
+test('auditPlugin：插件形态照报生命周期清理', () => {
+  const dir = tmpPluginDir('audit-plugin')
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'p', version: '1.0.0', peerDependencies: { '@deepseek-ai/cordis': '>=4.0.0 <5' } }))
+  fs.writeFileSync(path.join(dir, 'index.js'), 'setInterval(() => {}, 1000)\nexport function apply() {}\n')
+  const r = auditPlugin(dir, { hostLibText: null })
+  assert.strictEqual(r.targetForm, 'plugin')
+  assert.ok(r.findings.some((f) => f.dimension === 'lifecycle'), '插件形态的无清理定时器仍要报')
+})
+
+test('runlog 索引记 phases 三态：scan 跳过不再与「满分」混淆', () => {
+  const runsDir = tmpPluginDir('runs-phases')
+  process.env.DSH_PFA_RUNS_DIR = runsDir
+  try {
+    writeRunLog({
+      time: new Date().toISOString(),
+      plugin: { name: 't-phases', version: '1.0.0' },
+      tool: { version: '9.9.9' },
+      host: { version: '0.2.1-rc.3' },
+      window: { local: '3.18.4', target: '0.2.1-rc.3', source: 'host', fallback: null },
+      scan: { findingCount: null, skipped: true, reason: '无指南根或无窗口' },
+      audit: { overallScore: 100 },
+      smoke: { skipped: true },
+      typecheck: { status: 'skipped', reason: '未声明 typecheck script' },
+      durationMs: 10,
+    }, { toolDir: null })
+    const runs = listRuns(5)
+    assert.strictEqual(runs[0].plugin, 't-phases')
+    assert.strictEqual(runs[0].phases.scan, 'skipped')
+    assert.strictEqual(runs[0].phases.smoke, 'skipped')
+    assert.strictEqual(runs[0].phases.typecheck, 'skipped')
+    assert.strictEqual(runs[0].auditScore, 100, '体检照记，但 phases 标明扫描没跑')
+  } finally {
+    delete process.env.DSH_PFA_RUNS_DIR
+  }
+})
+
+test('runlog 记录工具仓 dirty 标记（版本与 commit 拆对可识别）', () => {
+  const runsDir = tmpPluginDir('runs-dirty')
+  process.env.DSH_PFA_RUNS_DIR = runsDir
+  try {
+    // 非 git 目录：dirty=null（探测失败不伪造）
+    writeRunLog({ time: new Date().toISOString(), plugin: { name: 't-dirty0' }, tool: {} }, { toolDir: runsDir })
+    assert.strictEqual(listRuns(1)[0].toolDirty, null)
+
+    // git 仓：clean → false，改文件 → true。git 不可用的环境跳过这半段。
+    let gitWorks = true
+    try {
+      execFileSync('git', ['--version'])
+    } catch {
+      gitWorks = false
+    }
+    if (gitWorks) {
+      const repo = tmpPluginDir('dirty-repo')
+      fs.writeFileSync(path.join(repo, 'a.txt'), 'x')
+      execFileSync('git', ['init', '-q'], { cwd: repo })
+      execFileSync('git', ['add', '-A'], { cwd: repo })
+      execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'x'], { cwd: repo })
+      writeRunLog({ time: new Date().toISOString(), plugin: { name: 't-dirty1' }, tool: {} }, { toolDir: repo })
+      assert.strictEqual(listRuns(1)[0].toolDirty, false, '干净树 dirty=false')
+      fs.writeFileSync(path.join(repo, 'b.txt'), 'y')
+      writeRunLog({ time: new Date().toISOString(), plugin: { name: 't-dirty2' }, tool: {} }, { toolDir: repo })
+      assert.strictEqual(listRuns(1)[0].toolDirty, true, '未提交改动 dirty=true')
+    }
+  } finally {
+    delete process.env.DSH_PFA_RUNS_DIR
+  }
+})
+
+test('runlog 保留策略：保留期前的运行被清理，索引行同步剔除', () => {
+  const runsDir = tmpPluginDir('runs-prune')
+  fs.writeFileSync(path.join(runsDir, '2026-01-01T00-00-00-000Z-old-plugin.json'), '{}')
+  fs.writeFileSync(path.join(runsDir, '2999-01-01T00-00-00-000Z-fresh-plugin.json'), '{}')
+  const oldMs = Date.now() - 100 * 86400_000
+  fs.utimesSync(path.join(runsDir, '2026-01-01T00-00-00-000Z-old-plugin.json'), new Date(oldMs), new Date(oldMs))
+  fs.writeFileSync(
+    path.join(runsDir, 'index.jsonl'),
+    `${JSON.stringify({ file: '2026-01-01T00-00-00-000Z-old-plugin.json' })}\n${JSON.stringify({ file: '2999-01-01T00-00-00-000Z-fresh-plugin.json' })}\n`
+  )
+  const result = pruneRuns(runsDir)
+  assert.ok(result.pruned.includes('2026-01-01T00-00-00-000Z-old-plugin.json'))
+  assert.ok(!fs.existsSync(path.join(runsDir, '2026-01-01T00-00-00-000Z-old-plugin.json')))
+  assert.ok(fs.existsSync(path.join(runsDir, '2999-01-01T00-00-00-000Z-fresh-plugin.json')), '新运行保留')
+  const kept = fs.readFileSync(path.join(runsDir, 'index.jsonl'), 'utf8')
+  assert.ok(!kept.includes('old-plugin'), '索引行同步剔除')
+  assert.ok(kept.includes('fresh-plugin'))
 })
 
 test('satisfiesRange：本轮实测锚点回归（与宿主自带 semver 对拍过的结论不许漂移）', () => {
@@ -1310,7 +1471,8 @@ test('scanSource：import type 标记 kind=type，value import 标记 kind=value
 
 test('audit：注释里的 ctx.effect 不豁免真实的无清理监听', () => {
   const dir = tmpPluginDir('audit-life2')
-  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 't-a4b', version: '1.0.0' }))
+  // peer 声明生态依赖：生命周期规则只对插件形态生效，夹具必须是插件
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 't-a4b', version: '1.0.0', peerDependencies: { '@deepseek-ai/dsh': '>=0.1.0-0' } }))
   fs.mkdirSync(path.join(dir, 'src'), { recursive: true })
   fs.writeFileSync(path.join(dir, 'src', 'a.js'), `// 旧版用 ctx.effect(() => emitter.on('x', f))，现在重写了\nexport function setup(emitter) { emitter.on('x', () => {}) }\n`)
   const report = auditPlugin(dir)
@@ -1319,7 +1481,7 @@ test('audit：注释里的 ctx.effect 不豁免真实的无清理监听', () => 
 
 test('audit：生命周期命中与豁免', () => {
   const dir = tmpPluginDir('audit-life')
-  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 't-a4', version: '1.0.0' }))
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 't-a4', version: '1.0.0', peerDependencies: { '@deepseek-ai/dsh': '>=0.1.0-0' } }))
   fs.mkdirSync(path.join(dir, 'src'), { recursive: true })
   fs.writeFileSync(path.join(dir, 'src', 'a.js'), `export function setup(emitter) { emitter.on('x', () => {}) }\n`)
   fs.writeFileSync(path.join(dir, 'src', 'b.js'), `export function setup(ctx, emitter) { ctx.effect(() => emitter.on('x', () => {})) }\n`)
@@ -1333,7 +1495,7 @@ test('audit：clearTimeout 收口的定时器不算未清理（白描实测回�
   // 白描 tools.ts 的子进程超时定时器经 finish() 统一 clearTimeout，
   // 旧清理标记表没有 clearTimeout 仍被报「未绑定清理逻辑」
   const dir = tmpPluginDir('audit-clear-timeout')
-  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 't-a6', version: '1.0.0' }))
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 't-a6', version: '1.0.0', peerDependencies: { '@deepseek-ai/dsh': '>=0.1.0-0' } }))
   fs.mkdirSync(path.join(dir, 'src'), { recursive: true })
   fs.writeFileSync(
     path.join(dir, 'src', 'a.js'),
@@ -1371,7 +1533,7 @@ test('extractInjects：注释里的 inject 声明不算', () => {
 
 test('diagnoseActivation：产物缺失 → ERROR，挂载缺失 → WARN', () => {
   const dir = tmpPluginDir('act')
-  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 't-act', version: '1.0.0', main: 'lib/index.js' }))
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 't-act', version: '1.0.0', main: 'lib/index.js', peerDependencies: { '@deepseek-ai/dsh': '>=0.1.0-0' } }))
   const none = diagnoseActivation(dir, [])
   assert.strictEqual(none.verdict, 'ERROR', '入口产物缺失应为 ERROR')
 
@@ -1389,7 +1551,7 @@ test('diagnoseActivation：disabled 判定不跨条目误伤', () => {
   // 旧惰性正则会被后面其他插件条目的 disabled: true 误伤，
   // 误伤会跳过本插件的 Silent Pending 风险检查
   const dir = tmpPluginDir('act-dis')
-  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'alpha-plugin', version: '1.0.0', main: 'lib/index.js' }))
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'alpha-plugin', version: '1.0.0', main: 'lib/index.js', peerDependencies: { '@deepseek-ai/dsh': '>=0.1.0-0' } }))
   fs.mkdirSync(path.join(dir, 'lib'), { recursive: true })
   fs.writeFileSync(path.join(dir, 'lib', 'index.js'), 'export function apply() {}\n')
   const patch = path.join(dir, 'patch.yml')

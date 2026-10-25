@@ -20,8 +20,6 @@ export function getLogRoot() {
   return process.env.DSH_PFA_RUNS_DIR || path.join(os.homedir(), '.cache', 'dsh-plugin-fast-adapt', 'runs')
 }
 
-export const LOG_ROOT = path.join(os.homedir(), '.cache', 'dsh-plugin-fast-adapt', 'runs')
-
 function indexFile() {
   return path.join(getLogRoot(), 'index.jsonl')
 }
@@ -32,6 +30,70 @@ function toolCommit(toolDir) {
   } catch {
     return null
   }
+}
+
+// 工具仓是否带未提交改动。version 取自工作树 package.json、commit 取自 HEAD，
+// 两者来源不绑定：版本先改后提交时会出现「新版本号 × 旧 commit」的拆对
+// （2026-10-25 实录 0.1.0@83bd444）。dirty 标记让这类拆对可识别。
+// 非 git 目录返回 null（探测失败不伪造）。
+function toolDirty(toolDir) {
+  try {
+    return execFileSync('git', ['status', '--porcelain'], { cwd: toolDir, encoding: 'utf8' }).trim().length > 0
+  } catch {
+    return null
+  }
+}
+
+// 阶段三态摘要：scan/smoke/typecheck 各 ok | skipped | fail | error 之一，
+// null = 该阶段信息缺失。有了它，「扫描没跑」不再与「扫描满分」在同一行
+// 摘要里混淆（dsh-image-gen 实录：scan skipped、auditScore 照记 100）。
+function phasesOf(record) {
+  return {
+    scan: record.scan?.error ? 'error' : record.scan?.skipped ? 'skipped' : record.scan ? 'ok' : null,
+    smoke: record.smoke == null ? null : record.smoke.skipped ? 'skipped' : record.smoke.success ? 'ok' : 'fail',
+    // --no-typecheck 产生的 { skipped: true } 没有 status 字段，也要归入 skipped
+    typecheck: record.typecheck == null ? null : record.typecheck.status ?? (record.typecheck.skipped ? 'skipped' : null),
+  }
+}
+
+// 保留策略：runs/ 只增不减会无限累积；写日志时顺带清掉保留期前的旧运行
+// （文件按 mtime 判定，index 同步剔除对应行）。now 可注入供自检。
+// 删除动作全部内部 try/catch——清理失败不影响日志写入本身。
+const RETENTION_DAYS = 90
+export function pruneRuns(root = getLogRoot(), { retentionDays = RETENTION_DAYS, now = Date.now() } = {}) {
+  const cutoff = now - retentionDays * 86400_000
+  let names = []
+  try {
+    names = fs.readdirSync(root)
+  } catch {
+    return { pruned: [] }
+  }
+  const pruned = []
+  for (const name of names) {
+    if (name === 'index.jsonl') continue
+    const file = path.join(root, name)
+    try {
+      if (fs.statSync(file).mtimeMs < cutoff) {
+        fs.rmSync(file)
+        pruned.push(name)
+      }
+    } catch {}
+  }
+  if (pruned.length) {
+    try {
+      const index = path.join(root, 'index.jsonl')
+      const lines = fs.readFileSync(index, 'utf8').split('\n').filter(Boolean)
+      const kept = lines.filter((line) => {
+        try {
+          return !pruned.includes(JSON.parse(line).file)
+        } catch {
+          return true
+        }
+      })
+      fs.writeFileSync(index, kept.length ? `${kept.join('\n')}\n` : '')
+    } catch {}
+  }
+  return { pruned }
 }
 
 // 写一次运行日志：返回 { file, index }。失败静默降级（日志是增益不是依赖，
@@ -50,6 +112,7 @@ export function writeRunLog(payload, { toolDir } = {}) {
         version: payload.tool?.version ?? null,
         dir: toolDir ?? null,
         commit: toolDir ? toolCommit(toolDir) : null,
+        dirty: toolDir ? toolDirty(toolDir) : null,
       },
       machine: { platform: process.platform, node: process.version },
     }
@@ -59,11 +122,13 @@ export function writeRunLog(payload, { toolDir } = {}) {
       time: record.time,
       toolVersion: record.tool.version,
       toolCommit: record.tool.commit,
+      toolDirty: record.tool.dirty,
       plugin: record.plugin?.name ?? null,
       pluginVersion: record.plugin?.version ?? null,
       hostVersion: record.host?.version ?? null,
       window: record.window ?? null,
       verdict: record.version?.verdict ?? null,
+      phases: phasesOf(record),
       findings: record.scan?.findingCount ?? null,
       criticalOrHigh: record.scan?.criticalOrHigh ?? null,
       auditScore: record.audit?.overallScore ?? null,
@@ -72,6 +137,9 @@ export function writeRunLog(payload, { toolDir } = {}) {
       durationMs: record.durationMs ?? null,
     }
     fs.appendFileSync(indexFile(), `${JSON.stringify(summary)}\n`)
+    try {
+      pruneRuns(root)
+    } catch {}
     return { file, index: indexFile() }
   } catch {
     return null

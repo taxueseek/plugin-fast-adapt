@@ -10,7 +10,7 @@
 // 机器名 → <host>，邮箱形态 → <email>。目录结构与文件名保留，方便对照排查。
 
 import fs from 'node:fs'
-import { listRuns, resolveRunFile, sanitizeRun, LOG_ROOT } from './lib/runlog.mjs'
+import { listRuns, resolveRunFile, sanitizeRun, getLogRoot } from './lib/runlog.mjs'
 
 const args = process.argv.slice(2)
 const command = args[0]
@@ -30,19 +30,23 @@ if (command === 'list') {
   const limit = limitAt !== -1 ? Number(args[limitAt + 1]) || 20 : 20
   const runs = listRuns(limit)
   if (runs.length === 0) {
-    process.stdout.write(`暂无运行日志（${LOG_ROOT}）\n`)
+    process.stdout.write(`暂无运行日志（${getLogRoot()}）\n`)
     process.exit(0)
   }
   for (const run of runs) {
+    // tool 版本后的 * = 工具仓当时有未提交改动（版本号与 commit 可能拆对）
+    // phases 三态：scan/smoke/typecheck 各 ok|skipped|fail|error，? = 旧条目无此字段
+    const phases = run.phases
+      ? `scan=${run.phases.scan ?? '?'} smoke=${run.phases.smoke ?? '?'} typecheck=${run.phases.typecheck ?? '?'}`
+      : ''
     const line = [
       run.time,
-      `tool=${run.toolVersion ?? '?'}${run.toolCommit ? `@${run.toolCommit}` : ''}`,
+      `tool=${run.toolVersion ?? '?'}${run.toolDirty ? '*' : ''}${run.toolCommit ? `@${run.toolCommit}` : ''}`,
       `${run.plugin ?? '?'}@${run.pluginVersion ?? '?'}`,
       `host=${run.hostVersion ?? '?'}`,
       `命中=${run.findings ?? '?'}${run.criticalOrHigh ? `(c/h ${run.criticalOrHigh})` : ''}`,
       `体检=${run.auditScore ?? '?'}`,
-      run.smoke === false ? '冒烟红' : '冒烟绿',
-      run.typecheck === 'fail' ? 'typecheck红' : '',
+      phases,
       `${run.durationMs ?? '?'}ms`,
     ].filter(Boolean)
     process.stdout.write(`${line.join('  ')}\n    ${run.file}\n`)

@@ -16,7 +16,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { printJson, scanSource, satisfiesRange, packageBase, parseVersion } from './lib/scanner.mjs'
+import { printJson, scanSource, satisfiesRange, packageBase, parseVersion, isDshHostPackage, isPluginForm } from './lib/scanner.mjs'
 import { findSourceFiles, pickScanRoots, scanPluginFromGuideRoot } from './code-scan.mjs'
 import { findGlobalDsh } from './env-doctor.mjs'
 
@@ -61,7 +61,7 @@ function getHostLibText() {
 // 宿主版本线只跟随 @deepseek-ai/dsh 及其 dsh-* 套件子包；同 scope 的库
 // （@deepseek-ai/schemastery、@deepseek-ai/cordis）有自己的版本线，
 // 拿宿主版本去套它们的 peer 范围会给出「^0.2.1-rc.3」这种错到离谱的建议。
-const isDshHostPackage = (name) => name === '@deepseek-ai/dsh' || name.startsWith('@deepseek-ai/dsh-')
+// 谓词本体在 lib/scanner.mjs（isDshHostPackage），run.mjs 的窗口计算同源复用。
 
 // peer 修补建议：对每个不含目标宿主的 peer 范围，给出「与目标同三元组的 caret 线」
 // 替换写法，且必须先用 satisfiesRange 自验证覆盖目标——验证不过的写法不给
@@ -92,9 +92,13 @@ export function auditPlugin(pluginDir, { scanResult = null, targetVersion = null
   }
 
   const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
+  // 目标形态：插件形态才适用 Cordis 生命周期规则；纯工具仓（如本工具自审）
+  // 被 Cordis 规则扫会产出「对普通脚本建议 ctx.effect」一类形态错配的噪音。
+  const pluginForm = isPluginForm(pkg)
   const report = {
     plugin: `${pkg.name}@${pkg.version}`,
     root,
+    targetForm: pluginForm ? 'plugin' : 'tool',
     scores: { performance: 100, resilience: 100, contextBudget: 100, lifecycle: 100 },
     findings: [],
   }
@@ -212,9 +216,9 @@ export function auditPlugin(pluginDir, { scanResult = null, targetVersion = null
       }
     }
 
-    // 维度 4：生命周期清理
+    // 维度 4：生命周期清理（只对插件形态：重载泄漏是 Cordis 宿主语义）
     const hasListener = chainNames.has('event.on') || callNames.has('on') || callNames.has('setInterval') || chainNames.has('watch')
-    if (hasListener) {
+    if (pluginForm && hasListener) {
       // clearTimeout 与 clearInterval 同样是清理标记：白描插件实测，
       // 子进程超时定时器经 finish() 收口 clearTimeout，旧标记表漏了它仍被报
       const hasCleanup =
@@ -373,6 +377,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.met
   process.stderr.write(
     `\n插件: ${report.plugin}（扫 ${report.scannedFiles} 个文件）\n` +
     `总分: ${report.overallScore}/100 — 性能 ${report.scores.performance} / 弹性 ${report.scores.resilience} / 上下文预算 ${report.scores.contextBudget} / 生命周期 ${report.scores.lifecycle}\n` +
+    (report.targetForm === 'tool' ? '形态: 工具仓（无生态依赖）——生命周期维度按 Cordis 插件语义不适用，未检查\n' : '') +
     `发现: ${report.findings.length} 项\n` +
     (report.versionAdvice ? `版本交叉: ${report.versionAdvice.note}\n` : '')
   )

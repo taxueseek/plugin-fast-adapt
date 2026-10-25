@@ -38,7 +38,7 @@ node scripts/env-doctor.mjs <插件目录>
 - `overlayFindings`：profiles 覆盖层里与主安装脱节的包，带 severity 和原因
 - `runningProcesses`：正在跑的 DSH 宿主进程（改 Host 侧代码后必须重启它）
 - `target.peerWindows`：待查插件自己声明的 peer 版本窗口
-- `activation`：插件启用就绪度——构建产物在不在、各 profile 挂没挂载、声明的 inject 服务在该 profile 有没有提供方特征（Cordis 静默 pending 风险）
+- `activation`：插件启用就绪度——构建产物在不在、各 profile 挂没挂载、声明的 inject 服务在该 profile 有没有提供方特征（Cordis 静默 pending 风险）；目标不是插件形态（package.json 无 `dsh` 命名空间、无 `@deepseek-ai/*` 依赖）时记 `N/A` 不检查——按插件规则跑纯工具仓会把「无 main 入口」误报成 ERROR（2026-10-25 自审实录）
 - `activation.client`：客户端半（dsh.client）三层判定——声明形状（合成器 boot 即 throw）、./client 产物（报 client bundles not found）、inject 目标名册死链（entry 卡 loading，整次 web boot 失败）。web profile 与桌面 APP 共用同一套 platform:web 前端，两端一视同仁。名册证据分强弱：宿主内置/bundles 列名/overlay 挂载行为强证据直过；包在依赖里但无行证据报 info 弱档让人确认（宿主是否自动挂载，静态分析判不了）。2026-10-25 实录：宿主半冒烟全绿、桌面 APP 起不来，真凶就是客户端半死注入
 
 `overlayFindings` 非空时，先处理覆盖层再谈适配。这是 issue #263 那一类事故：宿主升级后覆盖层里残留旧包，旧包优先解析导致运行时装载冲突，而且只换文件不重启宿主还会复现。上游已移除的包若被 overlay 显式补挂（`- insert:` 行）则降级 info——那是刻意保留的兼容垫片不是意外残留，直接拆会弄断还 require 它的旧插件（确认全部消费方改净后再清）。
@@ -75,6 +75,8 @@ node scripts/guide-sync.mjs <本机版本> --clone
 
 **取版锚点（2026-10-25 实测复盘）**：本机已是官方通道最新版时 `resolution.target` 为 `null`，旧实现因此拿不到指南语料、`run.mjs` 的 scan 阶段静默跳过（扫描走廊 `(peerFloor, hostVersion]` 明明有内容却报「无指南根或无窗口」）。现在取版锚点退回本机版本（`target || localVersion || dist-tags.latest`），走廊照常扫。
 
+**窗口起点只认宿主包（2026-10-25 dsh-image-gen 实录）**：起点取插件在宿主包（`@deepseek-ai/dsh` 及 `dsh-*` 套件子包）上声明的 peer 下限；同 scope 的 `@deepseek-ai/cordis`（4.x）、`@deepseek-ai/schemastery`（3.x）是独立版本线的库，不算宿主包——混入会把起点顶到 3.18.4 一类高位，窗口倒挂后扫描静默跳过。现在倒挂（起点 > 终点）会回退宿主版本并在 `window.fallback` 留痕、`window.source` 记起点来源（flag/peer/host），stderr 汇总同步告警，不再静默。
+
 ### 第三步：查插件踩了哪些变更
 
 ```sh
@@ -99,9 +101,9 @@ node scripts/code-scan.mjs <插件目录> <upgrade-guide 目录> <本机版本> 
 node scripts/run.mjs <插件目录> [--target <版本>] [--from <版本>] [--no-clone] [--no-smoke] [--no-typecheck] [--no-log]
 ```
 
-按上面的流程依次跑环境、定版、指南、扫描、体检、冒烟、typecheck（执行插件自有的 typecheck script，与冒烟同信任级），输出一份统一 JSON 报告；扫描窗口自动取「插件 peer 声明下限 → 宿主版本」的走廊（`--from`/`--target` 可覆盖）。退出码：0 干净，2 有 critical/high 命中或 typecheck 红。
+按上面的流程依次跑环境、定版、指南、扫描、体检、冒烟、typecheck（执行插件自有的 typecheck script，与冒烟同信任级），输出一份统一 JSON 报告；扫描窗口自动取「插件在宿主包上声明的 peer 下限 → 宿主版本」的走廊（`--from`/`--target` 可覆盖，倒挂自动回退并留痕）。退出码：0 干净，2 有 critical/high 命中或 typecheck 红。
 
-每次运行写本地日志（`~/.cache/dsh-plugin-fast-adapt/runs/`，一次一个自包含 JSON + index.jsonl 一行摘要），记录工具版本与 commit——2026-10-25 实测教训：跑了一份滞后拷贝产出 4 个本已修复的误报，没有日志这类「跑的是哪版工具」完全不可观测。
+每次运行写本地日志（`~/.cache/dsh-plugin-fast-adapt/runs/`，一次一个自包含 JSON + index.jsonl 一行摘要），记录工具版本与 commit——2026-10-25 实测教训：跑了一份滞后拷贝产出 4 个本已修复的误报，没有日志这类「跑的是哪版工具」完全不可观测。索引摘要带 `phases` 三态（scan/smoke/typecheck 各 ok|skipped|fail|error）与 `toolDirty` 星标（工具仓当时有未提交改动，版本号与 commit 可能拆对）——扫描没跑不再与「体检满分」在同一行里混淆（dsh-image-gen 实录：scan skipped、auditScore 照记 100）。运行日志保留 90 天，写入时惰性清理过期文件与对应索引行。
 
 ```sh
 node scripts/run-log.mjs list [--limit 20]              # 最近运行一览（含工具版本@commit）
@@ -135,7 +137,7 @@ node scripts/plugin-audit.mjs <插件目录>                                # �
 node scripts/plugin-audit.mjs <插件目录> --guide <guide-root> <本机版本> <目标版本>   # 叠加官方指南交叉
 ```
 
-四个维度从 100 分扣：性能（同步 I/O、无上限读取）、弹性（强依赖已移除包）、上下文预算（工具 Schema 体积）、生命周期（监听器与定时器清理）。检测走 scanner 状态机，注释和字符串里的同名词不算命中。三条 INFO 级提示不扣分：import type 引用已移除包（编译期风险非运行时）、peer 窗口按严格 semver 不含目标宿主（本生态 bundle 安装不强制 peer，是声明性约定；建议先经 satisfiesRange 自验证再输出）、工具描述里的宿主路径约定在宿主代码零命中（可能旧版约定已消亡，如 .dsh-filess，需人工确认）。
+四个维度从 100 分扣：性能（同步 I/O、无上限读取）、弹性（强依赖已移除包）、上下文预算（工具 Schema 体积）、生命周期（监听器与定时器清理）。检测走 scanner 状态机，注释和字符串里的同名词不算命中。报告带 `targetForm`（plugin/tool）：目标是不是 DSH 插件看生态信号（package.json 的 `dsh` 命名空间、`@deepseek-ai/*` 依赖），工具仓跳过生命周期维度——对普通 Node 脚本建议 `ctx.effect` 是形态错配的噪音（2026-10-25 自审实录）。三条 INFO 级提示不扣分：import type 引用已移除包（编译期风险非运行时）、peer 窗口按严格 semver 不含目标宿主（本生态 bundle 安装不强制 peer，是声明性约定；建议先经 satisfiesRange 自验证再输出）、工具描述里的宿主路径约定在宿主代码零命中（可能旧版约定已消亡，如 .dsh-filess，需人工确认）。
 
 带 `--guide` 时与 code-scan 同源交叉：package 命中先经宿主实测核查（包仍在目标宿主 → 降级 info 证伪；确实不存在 → HIGH 扣分附官方修法），命中清零前不建议先做性能优化。新版本引入的接缝（弱依赖 `ctx.get()` 替代强 import、peer 范围写法）就是「按新依赖做架构调整」的依据。
 
@@ -220,7 +222,7 @@ node scripts/scaffold.mjs <namespace>/<name> --form tool|hook|service|config|llm
 npm test
 ```
 
-102 项断言，覆盖扫描器不误报（注释和字符串里的同名词不算命中）、不漏报、真实 semver 范围判定（prerelease tuple 规则，本轮与宿主自带 semver 对拍的 30 例锚点回归）、import type 区分、宿主实测核查分级、描述漂移检测、一键编排与运行日志（写入/索引/脱敏往返）、版本启发式、替换对识别、端到端命中、SOP 引用完整性、dist-tags 缓存三态、冒烟验证（含未声明 inject 契约拦截与 Mock 缺口披露）、四维审计（含 peer 修补建议）、启用诊断（宿主半 Silent Pending＋客户端半三层判定：声明/产物/注入名册死链）、创作脚手架（五形态生成与冒烟闭环、命名投影语法、挂载层可识别、非法输入与非空目录拒绝）、创作体检门（硬门禁拦截、软指标不越权判红、跳过语义、scaffold 衔接）、日志诊断（startup 头部/失败插件/等待服务/信号/跨文件汇总）、下游同步漂移检查、跨平台模拟（Windows 根探测与缓存隔离）、文档断言数防漂移、扫描性能回归门。零网络、零外部依赖，任何机器上都能跑（Windows 分支已做模拟验证，真机待验）。
+113 项断言，覆盖扫描器不误报（注释和字符串里的同名词不算命中）、不漏报、真实 semver 范围判定（prerelease tuple 规则，本轮与宿主自带 semver 对拍的 30 例锚点回归）、扫描窗口计算（宿主包 peer 精确匹配、cordis/schemastery 版本线不混入、倒挂守卫回退留痕）、目标形态判定（dsh 命名空间/生态依赖证据、非插件 N/A、工具仓跳过 Cordis 生命周期）、import type 区分、宿主实测核查分级、描述漂移检测、一键编排与运行日志（写入/索引/脱敏往返、phases 三态、dirty 标记、90 天保留清理）、版本启发式、替换对识别、端到端命中、SOP 引用完整性、dist-tags 缓存三态、冒烟验证（含未声明 inject 契约拦截与 Mock 缺口披露）、四维审计（含 peer 修补建议）、启用诊断（宿主半 Silent Pending＋客户端半三层判定：声明/产物/注入名册死链）、创作脚手架（五形态生成与冒烟闭环、命名投影语法、挂载层可识别、非法输入与非空目录拒绝）、创作体检门（硬门禁拦截、软指标不越权判红、跳过语义、scaffold 衔接）、日志诊断（startup 头部/失败插件/等待服务/信号/跨文件汇总）、下游同步漂移检查、跨平台模拟（Windows 根探测与缓存隔离）、文档断言数防漂移、扫描性能回归门。零网络、零外部依赖，任何机器上都能跑（Windows 分支已做模拟验证，真机待验）。
 
 ## 脚本清单
 

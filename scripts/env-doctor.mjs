@@ -12,7 +12,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
-import { printJson, isDshPackage, packageBase, parseVersion, compareVersions, peerFloor, maskSource, CODE } from './lib/scanner.mjs'
+import { printJson, isDshPackage, isPluginForm, packageBase, parseVersion, compareVersions, peerFloor, maskSource, CODE } from './lib/scanner.mjs'
 import { diagnoseClientHalf, isDeliberateRosterInsert } from './lib/client-graph.mjs'
 
 const HOME = os.homedir()
@@ -261,6 +261,13 @@ export function diagnoseActivation(targetDir, installedPlugins) {
   const pkg = readPackageJson(targetDir)
   if (!pkg) return { checked: false, reason: '目标目录没有 package.json' }
 
+  // 形态错配守卫：非插件目标（无生态依赖、无 dsh.client 的纯工具仓）不适用
+  // 启用就绪检查——按插件规则跑会把「无 main 入口」误报成 ERROR
+  // （2026-10-25 自审实录）。记 N/A 而不是 ERROR，索引里可区分。
+  if (!isPluginForm(pkg)) {
+    return { checked: false, verdict: 'N/A', reason: '目标不是 DSH 插件形态（无 @deepseek-ai/* 依赖、无 dsh.client），启用就绪检查不适用' }
+  }
+
   const main = pkg.main || 'lib/index.js'
   const entryReady = fs.existsSync(path.join(root, main))
   const injects = extractInjects(root, main)
@@ -406,6 +413,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.met
     `运行中宿主进程: ${report.runningProcesses.length} 个\n` +
     (report.activation?.checked
       ? `目标插件启用就绪: ${report.activation.verdict}${report.activation.pendingRisks.length ? `（Silent Pending 风险 ${report.activation.pendingRisks.length} 处）` : ''}${report.activation.client ? `｜客户端半: ${report.activation.client.verdict}${report.activation.clientRisks.length ? `（死链 ${report.activation.clientRisks.length} 处）` : ''}` : ''}\n`
-      : '')
+      : report.activation?.verdict === 'N/A'
+        ? `目标插件启用就绪: N/A（${report.activation.reason}）\n`
+        : '')
   )
 }
