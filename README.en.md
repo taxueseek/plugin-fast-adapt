@@ -31,7 +31,17 @@ The authoritative description of breaking changes lives in the vendor harness re
 | Dependencies | — | Zero external: Node built-ins + `git`/`npm` commands |
 | Self-test | — | 113 assertions, zero network, runs on any machine |
 
-## Six steps
+## Pipeline
+
+Run the whole chain with one command (recommended); every run writes a local log:
+
+```sh
+node scripts/run.mjs <plugin-dir>        # env → version → guide → scan → audit → smoke → typecheck
+node scripts/run-log.mjs list           # review past runs (tool version@commit included)
+node scripts/run-log.mjs sanitize --latest --out share.json   # sanitise before sharing
+```
+
+You can also run each step on its own (the six-step spine remains; run.mjs just chains the steps below, and the optional ones are added as needed):
 
 ```sh
 # 1. Inspect the local environment: installed version, stale overlay packages,
