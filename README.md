@@ -29,9 +29,19 @@ DSH 插件适配与破坏性变更核查，兼从零造插件脚手架。查官�
 | 弱模型表现 | 全套卡片进上下文，-3.07 pp | 六个独立脚本，每步只产出一份小输出 |
 | 代码级扫描 | 无 | 锚点匹配 + 四层降噪（见下文实测） |
 | 依赖 | — | 零外部依赖：Node 内置模块 + `git`/`npm` 命令 |
-| 自检 | — | 79 项断言，零网络，任何机器能跑 |
+| 自检 | — | 84 项断言，零网络，任何机器能跑 |
 
 ## 六步流程
+
+一条命令跑完全链（推荐），每次运行自动写本地日志：
+
+```sh
+node scripts/run.mjs <插件目录>          # 环境→定版→指南→扫描→体检→冒烟→typecheck
+node scripts/run-log.mjs list           # 回看历史运行（含工具版本@commit）
+node scripts/run-log.mjs sanitize --latest --out share.json   # 脱敏后才可外发
+```
+
+也可以按步单跑（六步流程保留，run.mjs 就是把下面这些串起来）：
 
 ```sh
 # 1. 看清本机环境：装的哪个版本、覆盖层有没有旧包、装了哪些插件、启用就绪度
@@ -118,7 +128,7 @@ node scripts/write-gate.mjs <插件目录>   # 出生证：硬门禁自动判，
 自检：
 
 ```sh
-npm test   # node scripts/self-test.mjs，79 项断言
+npm test   # node scripts/self-test.mjs，84 项断言
 ```
 
 覆盖扫描器不误报（注释和字符串里的同名词不算命中）、不漏报、版本启发式、替换对识别、端到端命中、SOP 引用完整性、dist-tags 缓存三态、冒烟验证、四维审计、启用诊断、创作脚手架（五形态生成、命名投影语法、冒烟闭环、挂载层可识别、非法输入与非空目录拒绝）、创作体检门（硬门禁拦截、软指标不越权判红、跳过语义、scaffold 衔接）、扫描性能回归门。零网络、零外部依赖，任何机器上都能跑。
@@ -127,6 +137,8 @@ npm test   # node scripts/self-test.mjs，79 项断言
 
 | 脚本 | 职责 |
 | --- | --- |
+| `scripts/run.mjs` | 一键编排全流程（环境→定版→指南→扫描→体检→冒烟→typecheck），出统一报告并写本地运行日志 |
+| `scripts/run-log.mjs` | 运行日志查看（list/show）与脱敏导出（sanitize） |
 | `scripts/scaffold.mjs` | 从零造插件：一条命令生成五形态可冒烟骨架（package.json 不变量＋形态入口＋挂载层＋命名投影），生成即验证 |
 | `scripts/write-gate.mjs` | 造完即验：编排冒烟＋启用就绪＋四维体检＋官方指南核查出「出生证」；硬门禁仅三条自动判，软指标只透传不拍板 |
 | `scripts/env-doctor.mjs` | 探测本机 DSH 环境（版本、覆盖层、插件、进程、启用就绪度） |
@@ -136,8 +148,9 @@ npm test   # node scripts/self-test.mjs，79 项断言
 | `scripts/quick-smoke.mjs` | 修完秒验（内存级 Cordis 冒烟，含 Mock 兜底披露） |
 | `scripts/plugin-audit.mjs` | 四维性能架构体检，可叠加官方指南交叉 |
 | `scripts/self-test.mjs` | 自检 |
-| `scripts/lib/scanner.mjs` | 词法扫描器与版本比较（零依赖） |
-| `scripts/lib/guide-parser.mjs` | 官方指南解析与锚点抽取 |
+| `scripts/lib/scanner.mjs` | 词法扫描器、版本比较与 semver 范围判定（零依赖） |
+| `scripts/lib/guide-parser.mjs` | 官方指南解析与锚点抽取（含移除动词语义门） |
+| `scripts/lib/runlog.mjs` | 运行日志写入、索引与脱敏 |
 | `references/legacy-migration-sop.md` | 老插件迁移 SOP（官方指南覆盖不到时的对照手册） |
 | `references/heuristics.md` | 扫描降噪规则与实测依据 |
 

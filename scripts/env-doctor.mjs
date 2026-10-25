@@ -72,7 +72,9 @@ function readPackageJson(dir) {
   }
 }
 
-function findGlobalDsh() {
+// 导出供 code-scan 的宿主实测核查复用：guide 是二手语义，
+// 目标宿主的 node_modules 是一手事实——包到底还在不在，stat 一次就知道。
+export function findGlobalDsh() {
   for (const root of candidateGlobalRoots()) {
     const pkg = readPackageJson(path.join(root, '@deepseek-ai', 'dsh'))
     if (pkg?.version) {

@@ -1,6 +1,6 @@
 ---
 name: plugin-fast-adapt
-description: DSH 插件适配与破坏性变更核查，兼造插件脚手架与性能架构审计。查 DeepSeek 官方最新版本，取该版本的官方升级指南，扫描本机插件代码，报出哪些地方踩了破坏性变更并给出官方修法；scaffold 一条命令生成五形态可冒烟的插件骨架（package.json 不变量＋形态入口＋挂载层＋命名投影，生成即验证）；同时巡检本机 DSH 环境（profiles 覆盖层旧包残留、已装插件、运行中宿主、插件启用就绪度）。修完可秒级冒烟验证，升级时可顺带做插件性能与架构审计。老版本插件（官方指南覆盖不到 v0.1.7-rc.2 之前的走廊）转迁移 SOP，对照原仓库 plugin-upgrade 的人工卡片走廊走七阶段流程。当需要把 DSH 插件适配到新版本或老版本、从零创建 DSH 插件、给新插件生成起步骨架、排查升级后插件报错、核查插件是否用了已移除的包或 API、检查 ~/.dsh 覆盖层有无旧包残留、给插件做性能与架构体检时使用。触发词：适配 DSH 插件、升级插件、插件不兼容、dsh 升级后报错、插件用了废弃 API、检查覆盖层旧包、老版本 DSH 适配、历史走廊迁移、创建 DSH 插件、写 DSH 插件、插件脚手架、插件冒烟测试、插件性能审计、插件装了没生效。
+description: DSH 插件适配与破坏性变更核查，兼造插件脚手架与性能架构审计。run.mjs 一键编排全流程并把每次运行写进本地日志（list 回看、sanitize 脱敏后才能外发）；查 DeepSeek 官方最新版本，取该版本的官方升级指南，扫描本机插件代码（package 命中自动到目标宿主 node_modules 实测核查），报出哪些地方踩了破坏性变更并给出官方修法；scaffold 一条命令生成五形态可冒烟的插件骨架（package.json 不变量＋形态入口＋挂载层＋命名投影，生成即验证）；同时巡检本机 DSH 环境（profiles 覆盖层旧包残留、已装插件、运行中宿主、插件启用就绪度）。修完可秒级冒烟验证，升级时可顺带做插件性能与架构审计。老版本插件（官方指南覆盖不到 v0.1.7-rc.2 之前的走廊）转迁移 SOP，对照原仓库 plugin-upgrade 的人工卡片走廊走七阶段流程。当需要把 DSH 插件适配到新版本或老版本、从零创建 DSH 插件、给新插件生成起步骨架、排查升级后插件报错、核查插件是否用了已移除的包或 API、检查 ~/.dsh 覆盖层有无旧包残留、给插件做性能与架构体检时使用。触发词：适配 DSH 插件、升级插件、插件不兼容、dsh 升级后报错、插件用了废弃 API、检查覆盖层旧包、老版本 DSH 适配、历史走廊迁移、创建 DSH 插件、写 DSH 插件、插件脚手架、插件冒烟测试、插件性能审计、插件装了没生效。
 ---
 
 # plugin-fast-adapt
@@ -11,6 +11,7 @@ description: DSH 插件适配与破坏性变更核查，兼造插件脚手架与
 
 | 步 | 脚本 | 回答什么 |
 | --- | --- | --- |
+| ★ 一键全链（推荐入口） | `scripts/run.mjs` | 环境→定版→指南→扫描→体检→冒烟→typecheck 一条命令跑完，出统一报告并写本地运行日志 |
 | 0 造骨架（可选） | `scripts/scaffold.mjs` | 从零造插件：一条命令出五形态可冒烟骨架，生成即验证 |
 | 1 探测环境 | `scripts/env-doctor.mjs` | 本机装的 DSH 是哪个版本？覆盖层有没有旧包？装了哪些插件？插件启用就绪吗？ |
 | 2 定版本 | `scripts/guide-sync.mjs` | 官方最新版本是什么？本机该不该跟？跟哪个？ |
@@ -85,6 +86,24 @@ node scripts/code-scan.mjs <插件目录> <upgrade-guide 目录> <本机版本> 
 
 命中分三类并带 `severity`：`package`（import 了已移除或已改名的包，critical，装载必炸）、`member`（调用了已移除的方法或字段，high，运行时炸）、`code`（字符串里出现已变更的错误码或事件名，medium，最可能撞同名）。findings 先按 severity 排再按文件行号；每条带 `evidence`（命中行原文）。包名锚点有语义门：只在与移除/改名动词同句时才成为锚点，语境引用不算。
 
+### 一键编排与运行日志（run.mjs）
+
+```sh
+node scripts/run.mjs <插件目录> [--target <版本>] [--from <版本>] [--no-clone] [--no-smoke] [--no-typecheck] [--no-log]
+```
+
+按上面的流程依次跑环境、定版、指南、扫描、体检、冒烟、typecheck（执行插件自有的 typecheck script，与冒烟同信任级），输出一份统一 JSON 报告；扫描窗口自动取「插件 peer 声明下限 → 宿主版本」的走廊（`--from`/`--target` 可覆盖）。退出码：0 干净，2 有 critical/high 命中或 typecheck 红。
+
+每次运行写本地日志（`~/.cache/dsh-plugin-fast-adapt/runs/`，一次一个自包含 JSON + index.jsonl 一行摘要），记录工具版本与 commit——2026-10-25 实测教训：跑了一份滞后拷贝产出 4 个本已修复的误报，没有日志这类「跑的是哪版工具」完全不可观测。
+
+```sh
+node scripts/run-log.mjs list [--limit 20]              # 最近运行一览（含工具版本@commit）
+node scripts/run-log.mjs show <id|--latest>             # 单次全文
+node scripts/run-log.mjs sanitize <id|--latest> [--out 文件]   # 脱敏后才可外发
+```
+
+日志不出本机；对外反馈前必须先 `sanitize`（home 前缀→~、用户名→<user>、机器名→<host>、邮箱→<email>，目录结构保留）。`--offline` 跳过 guide-sync（自检零网络用）。
+
 ### 第五步（可选）：修完秒验
 
 ```sh
@@ -102,9 +121,9 @@ node scripts/plugin-audit.mjs <插件目录>                                # �
 node scripts/plugin-audit.mjs <插件目录> --guide <guide-root> <本机版本> <目标版本>   # 叠加官方指南交叉
 ```
 
-四个维度从 100 分扣：性能（同步 I/O、无上限读取）、弹性（强依赖已移除包、peer 范围拒绝 prerelease）、上下文预算（工具 Schema 体积）、生命周期（监听器与定时器清理）。检测走 scanner 状态机，注释和字符串里的同名词不算命中。
+四个维度从 100 分扣：性能（同步 I/O、无上限读取）、弹性（强依赖已移除包）、上下文预算（工具 Schema 体积）、生命周期（监听器与定时器清理）。检测走 scanner 状态机，注释和字符串里的同名词不算命中。三条 INFO 级提示不扣分：import type 引用已移除包（编译期风险非运行时）、peer 窗口按严格 semver 不含目标宿主（本生态 bundle 安装不强制 peer，是声明性约定；建议先经 satisfiesRange 自验证再输出）、工具描述里的宿主路径约定在宿主代码零命中（可能旧版约定已消亡，如 .dsh-filess，需人工确认）。
 
-带 `--guide` 时与 code-scan 同源交叉：目标版本已移除的包仍在 import 会直接进弹性扣分并附官方修法，命中清零前不建议先做性能优化。新版本引入的接缝（弱依赖 `ctx.get()` 替代强 import、peer 范围写法）就是「按新依赖做架构调整」的依据。
+带 `--guide` 时与 code-scan 同源交叉：package 命中先经宿主实测核查（包仍在目标宿主 → 降级 info 证伪；确实不存在 → HIGH 扣分附官方修法），命中清零前不建议先做性能优化。新版本引入的接缝（弱依赖 `ctx.get()` 替代强 import、peer 范围写法）就是「按新依赖做架构调整」的依据。
 
 ## 造插件：从零开始
 
@@ -157,6 +176,7 @@ node scripts/scaffold.mjs <namespace>/<name> --form tool|hook|service|config|llm
 - **不改 DSH 本体**。只读环境信息，不动 `~/.dsh` 下的配置和 profile 声明。
 - **不自动改插件代码**。只报命中和官方修法，改不改、怎么改由人决定。
 - **网络只在 `--clone` 时用**。npm registry 和 git clone 都有超时，失败会明确报错而不是静默跳过；dist-tags 有 1 小时缓存，网络失败时降级用旧缓存并标 stale。
+- **日志只落本机**。run.mjs 的运行日志写在 `~/.cache/dsh-plugin-fast-adapt/runs/`，含本地路径与用户名，外发前必须 `run-log.mjs sanitize`。
 
 ## 自检
 
@@ -164,12 +184,14 @@ node scripts/scaffold.mjs <namespace>/<name> --form tool|hook|service|config|llm
 npm test
 ```
 
-79 项断言，覆盖扫描器不误报（注释和字符串里的同名词不算命中）、不漏报、版本启发式、替换对识别、端到端命中、SOP 引用完整性、dist-tags 缓存三态、冒烟验证、四维审计、启用诊断、创作脚手架（五形态生成与冒烟闭环、命名投影语法、挂载层可识别、非法输入与非空目录拒绝）、创作体检门（硬门禁拦截、软指标不越权判红、跳过语义、scaffold 衔接）、跨平台模拟（Windows 根探测与缓存隔离）、文档断言数防漂移、扫描性能回归门。零网络、零外部依赖，任何机器上都能跑（Windows 分支已做模拟验证，真机待验）。
+84 项断言，覆盖扫描器不误报（注释和字符串里的同名词不算命中）、不漏报、真实 semver 范围判定（prerelease tuple 规则，本轮与宿主自带 semver 对拍的 30 例锚点回归）、import type 区分、宿主实测核查分级、描述漂移检测、一键编排与运行日志（写入/索引/脱敏往返）、版本启发式、替换对识别、端到端命中、SOP 引用完整性、dist-tags 缓存三态、冒烟验证、四维审计、启用诊断、创作脚手架（五形态生成与冒烟闭环、命名投影语法、挂载层可识别、非法输入与非空目录拒绝）、创作体检门（硬门禁拦截、软指标不越权判红、跳过语义、scaffold 衔接）、跨平台模拟（Windows 根探测与缓存隔离）、文档断言数防漂移、扫描性能回归门。零网络、零外部依赖，任何机器上都能跑（Windows 分支已做模拟验证，真机待验）。
 
 ## 脚本清单
 
 | 脚本 | 职责 |
 | --- | --- |
+| `scripts/run.mjs` | 一键编排全流程 + 写本地运行日志 |
+| `scripts/run-log.mjs` | 运行日志查看（list/show）与脱敏导出（sanitize） |
 | `scripts/env-doctor.mjs` | 探测本机 DSH 环境（版本、覆盖层、插件、进程、启用就绪度） |
 | `scripts/env-heal.mjs` | 覆盖层旧包自愈（默认 dry-run） |
 | `scripts/guide-sync.mjs` | 定目标版本 + 取官方升级指南（dist-tags 带 1 小时缓存，失败降级旧缓存） |
@@ -178,5 +200,6 @@ npm test
 | `scripts/plugin-audit.mjs` | 四维性能架构体检，可叠加官方指南交叉 |
 | `scripts/self-test.mjs` | 自检 |
 | `scripts/lib/scanner.mjs` | 词法扫描器与版本比较（零依赖） |
-| `scripts/lib/guide-parser.mjs` | 官方指南解析与锚点抽取 |
+| `scripts/lib/guide-parser.mjs` | 官方指南解析与锚点抽取（含移除动词语义门） |
+| `scripts/lib/runlog.mjs` | 运行日志写入、索引与脱敏 |
 | `references/legacy-migration-sop.md` | 老插件迁移 SOP（官方指南覆盖不到时的对照手册） |

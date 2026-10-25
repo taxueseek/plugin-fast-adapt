@@ -10,15 +10,20 @@ import assert from 'node:assert'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { scanSource, compareVersions, parseVersion } from './lib/scanner.mjs'
+import { execFileSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+import { scanSource, compareVersions, parseVersion, satisfiesRange } from './lib/scanner.mjs'
 import { parseGuideMarkdown, extractAnchors, listGuideVersions } from './lib/guide-parser.mjs'
 import { resolveTargetVersion, fetchNpmMetadata } from './guide-sync.mjs'
-import { anchorMatches } from './code-scan.mjs'
+import { anchorMatches, verifyPackagesAgainstHost } from './code-scan.mjs'
 import { runQuickSmoke } from './quick-smoke.mjs'
 import { auditPlugin } from './plugin-audit.mjs'
 import { extractInjects, diagnoseActivation, candidateGlobalRoots, parsePatchEntries, probeEnvironment } from './env-doctor.mjs'
 import { scaffoldPlugin, projectNames, detectHarnessVersion, UsageError } from './scaffold.mjs'
 import { runWriteGate } from './write-gate.mjs'
+import { listRuns, sanitizeRun } from './lib/runlog.mjs'
+
+const SCRIPTS = path.dirname(fileURLToPath(import.meta.url))
 
 const tests = []
 function test(name, fn) {
@@ -917,39 +922,190 @@ test('audit：真实同步 I/O 报 MEDIUM 并扣性能分', () => {
   assert.ok(report.scores.performance < 100, '性能分应被扣')
 })
 
-test('audit：peer 范围无 -0 放行报 HIGH，有 -0 不报', () => {
+test('audit：peer 窗口按目标版本真算——覆盖不报、未覆盖 INFO 不扣分、无 target 不报', () => {
   const dir = tmpPluginDir('audit-peer')
-  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 't-a3', version: '1.0.0', peerDependencies: { '@deepseek-ai/dsh': '>=0.1.0-0 <0.3.0' } }))
   fs.mkdirSync(path.join(dir, 'src'), { recursive: true })
   fs.writeFileSync(path.join(dir, 'src', 'index.js'), 'export function apply() {}\n')
-  let report = auditPlugin(dir)
-  assert.ok(!report.findings.some((f) => /prerelease 宿主/.test(f.title)), '含 -0 放行不该报')
 
+  // 覆盖目标 → 不报（写法看着再怪也不是问题）：>=0.1.0-0 <0.3.0 收 0.2.1 稳定版
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 't-a3', version: '1.0.0', peerDependencies: { '@deepseek-ai/dsh': '>=0.1.0-0 <0.3.0' } }))
+  let report = auditPlugin(dir, { targetVersion: '0.2.1' })
+  assert.ok(!report.findings.some((f) => /peer 窗口/.test(f.title)), '覆盖目标的 peer 范围不该报')
+
+  // 同一范围对 rc.3：严格 semver 收不下（tuple 规则）→ INFO，不扣分，
+  // 建议必须经过 satisfiesRange 自验证（旧版推荐的 -0 全收写法在这里被证伪）
+  report = auditPlugin(dir, { targetVersion: '0.2.1-rc.3' })
+  const info = report.findings.find((f) => /peer 窗口/.test(f.title))
+  assert.ok(info, '未覆盖目标应报 INFO')
+  assert.strictEqual(info.severity, 'INFO', '声明性约定只提示不扣分')
+  assert.strictEqual(report.scores.resilience, 100, 'INFO 不扣弹性分')
+  assert.ok(/已用 satisfiesRange 验证/.test(info.detail), '建议应自验证')
+  assert.ok(/\^0\.2\.1-rc\.3/.test(info.detail), '建议应是同三元组 caret 线')
+
+  // 已带 prerelease 标签且真覆盖目标（^0.2.1-rc.1 收 rc.3）→ 不报
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 't-a3', version: '1.0.0', peerDependencies: { '@deepseek-ai/dsh': '^0.2.1-rc.1' } }))
+  report = auditPlugin(dir, { targetVersion: '0.2.1-rc.3' })
+  assert.ok(!report.findings.some((f) => /peer 窗口/.test(f.title)), '真覆盖目标的 prerelease 范围不该报')
+
+  // 拿不到 target → 宁可不报（不伪造结论）
   fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 't-a3', version: '1.0.0', peerDependencies: { '@deepseek-ai/dsh': '^0.2.0' } }))
   report = auditPlugin(dir)
-  const f = report.findings.find((x) => /prerelease 宿主/.test(x.title))
-  assert.ok(f, '^0.2.0 拒绝 prerelease 应报')
-  assert.strictEqual(f.severity, 'HIGH')
+  assert.ok(!report.findings.some((f) => /peer 窗口/.test(f.title)), '无 target 不该报')
+
+  // * 通配跳过
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 't-a3', version: '1.0.0', peerDependencies: { '@deepseek-ai/dsh-tools': '*' } }))
+  report = auditPlugin(dir, { targetVersion: '0.2.1-rc.3' })
+  assert.ok(!report.findings.some((f) => /peer 窗口/.test(f.title)), '通配 * 不该报')
 })
 
-test('audit：* 通配不报，prerelease 双队列报 tuple 口径', () => {
-  const dir = tmpPluginDir('audit-peer2')
+test('audit：import type 是编译期引用，不算强依赖（本轮实测的潜在误报类）', () => {
+  const dir = tmpPluginDir('audit-type-import')
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 't-type', version: '1.0.0' }))
+  fs.mkdirSync(path.join(dir, 'src'), { recursive: true })
+  fs.writeFileSync(path.join(dir, 'src', 'index.js'),
+    `import type {} from '@deepseek-ai/dsh-settings'\nexport function apply() {}\n`)
+  let report = auditPlugin(dir)
+  assert.ok(!report.findings.some((f) => /强 import/.test(f.title)), 'type-only 引用不该报「装载必炸」')
+  const info = report.findings.find((f) => /类型引用/.test(f.title))
+  assert.ok(info, 'type-only 引用应报 INFO 提示编译期风险')
+  assert.strictEqual(info.severity, 'INFO')
+
+  // value import 才是强依赖，维持 HIGH
+  fs.writeFileSync(path.join(dir, 'src', 'index.js'),
+    `import { x } from '@deepseek-ai/dsh-settings'\nexport function apply() { return x }\n`)
+  report = auditPlugin(dir)
+  const high = report.findings.find((f) => /强 import/.test(f.title))
+  assert.ok(high, 'value import 已移除包应报 HIGH')
+  assert.strictEqual(high.severity, 'HIGH')
+})
+
+test('audit：描述漂移——宿主零命中的路径约定报 INFO，CSS 类名不误报', () => {
+  const dir = tmpPluginDir('audit-drift')
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 't-drift', version: '1.0.0' }))
+  fs.mkdirSync(path.join(dir, 'src'), { recursive: true })
+  // 混合三类字符串：消亡约定（带 / 的路径形）、自家 CSS 类名（.dsh- 前缀无斜杠）、宿主真约定
+  fs.writeFileSync(path.join(dir, 'src', 'index.js'),
+    `export const desc = '把参考图路径（如 .dsh-filess/<sessionId>/x.jpg）放进参数'\n` +
+    `export const style = '.dsh-ta-card{color:red}.dsh-ta-head{padding:0}'\n` +
+    `export const ok = '.dsh-profiles/web 下看补丁'\n`)
+  const fakeHostText = '... .dsh-profiles ...' // 含真约定，不含 .dsh-filess
+  const report = auditPlugin(dir, { hostLibText: fakeHostText })
+  const drift = report.findings.filter((f) => /宿主路径约定/.test(f.title))
+  assert.strictEqual(drift.length, 1, '只报路径形约定，CSS 类名不进')
+  assert.ok(/\.dsh-filess/.test(drift[0].title))
+  assert.strictEqual(drift[0].severity, 'INFO')
+})
+
+test('code-scan：宿主实测核查——包还在降级 info，包没了维持 critical，探不到标 unknown', () => {
+  const fakeHost = tmpPluginDir('fake-host')
+  // 夹具要同时有 dsh（宿主本体）和 dsh-tools（被核查的兄弟包）
+  fs.mkdirSync(path.join(fakeHost, '@deepseek-ai', 'dsh'), { recursive: true })
+  fs.writeFileSync(path.join(fakeHost, '@deepseek-ai', 'dsh', 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.2.1-rc.3' }))
+  fs.mkdirSync(path.join(fakeHost, '@deepseek-ai', 'dsh-tools'), { recursive: true })
+  fs.writeFileSync(path.join(fakeHost, '@deepseek-ai', 'dsh-tools', 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-tools', version: '0.2.1-rc.3' }))
+  const hostInfo = { version: '0.2.1-rc.3', location: path.join(fakeHost, '@deepseek-ai', 'dsh'), source: 'node_modules' }
+
+  const findings = [
+    { kind: 'package', symbol: '@deepseek-ai/dsh-tools', file: 'a.ts', line: 1, guide: 'v0.2.1-alpha.1/t', title: 't', severity: 'critical' },
+    { kind: 'package', symbol: '@deepseek-ai/dsh-ghost', file: 'b.ts', line: 2, guide: 'v0.2.1-alpha.1/t', title: 't', severity: 'critical' },
+    { kind: 'member', symbol: 'ctx.tools.presentAs', file: 'a.ts', line: 3, guide: 'v0.2.1-alpha.1/t', title: 't', severity: 'high' },
+  ]
+  const { findings: verified, checked, downgraded } = verifyPackagesAgainstHost(findings, hostInfo)
+  assert.strictEqual(checked, 2, '只核查 package 命中')
+  const present = verified.find((f) => f.symbol === '@deepseek-ai/dsh-tools')
+  assert.strictEqual(present.severity, 'info', '包仍在宿主 → 降级 info')
+  assert.strictEqual(present.verified, 'host-present')
+  const absent = verified.find((f) => f.symbol === '@deepseek-ai/dsh-ghost')
+  assert.strictEqual(absent.severity, 'critical', '宿主确实没有 → 维持 critical')
+  assert.strictEqual(absent.verified, 'host-absent')
+  const member = verified.find((f) => f.kind === 'member')
+  assert.strictEqual(member.verified, undefined, 'member 不做包核查')
+  assert.strictEqual(downgraded, 1)
+
+  // 探测不到宿主 → unknown，不改分级
+  const { findings: unknown } = verifyPackagesAgainstHost([findings[0]], null)
+  assert.strictEqual(unknown[0].severity, 'critical')
+  assert.strictEqual(unknown[0].verified, 'unknown')
+})
+
+// ── run.mjs 一键编排 + 运行日志 ──────────────────────────────────────────────
+
+test('run：离线全链编排产出统一报告并写日志；sanitize 脱敏身份信息', async () => {
+  const dir = tmpPluginDir('run-e2e')
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
+    name: 't-run', version: '1.0.0',
+    scripts: { typecheck: 'node --version' },
+    peerDependencies: { '@deepseek-ai/dsh-tools': '^0.2.1-rc.1' },
+  }))
   fs.mkdirSync(path.join(dir, 'src'), { recursive: true })
   fs.writeFileSync(path.join(dir, 'src', 'index.js'), 'export function apply() {}\n')
 
-  // * 收一切包括 prerelease，报「拒绝 prerelease」是误报
-  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 't-a5', version: '1.0.0', peerDependencies: { '@deepseek-ai/dsh-tools': '*' } }))
-  let report = auditPlugin(dir)
-  assert.ok(!report.findings.some((f) => /peer 范围|peer 双队列/.test(f.title)), '通配 * 不该报')
+  const runsDir = tmpPluginDir('runs')
+  const env = { ...process.env, DSH_PFA_RUNS_DIR: runsDir }
+  const out = execFileSync(process.execPath, [path.join(SCRIPTS, 'run.mjs'), dir, '--offline', '--no-smoke'], { encoding: 'utf8', env })
+  const report = JSON.parse(out.slice(0, out.lastIndexOf('}') + 1))
+  assert.strictEqual(report.plugin.name, 't-run')
+  assert.strictEqual(report.audit.overallScore, 100, '干净插件应满分')
+  assert.strictEqual(report.typecheck.status, 'ok', 'typecheck 步骤应执行成功')
+  assert.strictEqual(report.scan.skipped, true, '离线模式扫描跳过')
 
-  // 双队列已带 prerelease 标签：报 tuple 规则口径（^0.2.0-rc.1 不收 0.2.1-rc.x），
-  // 修法是提 floor，不是泛泛的「拒绝 prerelease」
-  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 't-a5', version: '1.0.0', peerDependencies: { '@deepseek-ai/dsh-tools': '^0.1.0-rc.6 || ^0.2.0-rc.1' } }))
-  report = auditPlugin(dir)
-  const t = report.findings.find((x) => /peer 双队列/.test(x.title))
-  assert.ok(t, '双队列不含 0.2.1 线应报 tuple 口径')
-  assert.ok(/tuple/.test(t.detail), 'detail 应含 tuple 规则与提 floor 修法')
+  // 日志落盘 + 索引可列；工具版本与 commit 进索引（防「跑的是哪版工具」不可观测）
+  // listRuns 在本进程读，本进程也要指向同一个临时日志根
+  process.env.DSH_PFA_RUNS_DIR = runsDir
+  try {
+    const runs = listRuns(10)
+    assert.ok(runs.length >= 1, '运行日志应写入 DSH_PFA_RUNS_DIR')
+    assert.strictEqual(runs[0].plugin, 't-run')
+    assert.ok(runs[0].toolVersion || runs[0].toolCommit, '索引应记录工具版本或 commit（独立 skill 拷贝无 package.json 时由 commit 兜底）')
+
+    // 脱敏：home 与用户名不出现在脱敏输出里
+    const runFile = path.join(runsDir, runs[0].file)
+    const sanitized = sanitizeRun(runFile)
+    assert.ok(!sanitized.includes(os.homedir()), '脱敏后不应包含 home 绝对路径')
+    assert.ok(sanitized.includes('~'), 'home 前缀应替换为 ~')
+    // 原始日志在本地保留完整路径（本地分析需要），脱敏只发生在导出时
+    const raw = fs.readFileSync(runFile, 'utf8')
+    assert.ok(raw.includes(dir), '原始日志保留完整路径供本地复盘')
+  } finally {
+    delete process.env.DSH_PFA_RUNS_DIR
+  }
 })
+
+test('satisfiesRange：本轮实测锚点回归（与宿主自带 semver 对拍过的结论不许漂移）', () => {
+  const cases = [
+    ['0.2.1-rc.3', '>=0.1.0-0 <0.3.0', false],
+    ['0.2.1-rc.3', '^0.2.1-rc.1', true],
+    ['0.2.1-rc.3', '^0.2.0-rc.1', false],
+    ['0.2.1-rc.3', '>=0.2.0-rc.1 <0.3.0', false],
+    ['4.0.1', '>=4.0.0 <5', true],
+    ['4.1.0-rc.1', '>=4.0.0-0 <5', false],
+    ['0.2.1', '>=0.1.0-0 <0.3.0', true],
+    ['1.3.0-beta', '>=1.2.3-rc.0 <2.0.0', false],
+    ['1.2.3-rc.1', '>=1.2.3-rc.0 <2.0.0', true],
+    ['3.1.0', '>=1.2.0 <2.0.0 || ^3.0.0', true],
+  ]
+  for (const [v, r, want] of cases) {
+    assert.strictEqual(satisfiesRange(v, r), want, `satisfiesRange("${v}", "${r}") 应为 ${String(want)}`)
+  }
+})
+
+test('scanSource：import type 标记 kind=type，value import 标记 kind=value', () => {
+  const src = [
+    `import { defineTool } from '@deepseek-ai/dsh-tools'`,
+    `import type { Context } from '@deepseek-ai/cordis'`,
+    `import type {} from '@deepseek-ai/dsh-host-webserver'`,
+    `export type { Config } from './config.js'`,
+    `const x = require('@deepseek-ai/dsh-attachment')`,
+  ].join('\n')
+  const scanned = scanSource(src)
+  const kindOf = (source) => scanned.imports.find((i) => i.source === source)?.kind
+  assert.strictEqual(kindOf('@deepseek-ai/dsh-tools'), 'value')
+  assert.strictEqual(kindOf('@deepseek-ai/cordis'), 'type')
+  assert.strictEqual(kindOf('@deepseek-ai/dsh-host-webserver'), 'type')
+  assert.strictEqual(kindOf('./config.js'), 'type')
+  assert.strictEqual(kindOf('@deepseek-ai/dsh-attachment'), 'value')
+})
+
 
 test('audit：注释里的 ctx.effect 不豁免真实的无清理监听', () => {
   const dir = tmpPluginDir('audit-life2')

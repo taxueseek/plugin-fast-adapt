@@ -11,8 +11,9 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { printJson, scanSource, isDshPackage, compareVersions } from './lib/scanner.mjs'
+import { printJson, scanSource, isDshPackage, compareVersions, packageBase } from './lib/scanner.mjs'
 import { loadGuides, listGuideVersions } from './lib/guide-parser.mjs'
+import { findGlobalDsh } from './env-doctor.mjs'
 
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', '.trash', 'coverage'])
 const SOURCE_EXT = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'])
@@ -126,7 +127,43 @@ function pickMigrationSteps(guide, symbol) {
 const SEVERITY_BY_KIND = { package: 'critical', member: 'high', code: 'medium' }
 const KIND_ORDER = { package: 0, member: 1, code: 2 }
 
-export function scanPlugin(pluginDir, guides, { localVersion = null, targetVersion = null } = {}) {
+// ── 宿主实测核查（2026-10-25 实测复盘新增）──────────────────────────────────
+// guide 的「移除」是文本启发式，包到底还在不在，目标宿主的 node_modules 是一手事实。
+// taxue-dsh-artisan 实测教训：滞后扫描器把 tool-presentation-mode 报成
+// critical「已移除包仍在 import」，而 @deepseek-ai/dsh-tools 在 rc.3 宿主里活得好好的。
+//   host-absent   → guide 声称移除且宿主确实没有 → 维持 critical，标注已实测
+//   host-present  → 宿主里还在 → 「装载必炸」不成立，降级 info 留给人工核对
+//   unknown       → 探测不到宿主安装位 → 不改分级，标未核查（不伪造结论）
+export function verifyPackagesAgainstHost(findings, hostInfo = null) {
+  const scope =
+    hostInfo?.location !== null && hostInfo?.location !== undefined
+      ? path.dirname(path.dirname(hostInfo.location)) // …/node_modules/@deepseek-ai/dsh → …/node_modules
+      : null
+  let checked = 0
+  let downgraded = 0
+  const verified = findings.map((finding) => {
+    if (finding.kind !== 'package') return finding
+    const pkg = packageBase(finding.symbol)
+    let status = 'unknown'
+    if (scope !== null) {
+      checked++
+      status = fs.existsSync(path.join(scope, pkg, 'package.json')) ? 'host-present' : 'host-absent'
+    }
+    if (status === 'host-present') {
+      downgraded++
+      return {
+        ...finding,
+        severity: 'info',
+        verified: status,
+        verificationNote: `实测：${pkg} 仍存在于目标宿主安装目录，guide 只是提及并非移除，「装载必炸」不成立。请核对 guide 原文确认真正的变更主体（如配置取值、某方法的行为）。`,
+      }
+    }
+    return { ...finding, verified: status, ...(status === 'host-absent' ? { verificationNote: `实测：${pkg} 在目标宿主安装目录不存在，与 guide 声称一致。` } : {}) }
+  })
+  return { findings: verified, checked, downgraded }
+}
+
+export function scanPlugin(pluginDir, guides, { localVersion = null, targetVersion = null, hostInfo = undefined, verifyHost = true } = {}) {
   const roots = pickScanRoots(pluginDir)
   const files = roots.flatMap((r) => findSourceFiles(r))
 
@@ -258,8 +295,14 @@ export function scanPlugin(pluginDir, guides, { localVersion = null, targetVersi
     return true
   })
 
+  // 宿主实测：只对 package 命中核查，present 降级 info（装载必炸不成立）
+  const resolvedHost = hostInfo === undefined ? findGlobalDsh() : hostInfo
+  const hostVerification = verifyHost
+    ? verifyPackagesAgainstHost(unique, resolvedHost)
+    : { findings: unique, checked: 0, downgraded: 0 }
+
   const byGuide = new Map()
-  for (const f of unique) {
+  for (const f of hostVerification.findings) {
     if (!byGuide.has(f.guide)) byGuide.set(f.guide, [])
     byGuide.get(f.guide).push(f)
   }
@@ -272,13 +315,18 @@ export function scanPlugin(pluginDir, guides, { localVersion = null, targetVersi
     guideVersionsAvailable: [...new Set(guides.map((g) => g.version))].sort(compareVersions),
     guidesConsidered: relevant.length,
     window: { localVersion, targetVersion },
-    findingCount: unique.length,
+    hostVerification: {
+      host: resolvedHost ? { version: resolvedHost.version, source: resolvedHost.source } : null,
+      packagesChecked: hostVerification.checked,
+      downgradedToInfo: hostVerification.downgraded,
+    },
+    findingCount: hostVerification.findings.length,
     bySeverity: Object.entries(
-      unique.reduce((acc, f) => ((acc[f.severity] = (acc[f.severity] || 0) + 1), acc), {})
+      hostVerification.findings.reduce((acc, f) => ((acc[f.severity] = (acc[f.severity] || 0) + 1), acc), {})
     ),
     findingsByGuide: Object.fromEntries([...byGuide.entries()].sort()),
     // 先按 severity（package > member > code），同级别内按文件与行号
-    findings: unique.sort(
+    findings: hostVerification.findings.sort(
       (a, b) =>
         KIND_ORDER[a.kind] - KIND_ORDER[b.kind] ||
         a.file.localeCompare(b.file) ||
@@ -313,6 +361,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.met
     `\n扫描 ${result.scannedFiles} 个文件 / ${result.scannedLines} 行\n` +
     `参考指南版本: ${result.guideVersionsAvailable.join(', ') || '无'}\n` +
     `纳入考虑的 guide 条目: ${result.guidesConsidered}\n` +
-    `命中: ${result.findingCount} 处（critical(package) ${sev.critical || 0} / high(member) ${sev.high || 0} / medium(code) ${sev.medium || 0}），涉及 ${Object.keys(result.findingsByGuide).length} 条官方变更\n`
+    `命中: ${result.findingCount} 处（critical(package) ${sev.critical || 0} / high(member) ${sev.high || 0} / medium(code) ${sev.medium || 0} / info ${sev.info || 0}），涉及 ${Object.keys(result.findingsByGuide).length} 条官方变更\n` +
+    `宿主实测: 核查 ${result.hostVerification.packagesChecked} 个包命中，${result.hostVerification.downgradedToInfo} 个因包仍在宿主降级为 info\n`
   )
 }

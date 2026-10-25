@@ -16,8 +16,9 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { printJson, scanSource } from './lib/scanner.mjs'
+import { printJson, scanSource, satisfiesRange, packageBase, parseVersion } from './lib/scanner.mjs'
 import { findSourceFiles, pickScanRoots, scanPluginFromGuideRoot } from './code-scan.mjs'
+import { findGlobalDsh } from './env-doctor.mjs'
 
 // 上游已移除或非核心、不该被普通插件强 import 的包
 const RISKY_IMPORTS = new Set([
@@ -30,7 +31,34 @@ const RISKY_IMPORTS = new Set([
 const SYNC_IO_CALLS = new Set(['readFileSync', 'writeFileSync', 'appendFileSync', 'execFileSync', 'execSync'])
 const READ_APIS = new Set(['readFile', 'createReadStream'])
 
-export function auditPlugin(pluginDir, { scanResult = null } = {}) {
+// 宿主安装目录的 lib 全文（懒加载，一次进程只读一遍）。
+// 描述漂移检查用：约定字符串在宿主代码里零命中 → 可能是消亡约定。
+// 探测不到宿主或读取失败返回 null（检查静默跳过，不阻塞审计）。
+let hostLibTextCache = null
+let hostLibTextResolved = false
+function getHostLibText() {
+  if (hostLibTextResolved) return hostLibTextCache
+  hostLibTextResolved = true
+  try {
+    const host = findGlobalDsh()
+    const libDir = host?.location ? path.join(host.location, 'lib') : null
+    if (!libDir || !fs.existsSync(libDir)) return (hostLibTextCache = null)
+    const parts = []
+    let total = 0
+    for (const entry of fs.readdirSync(libDir)) {
+      if (!entry.endsWith('.js')) continue
+      const text = fs.readFileSync(path.join(libDir, entry), 'utf8')
+      total += text.length
+      if (total > 32 * 1024 * 1024) break // 超大宿主按已读部分判断，避免无界读取
+      parts.push(text)
+    }
+    return (hostLibTextCache = parts.join('\n'))
+  } catch {
+    return (hostLibTextCache = null)
+  }
+}
+
+export function auditPlugin(pluginDir, { scanResult = null, targetVersion = null, hostLibText = undefined } = {}) {
   const root = path.resolve(pluginDir)
   const pkgPath = path.join(root, 'package.json')
   if (!fs.existsSync(pkgPath)) {
@@ -51,6 +79,7 @@ export function auditPlugin(pluginDir, { scanResult = null } = {}) {
 
   const roots = pickScanRoots(root)
   const files = roots.flatMap((r) => findSourceFiles(r))
+  const hostLibTextResolved = hostLibText !== undefined ? hostLibText : getHostLibText()
 
   for (const file of files) {
     const rel = path.relative(root, file)
@@ -90,7 +119,17 @@ export function auditPlugin(pluginDir, { scanResult = null } = {}) {
     }
 
     // 维度 2：契约弹性（强依赖已移除/非核心包）
-    const risky = [...importSources].filter((s) => RISKY_IMPORTS.has(s))
+    // import type 是纯编译期引用（scanner 已标 kind），运行时零依赖——
+    // 「装载必炸」只对 value import 成立，type 引用最多报 info 提示编译期风险。
+    const isValueImport = (imp) => imp.kind !== 'type'
+    const risky = [...importSources.values()].filter((s) => {
+      if (!RISKY_IMPORTS.has(s) && !RISKY_IMPORTS.has(packageBase(s))) return false
+      return scanned.imports.some((imp) => imp.source === s && isValueImport(imp))
+    })
+    const riskyTypeOnly = [...importSources.values()].filter((s) => {
+      if (!RISKY_IMPORTS.has(s) && !RISKY_IMPORTS.has(packageBase(s))) return false
+      return !risky.includes(s)
+    })
     if (risky.length) {
       report.findings.push({
         dimension: 'resilience',
@@ -100,6 +139,14 @@ export function auditPlugin(pluginDir, { scanResult = null } = {}) {
         detail: '改用 ctx.get("<service>") 弱依赖探测，服务不存在时静默降级；强依赖会在新宿主上直接装载失败。',
       })
       deduct('resilience', 50, 20)
+    } else if (riskyTypeOnly.length) {
+      report.findings.push({
+        dimension: 'resilience',
+        severity: 'INFO',
+        file: rel,
+        title: `类型引用已移除或非核心宿主包 (${riskyTypeOnly.join(', ')})`,
+        detail: 'import type 不参与运行时装载，不会让插件挂掉；但宿主删掉类型导出后 tsc 会红，跟进宿主时顺手把类型改为本地声明或弱类型。',
+      })
     }
 
     // 维度 3：上下文常驻预算
@@ -113,6 +160,30 @@ export function auditPlugin(pluginDir, { scanResult = null } = {}) {
         detail: '工具 description 会常驻每轮上下文，建议精炼；长用法说明放参考文档或按需返回。',
       })
       deduct('contextBudget', 80, 5)
+    }
+
+    // 描述漂移提示（2026-10-25 实测新增，INFO 不扣分）：
+    // 工具描述里写的宿主路径约定（如 .dsh-filess/...）若在宿主安装目录全文零命中，
+    // 很可能是旧版宿主消亡的约定——模型照它传参会全线失败（taxue-dsh-artisan 实测）。
+    // 只认「后面跟 / 的路径形约定」：.dsh- 前缀同时是生态通用的 CSS 类名前缀
+    // （.dsh-ta-card 一类），无斜杠即收会把插件自己的样式名全误报进来。
+    // 宿主可能把约定放在文档层而非代码，所以只提示、要人工确认。
+    const conventions = new Set()
+    for (const s of scanned.strings) {
+      for (const m of s.value.matchAll(/\.dsh-[a-z][\w-]*(?=\/)/g)) conventions.add(m[0])
+    }
+    if (conventions.size > 0 && hostLibTextResolved !== null) {
+      for (const conv of conventions) {
+        if (!hostLibTextResolved.includes(conv)) {
+          report.findings.push({
+            dimension: 'resilience',
+            severity: 'INFO',
+            file: rel,
+            title: `工具描述里的宿主路径约定 ${conv} 在宿主代码零命中`,
+            detail: '可能是旧版宿主消亡的约定（照它行动会失败），也可能约定写在宿主文档/指令层而非代码；请到官方仓库或实际宿主确认后再决定改不改描述。',
+          })
+        }
+      }
     }
 
     // 维度 4：生命周期清理
@@ -137,54 +208,85 @@ export function auditPlugin(pluginDir, { scanResult = null } = {}) {
     }
   }
 
-  // peer 范围弹性：不收 prerelease 宿主的写法在 rc/alpha 线上直接装不上
-  if (pkg.peerDependencies) {
+  // peer 范围核查（2026-10-25 实测复盘重写）。
+  // 旧启发式看「范围里有没有 -0」就报 HIGH，但它推荐的 ">=0.1.0-0 <0.3.0"
+  // 按真实 semver 根本收不下 0.2.1-rc.3（prerelease tuple 规则），建议自证其误。
+  // 现在的做法：拿到目标宿主版本后用 satisfiesRange 真算——
+  //   覆盖了        → 不报（写法看着再怪也不是问题）
+  //   没覆盖        → INFO（本生态 bundle 安装不跑 npm peer 解析，官方插件自己的
+  //                    范围在严格 semver 下同样收不下 rc 线宿主，这是声明性约定；
+  //                    只提示「声明与事实不符」，不扣分），建议先经 satisfiesRange
+  //                    自验证再输出，验证不过的写法不给
+  //   拿不到 target → 不报（无法判定，宁可沉默不伪造）
+  const targetVersionResolved = targetVersion || scanResult?.window?.targetVersion || null
+  if (targetVersionResolved && pkg.peerDependencies) {
+    const mismatches = []
+    let suggested = null
     for (const [name, range] of Object.entries(pkg.peerDependencies)) {
       const r = String(range)
-      if (!name.startsWith('@deepseek-ai/') || r.includes('-0') || r.includes('*')) continue
-      // 已带 prerelease 标签的双队列（^0.2.0-rc.1 一类）报的是 tuple 规则：
-      // 按 semver，^0.2.0-rc.1 只收 0.2.0-rc.x，不收 0.2.1-rc.x——
-      // 宿主跨到 0.2.1 线时同样装不上，但修法是把队列 floor 提到目标线，不是加宽放行。
-      const hasPreTag = /\d-[a-z]/.test(r)
+      if (!name.startsWith('@deepseek-ai/') || r.includes('*')) continue
+      if (satisfiesRange(targetVersionResolved, r)) continue
+      if (suggested === null) {
+        // 自验证建议：给出「与目标同三元组的 caret 线」写法，先算再给——
+        // 验证不过的写法不给（旧版推荐的 -0 全收写法就是在这里被自家 tuple 知识证伪的）。
+        const pv = parseVersion(targetVersionResolved)
+        const candidate = pv.pre
+          ? `^${pv.major}.${pv.minor}.${pv.patch}-${pv.pre}`
+          : `^${pv.major}.${pv.minor}.${pv.patch}`
+        if (satisfiesRange(targetVersionResolved, candidate)) suggested = candidate
+      }
+      mismatches.push(`${name}: "${r}"`)
+    }
+    if (mismatches.length > 0) {
       report.findings.push({
         dimension: 'resilience',
-        severity: 'HIGH',
+        severity: 'INFO',
         file: 'package.json',
-        title: hasPreTag
-          ? `peer 双队列不含 0.2.1 线宿主 (${name}: "${r}")`
-          : `peer 范围拒绝 prerelease 宿主 (${name}: "${r}")`,
-        detail: hasPreTag
-          ? 'semver 的 prerelease tuple 规则：^0.2.0-rc.1 只收 0.2.0-rc.x，不收 0.2.1-rc.x。宿主升 0.2.1 线时把对应队列的 floor 提到目标线，如 "^0.1.0-rc.6 || ^0.2.1-rc.3"。'
-          : 'semver 的 ^0.2.1 不收 0.2.1-rc.3 一类预发布版，三种修法按场景选：' +
-            '只跟一条预发布线 → floor 带上标签，如 "^0.2.1-rc.3"；' +
-            '要同时兼容新旧两代宿主 → 双队列，如 "^0.1.0-rc.6 || ^0.2.1-rc.3"；' +
-            '想全收预发布 → -0 放行，如 ">=0.1.0-0 <0.3.0"（最宽，也最不精确）。',
+        title: `${String(mismatches.length)} 个 peer 窗口按严格 semver 不含目标宿主 ${targetVersionResolved}`,
+        detail:
+          `${mismatches.join('、')}——satisfiesRange("${targetVersionResolved}", 范围) = false，prerelease tuple 规则要求版本与某个带 prerelease 的比较器同三元组。` +
+          `本生态 bundle 安装不强制 peer（官方插件自己的范围同样收不下 rc 线宿主），此为声明性提示不扣分。` +
+          (suggested
+            ? `要精确声明支持线可写 "${suggested}"（已用 satisfiesRange 验证可覆盖 ${targetVersionResolved}）；多代宿主并行走 || 列举，官方惯例见 dsh-plugin-subscriptions。`
+            : '未能构造出可验证的替代写法，请人工核对官方插件声明。'),
       })
-      deduct('resilience', 60, 15)
     }
   }
 
-  // 新版本感知：有 code-scan 结果时交叉出「适配未完成项 + 官方修法」
+  // 新版本感知：有 code-scan 结果时交叉出「适配未完成项 + 官方修法」。
+  // package 命中若已被宿主实测判为 host-present（包还在），「装载必炸」不成立，
+  // 不再按 HIGH 扣分——只把真正 absent/unknown 的当确认项。
   if (scanResult && typeof scanResult === 'object' && scanResult.findingCount > 0) {
     const byKind = { package: [], member: [], code: [] }
     for (const f of scanResult.findings || []) {
       ;(byKind[f.kind] || (byKind[f.kind] = [])).push(f)
     }
-    if (byKind.package.length) {
+    const confirmedPackages = byKind.package.filter((f) => f.verified !== 'host-present')
+    const refutedPackages = byKind.package.length - confirmedPackages.length
+    if (confirmedPackages.length) {
       report.findings.push({
         dimension: 'resilience',
         severity: 'HIGH',
-        file: byKind.package.map((f) => f.file).join(', '),
-        title: `目标版本已移除的包仍在 import (${[...new Set(byKind.package.map((f) => f.symbol))].join(', ')})`,
-        detail: '官方 upgrade-guide 标记为已移除，新宿主上装载必挂；migration 字段里有官方修法。',
+        file: confirmedPackages.map((f) => f.file).join(', '),
+        title: `目标版本已移除的包仍在 import (${[...new Set(confirmedPackages.map((f) => f.symbol))].join(', ')})`,
+        detail: '官方 upgrade-guide 声称移除且宿主实测不存在（或无法核实时按声明处理）；migration 字段里有官方修法。',
       })
       deduct('resilience', 50, 20)
+    }
+    if (refutedPackages > 0) {
+      report.findings.push({
+        dimension: 'resilience',
+        severity: 'INFO',
+        file: byKind.package.filter((f) => f.verified === 'host-present').map((f) => f.file).join(', '),
+        title: `${String(refutedPackages)} 个包命中经宿主实测证伪（包仍在宿主，guide 只是提及）`,
+        detail: '已降级为 info，不扣分；详情见 code-scan 的 verificationNote，建议人工核对 guide 原文的变更主体。',
+      })
     }
     report.versionAdvice = {
       window: scanResult.window,
       findingCount: scanResult.findingCount,
       unresolved: byKind,
-      note: '这些命中是官方指南确认的破坏性变更；升级前先清零，再谈性能与架构优化。',
+      note: '命中是官方指南锚点；package 类已叠加宿主实测核查（host-present 证伪项降级 info）。',
     }
   } else if (scanResult && typeof scanResult === 'object') {
     report.versionAdvice = { window: scanResult.window, findingCount: 0, note: '目标版本区间内无官方破坏性变更命中，可直接进入性能与架构审计。' }

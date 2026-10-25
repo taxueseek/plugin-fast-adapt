@@ -215,7 +215,10 @@ export function scanSource(source, { stripTypes = false } = {}) {
     if (!inCode(match.index)) continue
     const modulePath = match[1] || match[2]
     if (!modulePath) continue
-    imports.push({ source: modulePath, line: lineOf(match.index) })
+    // import type / export type 是纯编译期引用，运行时零依赖：
+    // 弹性检查（强 import 已移除包）必须区分，否则类型引用会被报成「装载必炸」。
+    const kind = /^\s*(?:import|export)\s+type\b/.test(match[0]) ? 'type' : 'value'
+    imports.push({ source: modulePath, line: lineOf(match.index), kind })
   }
 
   MEMBER_RE.lastIndex = 0
@@ -312,6 +315,110 @@ export function sameMajorMinor(a, b) {
   const va = parseVersion(a)
   const vb = parseVersion(b)
   return va.major === vb.major && va.minor === vb.minor
+}
+
+// ── semver 范围判定 ─────────────────────────────────────────────────────────
+// 第一性原理（2026-10-25 实测复盘）：判断「某版本是否被某 peer 范围覆盖」，
+// 唯一可靠的办法是按 semver 语义真算，而不是看范围字符串长什么样。
+// 教训：audit 旧启发式看「有没有 -0」给 HIGH，但它推荐的 ">=0.1.0-0 <0.3.0"
+// 按真实语义根本放行不了 0.2.1-rc.3（prerelease tuple 规则）——
+// 语法猜出来的判定和建议一起错。这里实现 node-semver 的核心语义：
+// || 分支、^ ~ 精确比较器、prerelease tuple 规则。
+
+function caretUpper(v) {
+  if (v.major > 0) return { major: v.major + 1, minor: 0, patch: 0, pre: null }
+  if (v.minor > 0) return { major: 0, minor: v.minor + 1, patch: 0, pre: null }
+  return { major: 0, minor: 0, patch: v.patch + 1, pre: null }
+}
+
+function tildeUpper(v) {
+  return { major: v.major, minor: v.minor + 1, patch: 0, pre: null }
+}
+
+// 单个比较器 token → { op, ver } 列表（^ ~ 会展开成一对）
+function parseComparatorToken(token) {
+  const m = token.match(/^(>=|<=|>|<|=|\^|~)?\s*v?(\d+|x|X|\*)(?:\.(\d+|x|X|\*))?(?:\.(\d+|x|X|\*))?(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/)
+  if (!m) return null
+  const op = m[1] || ''
+  const maj = m[2]
+  const min = m[3]
+  const pat = m[4]
+  const pre = m[5] || null
+  const hasX = (t) => t === undefined || t === 'x' || t === 'X' || t === '*'
+  const base = { major: hasX(maj) ? 0 : Number(maj), minor: hasX(min) ? 0 : Number(min), patch: hasX(pat) ? 0 : Number(pat), pre }
+  // 含 x/* 的裸写法（1.x / 1.2.x / *）按区间展开
+  if (op === '' && (hasX(maj) || hasX(min) || hasX(pat))) {
+    if (hasX(maj)) return [{ op: '>=', ver: { major: 0, minor: 0, patch: 0, pre: null } }]
+    if (hasX(min)) return [{ op: '>=', ver: { ...base, minor: 0, patch: 0, pre: null } }, { op: '<', ver: { major: base.major + 1, minor: 0, patch: 0, pre: null } }]
+    return [{ op: '>=', ver: { ...base, patch: 0, pre: null } }, { op: '<', ver: { major: base.major, minor: base.minor + 1, patch: 0, pre: null } }]
+  }
+  if (op === '^') {
+    const lower = { ...base }
+    return [{ op: '>=', ver: lower }, { op: '<', ver: caretUpper(base) }]
+  }
+  if (op === '~') {
+    const lower = { ...base }
+    return [{ op: '>=', ver: lower }, { op: '<', ver: tildeUpper(base) }]
+  }
+  if (op === '' || op === '=') return [{ op: '>=', ver: base }, { op: '<', ver: nextPatch(base) }]
+  return [{ op, ver: base }]
+}
+
+function nextPatch(v) {
+  return { major: v.major, minor: v.minor, patch: v.patch + 1, pre: null }
+}
+
+function versionTuple(v) {
+  return `${v.major}.${v.minor}.${v.patch}`
+}
+
+// 一个 || 分支（AND 组合）是否覆盖 version
+function comparatorSetSatisfies(v, set) {
+  const normalized = set.replace(/(>=|<=|>|<|=|\^|~)\s+/g, '$1').trim()
+  if (normalized === '' || normalized === '*' || normalized === 'x' || normalized === 'X') return true
+
+  const comparators = []
+  // 连字符区间 1.2.3 - 2.0.0
+  const hyphen = normalized.match(/^(\S+)\s+-\s+(\S+)$/)
+  const tokens = hyphen ? [`>=${hyphen[1]}`, `<=${hyphen[2]}`] : normalized.split(/\s+/)
+  for (const token of tokens) {
+    const parsed = parseComparatorToken(token)
+    if (!parsed) return false
+    comparators.push(...parsed)
+  }
+
+  for (const { op, ver } of comparators) {
+    const cmp = compareVersions(v, ver)
+    if (op === '>=' && cmp < 0) return false
+    if (op === '>' && cmp <= 0) return false
+    if (op === '<=' && cmp > 0) return false
+    if (op === '<' && cmp >= 0) return false
+    if (op === '=' && cmp !== 0) return false
+  }
+
+  // prerelease tuple 规则（node-semver）：带 prerelease 的版本只有在
+  // 某个「同 major.minor.patch 三元组且也带 prerelease」的比较器存在时才可满足。
+  // 这就是 ">=0.1.0-0 <0.3.0" 收不下 0.2.1-rc.3 的原因：两个比较器的
+  // 三元组分别是 0.1.0 和 0.3.0，都不等于 0.2.1。
+  if (v.pre !== null) {
+    const allowed = comparators.some(
+      ({ ver }) => ver.pre !== null && versionTuple(ver) === versionTuple(v)
+    )
+    if (!allowed) return false
+  }
+  return true
+}
+
+// 判断 version 是否被 npm 语义的范围覆盖。任何一步解析失败都返回 false
+// （宁可报「未覆盖」让人工看一眼，不静默当全通过）。
+export function satisfiesRange(version, range) {
+  if (typeof version !== 'string' || typeof range !== 'string') return false
+  const v = parseVersion(version)
+  if (!/^\d+\.\d+\.\d+/.test(v.raw)) return false
+  for (const branch of range.split('||')) {
+    if (comparatorSetSatisfies(v, branch)) return true
+  }
+  return false
 }
 
 // ── 包名工具 ────────────────────────────────────────────────────────────────
