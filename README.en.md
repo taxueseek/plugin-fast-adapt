@@ -2,7 +2,7 @@
 
 [简体中文](README.md) | English
 
-DSH plugin adaptation and breaking-change detection. Checks the vendor's latest release, pulls that version's official upgrade guide, scans local plugin code, and reports which breaking changes the plugin hits together with the vendor's own fix instructions — plus local DSH environment inspection and a post-upgrade performance & architecture audit.
+DSH plugin adaptation and breaking-change detection, plus a from-zero plugin scaffolder. Checks the vendor's latest release, pulls that version's official upgrade guide, scans local plugin code, and reports which breaking changes the plugin hits together with the vendor's own fix instructions; scaffolds a smoke-testable plugin skeleton in one command across all five forms; plus local DSH environment inspection and a post-upgrade performance & architecture audit.
 
 > **Provenance**: this project is derived from [oh-my-dsh/dsh-plugin-upgrade-skill](https://github.com/oh-my-dsh/dsh-plugin-upgrade-skill) (a skill collection that teaches AI agents to upgrade DSH plugins, with an [arXiv paper](https://arxiv.org/abs/2609.30120)), split into an independent repository via git subtree and evolved independently. The upstream project carries 195 hand-maintained upgrade cards, 11 skills and a 63-case auto-graded benchmark; this project keeps and hardens only the "adapt a plugin to a new DSH" path, replacing its heaviest component — the hand-curated card mode.
 
@@ -29,7 +29,7 @@ The authoritative description of breaking changes lives in the vendor harness re
 | Weaker models | Full card library in context, -3.07 pp | Six independent scripts, one small output each |
 | Code-level scanning | None | Anchor matching + four noise-reduction layers (measured below) |
 | Dependencies | — | Zero external: Node built-ins + `git`/`npm` commands |
-| Self-test | — | 65 assertions, zero network, runs on any machine |
+| Self-test | — | 73 assertions, zero network, runs on any machine |
 
 ## Six steps
 
@@ -96,6 +96,16 @@ git clone https://github.com/taxueseek/plugin-fast-adapt.git
 # Cursor users: cp -r plugin-fast-adapt/* .cursor/skills/plugin-fast-adapt/
 ```
 
+## Scaffold a plugin from zero
+
+```sh
+node scripts/scaffold.mjs <namespace>/<name> --form tool|hook|service|config|llm-adapter [--out <dir>] [--harness <version>]
+```
+
+One command emits a smoke-testable skeleton: package.json (build-free pure-ESM invariants), a minimal runnable entry per form, a `cordis.patch.yml` mounting row, and a `dsh-plugin.naming.json` with collision-resistant naming projections derived in full (the output passes upstream validate-names in `--strict` mode). The tool and hook forms are dependency-free and smoke-tested on the spot; service, config and llm-adapter need host `@deepseek-ai/*` base classes, so scaffolding honestly skips their smoke run and says so. Non-empty target directories and invalid coordinates are rejected before anything is written.
+
+The skeleton guarantees structure and naming compliance only; capability implementation still follows the five form references of [plugin-write](https://github.com/oh-my-dsh/dsh-plugin-upgrade-skill/tree/main/skills/plugin-write).
+
 ## Dependencies
 
 Zero external dependencies. Only Node built-ins (`node:fs`, `node:path`, `node:os`, `node:child_process`) plus the `git` and `npm` commands.
@@ -105,15 +115,16 @@ No TypeScript, no AST library, no HTTP client. Runs on Node 22.13+ (`import.meta
 Self-test:
 
 ```sh
-npm test   # node scripts/self-test.mjs, 65 assertions
+npm test   # node scripts/self-test.mjs, 73 assertions
 ```
 
-Covers scanner false positives (names in comments and strings are not hits), false negatives, version heuristics, replacement-pair recognition, end-to-end findings, SOP reference integrity, dist-tags cache states, smoke verification, the four-dimension audit, activation diagnostics and a scanner performance gate. Zero network, zero external dependencies, runs on any machine.
+Covers scanner false positives (names in comments and strings are not hits), false negatives, version heuristics, replacement-pair recognition, end-to-end findings, SOP reference integrity, dist-tags cache states, smoke verification, the four-dimension audit, activation diagnostics, the plugin scaffolder (all five forms, naming-projection grammar, smoke closure, patch-layer recognizability, invalid-input and non-empty-target rejection) and a scanner performance gate. Zero network, zero external dependencies, runs on any machine.
 
 ## Scripts
 
 | Script | Responsibility |
 | --- | --- |
+| `scripts/scaffold.mjs` | Scaffold a plugin from zero: one command emits a smoke-testable skeleton in any of the five forms (package.json invariants + form entry + patch layer + naming projections), verified on creation |
 | `scripts/env-doctor.mjs` | Probe the local DSH environment (version, overlay, plugins, processes, activation readiness) |
 | `scripts/env-heal.mjs` | Heal stale overlay packages (dry-run by default) |
 | `scripts/guide-sync.mjs` | Resolve the target version and fetch the official guide (dist-tags cached 1 h, degrades to stale cache) |

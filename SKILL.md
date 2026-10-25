@@ -1,6 +1,6 @@
 ---
 name: plugin-fast-adapt
-description: DSH 插件适配与破坏性变更核查，兼造插件路由与性能架构审计。查 DeepSeek 官方最新版本，取该版本的官方升级指南，扫描本机插件代码，报出哪些地方踩了破坏性变更并给出官方修法；同时巡检本机 DSH 环境（profiles 覆盖层旧包残留、已装插件、运行中宿主、插件启用就绪度）。修完可秒级冒烟验证，升级时可顺带做插件性能与架构审计。老版本插件（官方指南覆盖不到 v0.1.7-rc.2 之前的走廊）转迁移 SOP，对照原仓库 plugin-upgrade 的人工卡片走廊走七阶段流程。当需要把 DSH 插件适配到新版本或老版本、从零创建 DSH 插件、排查升级后插件报错、核查插件是否用了已移除的包或 API、检查 ~/.dsh 覆盖层有无旧包残留、给插件做性能与架构体检时使用。触发词：适配 DSH 插件、升级插件、插件不兼容、dsh 升级后报错、插件用了废弃 API、检查覆盖层旧包、老版本 DSH 适配、历史走廊迁移、创建 DSH 插件、写 DSH 插件、插件冒烟测试、插件性能审计、插件装了没生效。
+description: DSH 插件适配与破坏性变更核查，兼造插件脚手架与性能架构审计。查 DeepSeek 官方最新版本，取该版本的官方升级指南，扫描本机插件代码，报出哪些地方踩了破坏性变更并给出官方修法；scaffold 一条命令生成五形态可冒烟的插件骨架（package.json 不变量＋形态入口＋挂载层＋命名投影，生成即验证）；同时巡检本机 DSH 环境（profiles 覆盖层旧包残留、已装插件、运行中宿主、插件启用就绪度）。修完可秒级冒烟验证，升级时可顺带做插件性能与架构审计。老版本插件（官方指南覆盖不到 v0.1.7-rc.2 之前的走廊）转迁移 SOP，对照原仓库 plugin-upgrade 的人工卡片走廊走七阶段流程。当需要把 DSH 插件适配到新版本或老版本、从零创建 DSH 插件、给新插件生成起步骨架、排查升级后插件报错、核查插件是否用了已移除的包或 API、检查 ~/.dsh 覆盖层有无旧包残留、给插件做性能与架构体检时使用。触发词：适配 DSH 插件、升级插件、插件不兼容、dsh 升级后报错、插件用了废弃 API、检查覆盖层旧包、老版本 DSH 适配、历史走廊迁移、创建 DSH 插件、写 DSH 插件、插件脚手架、插件冒烟测试、插件性能审计、插件装了没生效。
 ---
 
 # plugin-fast-adapt
@@ -11,6 +11,7 @@ description: DSH 插件适配与破坏性变更核查，兼造插件路由与性
 
 | 步 | 脚本 | 回答什么 |
 | --- | --- | --- |
+| 0 造骨架（可选） | `scripts/scaffold.mjs` | 从零造插件：一条命令出五形态可冒烟骨架，生成即验证 |
 | 1 探测环境 | `scripts/env-doctor.mjs` | 本机装的 DSH 是哪个版本？覆盖层有没有旧包？装了哪些插件？插件启用就绪吗？ |
 | 2 定版本 | `scripts/guide-sync.mjs` | 官方最新版本是什么？本机该不该跟？跟哪个？ |
 | 3 取差异 | `scripts/guide-sync.mjs --clone` | 本机到目标版本之间，官方列了哪些破坏性变更？ |
@@ -107,14 +108,25 @@ node scripts/plugin-audit.mjs <插件目录> --guide <guide-root> <本机版本>
 
 ## 造插件：从零开始
 
-本 skill 不重复维护插件创建知识，路由到三处现成真源，本 skill 只接手造完之后的验证与适配链路：
+第一步用本 skill 的 scaffold 一条命令出可冒烟骨架：
+
+```sh
+node scripts/scaffold.mjs <namespace>/<name> --form tool|hook|service|config|llm-adapter [--out <目录>] [--harness <版本>] [--no-smoke]
+```
+
+它只做确定性的事，不碰裁量：
+
+- **五件套生成**：package.json（免构建纯 ESM 不变量：`type: module`、main 与 exports 双指 `lib/index.js`、files 含挂载层）、按形态的最小可跑入口（tool 用 raw JSON Schema 注册、hook 走 waterfall 并显式 `next()`、service/config/llm-adapter 用宿主基类形态）、`cordis.patch.yml` 最小挂载条目（没有它装了不生效，env-doctor 的 activation 查的就是这层）、`dsh-plugin.naming.json`、README＋.gitignore
+- **命名投影**：loader id／service／tool／command／skill／event／route 全部按上游 naming-conventions 的 collision-resistant 规则从 coordinate 推导，生成物已过上游 validate-names 的 `--strict` 校验（0 错误 0 警告）
+- **当场验证**：tool/hook 两形态零依赖直接冒烟（生成即验证注册）；service/config/llm-adapter 依赖宿主 `@deepseek-ai/*` 基类，诚实跳过冒烟并标注装包后手动跑；llm-adapter 的基类 import 来源上游文档没有钉死，骨架里是 TODO 占位，生成后必须对照目标宿主 checkout 核名
+
+目标目录非空即拒绝（不动用户文件）；非法 coordinate 在写盘前拒绝。骨架只保证结构与命名合规，能力实现仍以真源文档为准：
 
 | 需求 | 去 where |
 | --- | --- |
-| 仓库模式与插件形态分类（tool / LLM adapter / hook / service 四类 form 的写法） | [原仓库 plugin-write skill](https://github.com/oh-my-dsh/dsh-plugin-upgrade-skill/tree/main/skills/plugin-write) 的 SKILL.md，按 form 读对应 reference |
-| 公共命名规范与注册表冲突检查（`dsh-plugin.naming.json`） | plugin-write 的 naming-conventions 与 registry-check reference |
+| 五形态完整契约（execute 义务、waterfall 语义、Schema 规则、协议义务清单） | [原仓库 plugin-write skill](https://github.com/oh-my-dsh/dsh-plugin-upgrade-skill/tree/main/skills/plugin-write) 的五份 form reference |
+| 公共命名规范与注册表冲突检查 | plugin-write 的 naming-conventions 与 registry-check reference（validate-names / query-registry 两脚本） |
 | Cordis 教程、API、cookbook | 官方仓库 `deepseek-harness/docs/` 的 cordis-tutorial、cordis-api、cookbook |
-| 起步脚手架 | 社区模板 bugmaker2/dsh-plugin-template（102★）等 |
 | 造完之后 | 回本 skill：quick-smoke 秒验 → env-doctor 看启用就绪 → plugin-audit 体检 → code-scan 对目标版本核查 |
 
 ## 批量场景：整批已装插件的宿主升级巡检
@@ -148,7 +160,7 @@ node scripts/plugin-audit.mjs <插件目录> --guide <guide-root> <本机版本>
 npm test
 ```
 
-65 项断言，覆盖扫描器不误报（注释和字符串里的同名词不算命中）、不漏报、版本启发式、替换对识别、端到端命中、SOP 引用完整性、dist-tags 缓存三态、冒烟验证、四维审计、启用诊断、跨平台模拟（Windows 根探测与缓存隔离）、文档断言数防漂移、扫描性能回归门。零网络、零外部依赖，任何机器上都能跑（Windows 分支已做模拟验证，真机待验）。
+73 项断言，覆盖扫描器不误报（注释和字符串里的同名词不算命中）、不漏报、版本启发式、替换对识别、端到端命中、SOP 引用完整性、dist-tags 缓存三态、冒烟验证、四维审计、启用诊断、创作脚手架（五形态生成与冒烟闭环、命名投影语法、挂载层可识别、非法输入与非空目录拒绝）、跨平台模拟（Windows 根探测与缓存隔离）、文档断言数防漂移、扫描性能回归门。零网络、零外部依赖，任何机器上都能跑（Windows 分支已做模拟验证，真机待验）。
 
 ## 脚本清单
 

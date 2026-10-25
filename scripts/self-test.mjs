@@ -17,6 +17,7 @@ import { anchorMatches } from './code-scan.mjs'
 import { runQuickSmoke } from './quick-smoke.mjs'
 import { auditPlugin } from './plugin-audit.mjs'
 import { extractInjects, diagnoseActivation, candidateGlobalRoots, parsePatchEntries } from './env-doctor.mjs'
+import { scaffoldPlugin, projectNames, detectHarnessVersion, UsageError } from './scaffold.mjs'
 
 const tests = []
 function test(name, fn) {
@@ -592,6 +593,117 @@ test('文档宣称的断言数与实际一致（防手工漂移）', () => {
   assert.ok(checked >= 5, `应至少核对 5 处断言数，实际 ${checked} 处`)
 })
 
+// ── 创作脚手架（第 0 步）─────────────────────────────────────────────────────
+// 生成物三重验证：结构断言（文件与 package.json 不变量）、冒烟闭环（零依赖
+// 形态真跑 quick-smoke）、挂载层可被 env-doctor 的 parsePatchEntries 识别
+// （「装了不生效」是 env-doctor 查的头号事故，生成的骨架必须天然可挂载）。
+
+const SCAFFOLD_FORMS = ['tool', 'hook', 'service', 'config', 'llm-adapter']
+const scaffoldDirs = []
+
+async function scaffoldTo(name, options) {
+  const dir = tmpPluginDir(`scaffold-${name}`)
+  scaffoldDirs.push(dir)
+  return scaffoldPlugin({ outDir: dir, harnessVersion: '0.2.1-rc.3', ...options })
+}
+
+test('scaffold：tool 形态端到端——五件套生成＋冒烟注册工具＋挂载层可识别', async () => {
+  const result = await scaffoldTo('tool', { coordinate: 'taxueseek/demo-tool', form: 'tool' })
+  for (const f of ['package.json', 'lib/index.js', 'cordis.patch.yml', 'dsh-plugin.naming.json', 'README.md', '.gitignore']) {
+    assert.ok(fs.existsSync(path.join(result.outDir, f)), `应生成 ${f}`)
+  }
+  const pkg = JSON.parse(fs.readFileSync(path.join(result.outDir, 'package.json'), 'utf8'))
+  assert.strictEqual(pkg.type, 'module')
+  assert.strictEqual(pkg.main, './lib/index.js')
+  assert.strictEqual(pkg.exports['.'], './lib/index.js')
+  assert.deepStrictEqual(pkg.files, ['lib', 'cordis.patch.yml'])
+  assert.strictEqual(pkg.dsh.bundle.patch, './cordis.patch.yml')
+  assert.strictEqual(pkg.name, '@taxueseek/dsh-demo-tool')
+  const manifest = JSON.parse(fs.readFileSync(path.join(result.outDir, 'dsh-plugin.naming.json'), 'utf8'))
+  assert.deepStrictEqual(manifest.names.loaderIds, ['taxueseek-demo-tool'])
+  assert.deepStrictEqual(manifest.names.tools, ['taxueseek_demo_tool_query'])
+  const patch = fs.readFileSync(path.join(result.outDir, 'cordis.patch.yml'), 'utf8')
+  const entries = parsePatchEntries(patch)
+  assert.strictEqual(entries.length, 1, '挂载层应恰好一条活跃条目')
+  assert.ok(entries[0].includes('@taxueseek/dsh-demo-tool') && entries[0].includes('taxueseek-demo-tool'), '条目应含包名与 loader id')
+  assert.strictEqual(result.smoke.run, true)
+  assert.strictEqual(result.smoke.success, true)
+  assert.deepStrictEqual(result.smoke.registeredTools, ['taxueseek_demo_tool_query'])
+  assert.strictEqual(result.smoke.mockFallbacks.length, 0, 'tool 骨架应零 Mock 兜底（register 与 inject 都被 Mock 覆盖）')
+})
+
+test('scaffold：hook 形态冒烟通过且不误注册工具', async () => {
+  const result = await scaffoldTo('hook', { coordinate: 'taxueseek/demo-hook', form: 'hook' })
+  assert.strictEqual(result.smoke.success, true)
+  assert.deepStrictEqual(result.smoke.registeredTools, [])
+})
+
+test('scaffold：依赖宿主基类的三形态诚实跳过冒烟并保留核名提醒', async () => {
+  const expectations = {
+    service: (src) => src.includes('extends Service'),
+    config: (src) => src.includes('Schema.object'),
+    'llm-adapter': (src) => src.includes('TODO') && src.includes('以目标宿主 checkout 为准'),
+  }
+  for (const form of ['service', 'config', 'llm-adapter']) {
+    const result = await scaffoldTo(form, { coordinate: `taxueseek/demo-${form}`, form })
+    assert.strictEqual(result.smoke, null, `${form} 不该自动冒烟（依赖宿主基类，Mock 覆盖不了）`)
+    const src = fs.readFileSync(path.join(result.outDir, 'lib', 'index.js'), 'utf8')
+    assert.ok(expectations[form](src), `${form} 入口缺关键结构`)
+  }
+})
+
+test('scaffold：命名投影符合官方语法与 collision-resistant 规则', () => {
+  const n = projectNames('alice', 'web-search')
+  assert.strictEqual(n.coordinate, 'alice/web-search')
+  assert.strictEqual(n.packageName, '@alice/dsh-web-search')
+  assert.deepStrictEqual(n.loaderIds, ['alice-web-search'])
+  assert.deepStrictEqual(n.services, ['aliceWebSearchIndex'])
+  assert.deepStrictEqual(n.tools, ['alice_web_search_query'])
+  assert.deepStrictEqual(n.events, ['alice-web-search/ready'])
+  assert.deepStrictEqual(n.routes, [{ kind: 'exact', path: '/api/plugins/alice-web-search/query' }])
+  const kebab = /^[a-z]([a-z0-9]*(-[a-z0-9]+)*)?$/
+  for (const value of [...n.commands, ...n.skills, ...n.settingsNamespaces, ...n.skillProviders]) {
+    assert.ok(kebab.test(value), `${value} 应为 kebab`)
+  }
+  assert.ok(kebab.test(n.pluginNames[0]), '插件名应为 kebab')
+})
+
+test('scaffold：非法输入拒绝且不落盘', async () => {
+  const dir = tmpPluginDir('scaffold-reject')
+  scaffoldDirs.push(dir)
+  for (const bad of [{ coordinate: 'Alice/tool' }, { coordinate: 'no-slash' }, { coordinate: 'a/b/c' }, { coordinate: 'taxueseek/demo-tool', form: 'widget' }]) {
+    await assert.rejects(
+      () => scaffoldPlugin({ outDir: dir, harnessVersion: '0.0.0', ...bad }),
+      UsageError,
+      `${JSON.stringify(bad)} 应被拒绝`
+    )
+  }
+  assert.strictEqual(fs.readdirSync(dir).length, 0, '拒绝必须发生在写盘前')
+})
+
+test('scaffold：目标目录非空时拒绝覆盖', async () => {
+  const dir = tmpPluginDir('scaffold-occupied')
+  scaffoldDirs.push(dir)
+  fs.writeFileSync(path.join(dir, 'user-file.txt'), 'keep')
+  await assert.rejects(
+    () => scaffoldPlugin({ coordinate: 'taxueseek/demo-tool', form: 'tool', outDir: dir, harnessVersion: '0.0.0' }),
+    UsageError
+  )
+  assert.strictEqual(fs.readFileSync(path.join(dir, 'user-file.txt'), 'utf8'), 'keep', '用户文件不能动')
+})
+
+test('scaffold：显式 harness 版本优先于本机探测', async () => {
+  const result = await scaffoldTo('versioned', { coordinate: 'taxueseek/demo-ver', form: 'tool', harnessVersion: '9.9.9' })
+  assert.strictEqual(result.harnessVersion, '9.9.9')
+  const pkg = JSON.parse(fs.readFileSync(path.join(result.outDir, 'package.json'), 'utf8'))
+  assert.ok(pkg.description.includes('9.9.9'), 'description 应记录目标宿主版本')
+})
+
+test('scaffold：Windows 模拟下宿主探测不依赖 POSIX 布局', () => {
+  const winVersion = detectHarnessVersion({ platform: 'win32', env: { APPDATA: 'X:\\npm' } })
+  assert.ok(winVersion === null || typeof winVersion === 'string', 'win 模拟探测应安全返回，不抛路径异常')
+})
+
 // ── guide-sync dist-tags 缓存 ────────────────────────────────────────────────
 // 本机网络查 npm registry 曾实测 15s 超时失败；缓存命中应为 0 网络依赖。
 
@@ -899,6 +1011,11 @@ test('扫描器对触点密集大文件保持线性（性能回归门）', () =>
 })
 
 // ── 汇总 ────────────────────────────────────────────────────────────────────
+
+// scaffold 用例的临时产物用完即删（os.tmpdir 只存可再生文件，不留唯一副本）
+for (const dir of scaffoldDirs) {
+  try { fs.rmSync(dir, { recursive: true, force: true }) } catch {}
+}
 
 let passed = 0
 const failures = []

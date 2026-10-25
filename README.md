@@ -2,7 +2,7 @@
 
 **简体中文** | [English](README.en.md)
 
-DSH 插件适配与破坏性变更核查。查官方最新版本，获取该版本的官方指南，分析本机插件代码，报出踩中了哪些破坏性变更、官方给的修法是什么；顺带巡检本机 DSH 环境、做升级后的性能与架构体检。
+DSH 插件适配与破坏性变更核查，兼从零造插件脚手架。查官方最新版本，获取该版本的官方指南，分析本机插件代码，报出踩中了哪些破坏性变更、官方给的修法是什么；一条命令生成五形态可冒烟的插件骨架；顺带巡检本机 DSH 环境、做升级后的性能与架构体检。
 
 > **出身**：本项目从 [oh-my-dsh/dsh-plugin-upgrade-skill](https://github.com/oh-my-dsh/dsh-plugin-upgrade-skill)（教 AI 升级 DSH 插件的 skill 集合，附 [arXiv 论文](https://arxiv.org/abs/2609.30120)）衍生而来，已用 git subtree 拆分为独立仓库、独立演进。原项目沉淀了 195 张人工维护的升级卡、11 个 skill 和 63 道自动判分的 benchmark；本项目只保留并强化「把插件适配到新版 DSH」这一目的，取代其中最重的人工卡片模式，转为自动更新适配。专门为 agent 而生。
 
@@ -29,7 +29,7 @@ DSH 插件适配与破坏性变更核查。查官方最新版本，获取该版�
 | 弱模型表现 | 全套卡片进上下文，-3.07 pp | 六个独立脚本，每步只产出一份小输出 |
 | 代码级扫描 | 无 | 锚点匹配 + 四层降噪（见下文实测） |
 | 依赖 | — | 零外部依赖：Node 内置模块 + `git`/`npm` 命令 |
-| 自检 | — | 65 项断言，零网络，任何机器能跑 |
+| 自检 | — | 73 项断言，零网络，任何机器能跑 |
 
 ## 六步流程
 
@@ -93,6 +93,16 @@ git clone https://github.com/taxueseek/plugin-fast-adapt.git
 # Cursor 用户：cp -r plugin-fast-adapt/* .cursor/skills/plugin-fast-adapt/
 ```
 
+## 从零造一个插件
+
+```sh
+node scripts/scaffold.mjs taxueseek/my-tool --form tool|hook|service|config|llm-adapter [--out <目录>] [--harness <版本>]
+```
+
+一条命令生成可冒烟骨架：package.json（免构建纯 ESM 不变量）、按形态的最小可跑入口、`cordis.patch.yml` 挂载条目、`dsh-plugin.naming.json` 命名投影（collision-resistant 规则全量推导，生成物已过上游 validate-names 的 `--strict` 校验）。tool/hook 两形态零依赖当场冒烟（生成即验证注册）；service/config/llm-adapter 依赖宿主 `@deepseek-ai/*` 基类，诚实跳过并标注装包后手动跑。目标目录非空即拒绝，非法 coordinate 在写盘前拒绝。
+
+骨架只保证结构与命名合规，能力实现仍以 [plugin-write](https://github.com/oh-my-dsh/dsh-plugin-upgrade-skill/tree/main/skills/plugin-write) 的五份 form reference 为契约真源。
+
 ## 依赖
 
 零外部依赖。只用 Node 内置模块（`node:fs`、`node:path`、`node:os`、`node:child_process`），加 `git` 和 `npm` 命令。
@@ -102,15 +112,16 @@ git clone https://github.com/taxueseek/plugin-fast-adapt.git
 自检：
 
 ```sh
-npm test   # node scripts/self-test.mjs，65 项断言
+npm test   # node scripts/self-test.mjs，73 项断言
 ```
 
-覆盖扫描器不误报（注释和字符串里的同名词不算命中）、不漏报、版本启发式、替换对识别、端到端命中、SOP 引用完整性、dist-tags 缓存三态、冒烟验证、四维审计、启用诊断、扫描性能回归门。零网络、零外部依赖，任何机器上都能跑。
+覆盖扫描器不误报（注释和字符串里的同名词不算命中）、不漏报、版本启发式、替换对识别、端到端命中、SOP 引用完整性、dist-tags 缓存三态、冒烟验证、四维审计、启用诊断、创作脚手架（五形态生成、命名投影语法、冒烟闭环、挂载层可识别、非法输入与非空目录拒绝）、扫描性能回归门。零网络、零外部依赖，任何机器上都能跑。
 
 ## 脚本
 
 | 脚本 | 职责 |
 | --- | --- |
+| `scripts/scaffold.mjs` | 从零造插件：一条命令生成五形态可冒烟骨架（package.json 不变量＋形态入口＋挂载层＋命名投影），生成即验证 |
 | `scripts/env-doctor.mjs` | 探测本机 DSH 环境（版本、覆盖层、插件、进程、启用就绪度） |
 | `scripts/env-heal.mjs` | 覆盖层旧包自愈（默认 dry-run） |
 | `scripts/guide-sync.mjs` | 定目标版本 + 取官方升级指南（dist-tags 带 1 小时缓存，失败降级旧缓存） |
