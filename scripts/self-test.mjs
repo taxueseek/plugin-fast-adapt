@@ -14,15 +14,17 @@ import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { scanSource, compareVersions, parseVersion, satisfiesRange } from './lib/scanner.mjs'
 import { parseGuideMarkdown, extractAnchors, listGuideVersions } from './lib/guide-parser.mjs'
-import { resolveTargetVersion, fetchNpmMetadata } from './guide-sync.mjs'
-import { anchorMatches, verifyPackagesAgainstHost } from './code-scan.mjs'
+import { resolveTargetVersion, fetchNpmMetadata, runGuideSync, guideVersionFor } from './guide-sync.mjs'
+import { anchorMatches, verifyPackagesAgainstHost, pickScanRoots } from './code-scan.mjs'
 import { runQuickSmoke } from './quick-smoke.mjs'
-import { auditPlugin } from './plugin-audit.mjs'
+import { auditPlugin, peerPatchFor } from './plugin-audit.mjs'
 import { extractInjects, diagnoseActivation, candidateGlobalRoots, parsePatchEntries, probeEnvironment } from './env-doctor.mjs'
 import { readClientDecl, clientExportPath, overlayMountedNames, isDeliberateRosterInsert, collectRoster, diagnoseClientHalf } from './lib/client-graph.mjs'
 import { scaffoldPlugin, projectNames, detectHarnessVersion, UsageError } from './scaffold.mjs'
 import { runWriteGate } from './write-gate.mjs'
 import { listRuns, sanitizeRun } from './lib/runlog.mjs'
+import { parseStartupLog, parseMessages, diagnoseLogs } from './log-doctor.mjs'
+import { checkSkillSync, syncSkill } from './sync-skill.mjs'
 
 const SCRIPTS = path.dirname(fileURLToPath(import.meta.url))
 
@@ -886,15 +888,30 @@ test('quick-smoke：入口缺失报 entry_resolution 且建议构建', async () 
   assert.match(result.error, /构建/)
 })
 
-test('quick-smoke：Mock 没有的属性走兜底并被披露', async () => {
+test('quick-smoke：未声明 inject 的宿主服务按真契约报错（不再静默兜底）', async () => {
   const dir = tmpPluginDir('fallback')
   fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 't-fb', version: '1.0.0', main: 'lib/index.js', type: 'module' }))
   fs.mkdirSync(path.join(dir, 'lib'), { recursive: true })
   fs.writeFileSync(path.join(dir, 'lib', 'index.js'),
     `export function apply(ctx) { ctx.mysteryService.doThing() }\n`)
   const result = await runQuickSmoke(dir)
-  assert.ok(result.success)
-  assert.ok(result.mockFallbacks.includes('mysteryService'), `兜底属性应被披露: ${JSON.stringify(result.mockFallbacks)}`)
+  assert.ok(!result.success, '未声明 inject 的属性访问必须失败')
+  assert.strictEqual(result.stage, 'inject_contract')
+  assert.match(result.error, /without inject/)
+  assert.deepStrictEqual(result.undeclaredInjectAccess, ['mysteryService'])
+})
+
+test('quick-smoke：声明了 inject 但 Mock 未提供的服务走兜底并披露（Mock 缺口非插件错）', async () => {
+  const dir = tmpPluginDir('fallback-declared')
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 't-fb2', version: '1.0.0', main: 'lib/index.js', type: 'module' }))
+  fs.mkdirSync(path.join(dir, 'lib'), { recursive: true })
+  fs.writeFileSync(path.join(dir, 'lib', 'index.js'),
+    `export const inject = ['tools', 'webServer']\nexport function apply(ctx) { ctx.tools.register({ name: 't_tool' }); ctx.webServer.register({}) }\n`)
+  const result = await runQuickSmoke(dir)
+  assert.ok(result.success, `声明 inject 的插件不该因 Mock 缺口失败: ${result.error || ''}`)
+  assert.ok(result.mockFallbacks.includes('webServer'), `Mock 缺口应被披露: ${JSON.stringify(result.mockFallbacks)}`)
+  assert.deepStrictEqual(result.undeclaredInjectAccess, [])
+  assert.deepStrictEqual(result.registeredTools, ['t_tool'])
 })
 
 // ── plugin-audit：四维体检 + 新版本感知 ──────────────────────────────────────
@@ -995,6 +1012,189 @@ test('audit：描述漂移——宿主零命中的路径约定报 INFO，CSS 类
   assert.strictEqual(drift.length, 1, '只报路径形约定，CSS 类名不进')
   assert.ok(/\.dsh-filess/.test(drift[0].title))
   assert.strictEqual(drift[0].severity, 'INFO')
+})
+
+test('code-scan：pickScanRoots 源码根并集，构建产物不重复扫', () => {
+  const dir = tmpPluginDir('roots')
+  fs.mkdirSync(path.join(dir, 'src', 'client'), { recursive: true })
+  fs.mkdirSync(path.join(dir, 'client'), { recursive: true })
+  fs.mkdirSync(path.join(dir, 'web'), { recursive: true })
+  fs.mkdirSync(path.join(dir, 'lib'), { recursive: true })
+  fs.mkdirSync(path.join(dir, 'dist'), { recursive: true })
+  // src 存在时 lib/dist 不扫：它们是构建产物，与 src 同义，同处命中会按两份文件重复报
+  assert.deepStrictEqual(pickScanRoots(dir).map((r) => path.relative(dir, r)).sort(), ['client', 'src', 'web'])
+
+  // 无源码根 → 退回构建产物（无 src 的纯构建插件）
+  const buildOnly = tmpPluginDir('roots-build')
+  fs.mkdirSync(path.join(buildOnly, 'lib'), { recursive: true })
+  fs.mkdirSync(path.join(buildOnly, 'dist'), { recursive: true })
+  assert.deepStrictEqual(pickScanRoots(buildOnly).map((r) => path.relative(buildOnly, r)).sort(), ['dist', 'lib'])
+
+  // 什么都没有 → 全仓
+  const empty = tmpPluginDir('roots-empty')
+  assert.deepStrictEqual(pickScanRoots(empty), [empty])
+})
+
+test('guide-sync：guideVersionFor 优先目标版本，空目标退回本机版本', () => {
+  assert.strictEqual(guideVersionFor({ target: '0.2.1-rc.4' }, '0.2.1-rc.3', { latest: '0.2.1-rc.2' }), '0.2.1-rc.4')
+  assert.strictEqual(guideVersionFor({ target: null }, '0.2.1-rc.3', { latest: '0.2.1-rc.2' }), '0.2.1-rc.3')
+  assert.strictEqual(guideVersionFor({ target: null }, null, { latest: '0.2.1-rc.2' }), '0.2.1-rc.2')
+  assert.strictEqual(guideVersionFor({ target: null }, null, {}), null)
+})
+
+test('guide-sync：本机已是通道最新版时仍取本机版本当取版锚点（扫描走廊不空窗）', async () => {
+  const localClone = tmpPluginDir('guide-local')
+  fs.mkdirSync(path.join(localClone, 'docs', 'upgrade-guide', 'v0.2.1-rc.2'), { recursive: true })
+  fs.writeFileSync(path.join(localClone, 'docs', 'upgrade-guide', 'v0.2.1-rc.2', 'x.md'), '# x\n')
+  const distTags = { latest: '0.2.1-rc.2', next: '0.2.1-rc.3', alpha: '0.2.1-alpha.5' }
+  const fetcher = async () => ({ ok: true, json: async () => distTags })
+  const result = await runGuideSync('0.2.1-rc.3', { fetcher, localClone })
+  assert.strictEqual(result.resolution.verdict, 'up-to-date-on-channel')
+  assert.strictEqual(result.resolution.target, null)
+  assert.strictEqual(result.guideVersion, '0.2.1-rc.3', 'target 为空时取版锚点应退回本机版本')
+  assert.ok(result.guides.root, '应取到指南语料（本机 clone 或缓存）')
+})
+
+// ── log-doctor：宿主日志一键诊断 ─────────────────────────────────────────────
+
+// 真实 startup 日志的头部形状（宿主写的 JS 字面量，非 JSON）：标量字段 + 多行 error 块 + 消息数组。
+const STARTUP_LOG = `WARNING: Raw diagnostics may contain configuration or credential values from plugin errors. Review before sharing.
+
+{
+  timestamp: '2026-10-18T00:50:16.684Z',
+  dshVersion: '0.2.1-rc.2',
+  nodeVersion: 'v26.5.0',
+  platform: 'darwin',
+  arch: 'arm64',
+  profile: 'web',
+  error: StartupError: dsh: startup failed: 2 required plugins did not activate
+
+  Failed plugins (1):
+    webserver (required)
+      Package: @deepseek-ai/dsh-host-webserver
+      Error: listen EADDRINUSE: address already in use 127.0.0.1:3080
+          at Server.setupListenHandle [as _listen2] (node:net:2167:16)
+
+  Plugins waiting for services (2):
+    Plugin                  Missing services
+    web-runtime (required)  webServer
+    open-in-app             webServer
+      at auditStartupEntries (file:///x.js:1:1)
+      ... 3 lines matching cause stack trace"
+      at async file:///bin.js:252:23 {
+    [stack]: [Getter/Setter],
+    [message]: 'dsh: startup failed: 2 required plugins did not activate\n'
+  },
+  [startup]: {
+    configurationPath: '/home/u/.dsh/profiles/web/cordis.yml',
+    messages: [
+      {
+        ts: 1792284613224,
+        name: 'root',
+        type: 'warn',
+        args: [ 'patch: entry "dsh-edit-approval" not found', [length]: 1 ]
+      },
+      {
+        ts: 1792284615562,
+        name: 'web-server',
+        type: 'error',
+        args: [
+          Error: listen EADDRINUSE: address already in use 127.0.0.1:3080
+              at Server.setupListenHandle [as _listen2] (node:net:2167:16) {
+            [stack]: [Getter/Setter],
+            [message]: 'listen EADDRINUSE: address already in use 127.0.0.1:3080'
+          },
+          [length]: 1
+        ]
+      },
+      {
+        ts: 1792284615909,
+        name: 'llm-verifier',
+        type: 'warn',
+        args: [ 'failed to register /llm-verifier rpc fallback: Error: cannot get property "webServer" without inject', [length]: 1 ]
+      }
+    ]
+  }
+}`
+
+test('log-doctor：解析 startup 日志的元信息、失败插件、等待服务与信号', () => {
+  const parsed = parseStartupLog(STARTUP_LOG)
+  assert.strictEqual(parsed.meta.dshVersion, '0.2.1-rc.2')
+  assert.strictEqual(parsed.meta.profile, 'web')
+  assert.strictEqual(parsed.failedPlugins.length, 1)
+  assert.strictEqual(parsed.failedPlugins[0].plugin, 'webserver')
+  assert.strictEqual(parsed.failedPlugins[0].package, '@deepseek-ai/dsh-host-webserver')
+  assert.match(parsed.failedPlugins[0].error, /EADDRINUSE/)
+  assert.strictEqual(parsed.waitingForServices.length, 2)
+  assert.deepStrictEqual(parsed.waitingForServices[0], { plugin: 'web-runtime', required: true, missing: 'webServer' })
+  assert.strictEqual(parsed.messages.length, 3)
+  assert.strictEqual(parsed.messages[1].name, 'web-server')
+  assert.strictEqual(parsed.messages[1].type, 'error')
+  const ids = parsed.signals.map((s) => s.id)
+  assert.ok(ids.includes('port-in-use'), `应命中端口占用信号: ${JSON.stringify(ids)}`)
+  assert.ok(ids.includes('undeclared-inject'), `应命中未声明 inject 信号: ${JSON.stringify(ids)}`)
+  assert.ok(ids.includes('patch-entry-not-found'), `应命中 patch 死条目信号: ${JSON.stringify(ids)}`)
+})
+
+test('log-doctor：跨文件汇总信号并按根因给出结论', () => {
+  const dir = tmpPluginDir('logs')
+  fs.writeFileSync(path.join(dir, 'startup-2026-10-18T00-50-16.684Z-x.log'), STARTUP_LOG)
+  fs.writeFileSync(path.join(dir, 'startup-2026-10-17T13-38-21.159Z-y.log'), STARTUP_LOG.replace('0.2.1-rc.2', '0.2.1-rc.1'))
+  const report = diagnoseLogs({ logsDir: dir, limit: 10 })
+  assert.strictEqual(report.scanned, 2)
+  assert.strictEqual(report.verdict, 'host-failure')
+  const port = report.signalSummary.find((s) => s.id === 'port-in-use')
+  assert.ok(port && port.count === 2, `端口占用应跨两份日志各计一次: ${JSON.stringify(report.signalSummary)}`)
+  assert.ok(port.action, '信号应带可执行动作')
+})
+
+test('log-doctor：parseMessages 容忍 [length] 伪数组标记，不吞掉后续消息', () => {
+  const msgs = parseMessages(STARTUP_LOG)
+  assert.strictEqual(msgs.length, 3, '应解析出 3 条消息')
+  assert.strictEqual(msgs[0].name, 'root')
+  assert.deepStrictEqual(msgs[0].args, [`'patch: entry "dsh-edit-approval" not found',`])
+  assert.strictEqual(msgs[2].name, 'llm-verifier')
+})
+
+test('audit：peerPatchFor 只给宿主包生成已验证替换，不碰同 scope 的库', () => {
+  const pkg = {
+    peerDependencies: {
+      '@deepseek-ai/dsh': '^0.1.0-rc.6 || ^0.2.0-rc.1',
+      '@deepseek-ai/dsh-tools': '*',
+      '@deepseek-ai/schemastery': '^3.18.1',
+    },
+  }
+  // schemastery 是同 scope 的库，有自己的版本线，不该被宿主版本套出 ^0.2.1-rc.3
+  assert.deepStrictEqual(peerPatchFor(pkg, '0.2.1-rc.3'), [
+    { package: '@deepseek-ai/dsh', from: '^0.1.0-rc.6 || ^0.2.0-rc.1', to: '^0.2.1-rc.3', verified: true },
+  ])
+  // 已覆盖目标的范围不进修补
+  assert.deepStrictEqual(peerPatchFor({ peerDependencies: { '@deepseek-ai/dsh': '^0.2.1-rc.1' } }, '0.2.1-rc.3'), [])
+  // 拿不到目标版本 → 不生成（不伪造结论）
+  assert.deepStrictEqual(peerPatchFor(pkg, null), [])
+})
+
+test('sync-skill：--check 报告缺失与漂移，同步后归零', () => {
+  const src = tmpPluginDir('sync-src')
+  fs.mkdirSync(path.join(src, 'scripts', 'lib'), { recursive: true })
+  fs.mkdirSync(path.join(src, 'references'), { recursive: true })
+  fs.writeFileSync(path.join(src, 'SKILL.md'), '# skill\n')
+  fs.writeFileSync(path.join(src, 'scripts', 'run.mjs'), '// run\n')
+  fs.writeFileSync(path.join(src, 'scripts', 'lib', 'x.mjs'), '// x\n')
+  fs.writeFileSync(path.join(src, 'references', 'h.md'), '# h\n')
+
+  const dest = tmpPluginDir('sync-dest')
+  const before = checkSkillSync({ srcRoot: src, destRoot: dest })
+  assert.strictEqual(before.missing.length, 4, '初始目标为空应全缺失')
+  assert.strictEqual(before.clean, false)
+
+  const written = syncSkill({ srcRoot: src, destRoot: dest })
+  assert.strictEqual(written.written.length, 4)
+  assert.strictEqual(checkSkillSync({ srcRoot: src, destRoot: dest }).clean, true, '同步后应无漂移')
+
+  fs.writeFileSync(path.join(dest, 'SKILL.md'), '# changed\n')
+  const drifted = checkSkillSync({ srcRoot: src, destRoot: dest })
+  assert.deepStrictEqual(drifted.differing, ['SKILL.md'], '改过的文件应报内容漂移')
 })
 
 test('code-scan：宿主实测核查——包还在降级 info，包没了维持 critical，探不到标 unknown', () => {

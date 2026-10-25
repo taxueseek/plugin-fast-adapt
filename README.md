@@ -29,7 +29,7 @@ DSH 插件适配与破坏性变更核查，兼从零造插件脚手架。查官�
 | 弱模型表现 | 全套卡片进上下文，-3.07 pp | 六个独立脚本，每步只产出一份小输出 |
 | 代码级扫描 | 无 | 锚点匹配 + 四层降噪（见下文实测） |
 | 依赖 | — | 零外部依赖：Node 内置模块 + `git`/`npm` 命令 |
-| 自检 | — | 93 项断言，零网络，任何机器能跑 |
+| 自检 | — | 102 项断言，零网络，任何机器能跑 |
 
 ## 六步流程
 
@@ -68,11 +68,19 @@ node scripts/env-heal.mjs --apply   # 移动到 ~/.dsh/.trash/<日期>/，不删
 
 ```sh
 # 5. 修完秒验：内存级 Cordis 冒烟，验证模块加载、apply 契约、工具注册
+#    未声明 inject 的宿主服务访问会被拦（真 Cordis 同形契约错）
 node scripts/quick-smoke.mjs <插件目录>
 
 # 6. 升级时顺带做四维体检：性能、弹性、上下文预算、生命周期
 node scripts/plugin-audit.mjs <插件目录>
 node scripts/plugin-audit.mjs <插件目录> --guide <guide-root> <本机版本> <目标版本>
+node scripts/plugin-audit.mjs <插件目录> --guide <guide-root> <本机版本> <目标版本> --peer-patch  # 打印已验证的 peer 修补
+
+# 7. 宿主启动失败一键诊断：StartupError / 端口占用 / 未声明 inject / 客户端入口死链
+node scripts/log-doctor.mjs --pattern '^startup-' --limit 5
+
+# 8. 把技能面同步到下游技能目录（--check 只查漂移）
+node scripts/sync-skill.mjs --dest <下游技能目录> --check
 ```
 
 ## 扫描精度：从 12 处误报到 0
@@ -85,7 +93,7 @@ node scripts/plugin-audit.mjs <插件目录> --guide <guide-root> <本机版本>
 - 常量锚点只从 `Change` 段抽；匹配时要求对象部分互为后缀，`engines.dsh` 不会撞 `result.dsh`
 - 包名词义门：包名只在与移除/改名动词同句时才成为锚点，语境引用（「The mode fields of X accept only …」讲字段取值）不算——实测 dsh-files 的 3 处 critical 全是这类误报，加门后归零
 
-命中带 `severity`（package=critical、member=high、code=medium，先修排前面的）和 `evidence`（命中行原文，核对误报不用开文件）。规则与实测依据见 [references/heuristics.md](references/heuristics.md)。冒烟验证会披露 Mock 兜底：输出里的 `mockFallbacks` 列出插件摸到但 Mock 没提供的属性，这个列表越长，冒烟结果可信度越低——**冒烟通过 ≠ 宿主兼容**，这句话写在输出里，不只写在文档里。
+命中带 `severity`（package=critical、member=high、code=medium，先修排前面的）和 `evidence`（命中行原文，核对误报不用开文件）。规则与实测依据见 [references/heuristics.md](references/heuristics.md)。扫描根取源码根并集（`src` 与同级 `client`/`web`/`ui`），`lib`/`dist` 构建产物不重复扫。冒烟验证会披露 Mock 兜底：输出里的 `mockFallbacks` 列出插件摸到但 Mock 没提供的属性，这个列表越长，冒烟结果可信度越低——**冒烟通过 ≠ 宿主兼容**，这句话写在输出里，不只写在文档里。冒烟还按真 Cordis 契约拦未声明 `inject` 的宿主服务访问（`inject_contract` 阶段），不再让「装载即崩」的代码静默通过。
 
 ## 安装
 
@@ -128,10 +136,10 @@ node scripts/write-gate.mjs <插件目录>   # 出生证：硬门禁自动判，
 自检：
 
 ```sh
-npm test   # node scripts/self-test.mjs，93 项断言
+npm test   # node scripts/self-test.mjs，102 项断言
 ```
 
-覆盖扫描器不误报（注释和字符串里的同名词不算命中）、不漏报、版本启发式、替换对识别、端到端命中、SOP 引用完整性、dist-tags 缓存三态、冒烟验证、四维审计、启用诊断、创作脚手架（五形态生成、命名投影语法、冒烟闭环、挂载层可识别、非法输入与非空目录拒绝）、创作体检门（硬门禁拦截、软指标不越权判红、跳过语义、scaffold 衔接）、扫描性能回归门。零网络、零外部依赖，任何机器上都能跑。
+覆盖扫描器不误报（注释和字符串里的同名词不算命中）、不漏报、版本启发式、替换对识别、端到端命中、SOP 引用完整性、dist-tags 缓存三态、冒烟验证（含未声明 inject 契约拦截）、四维审计（含 peer 修补）、启用诊断、创作脚手架（五形态生成、命名投影语法、冒烟闭环、挂载层可识别、非法输入与非空目录拒绝）、创作体检门（硬门禁拦截、软指标不越权判红、跳过语义、scaffold 衔接）、日志诊断、下游同步漂移检查、扫描性能回归门。零网络、零外部依赖，任何机器上都能跑。
 
 ## 脚本
 
@@ -146,7 +154,9 @@ npm test   # node scripts/self-test.mjs，93 项断言
 | `scripts/guide-sync.mjs` | 定目标版本 + 取官方升级指南（dist-tags 带 1 小时缓存，失败降级旧缓存） |
 | `scripts/code-scan.mjs` | 扫描插件代码，匹配官方变更锚点 |
 | `scripts/quick-smoke.mjs` | 修完秒验（内存级 Cordis 冒烟，含 Mock 兜底披露） |
-| `scripts/plugin-audit.mjs` | 四维性能架构体检，可叠加官方指南交叉 |
+| `scripts/plugin-audit.mjs` | 四维性能架构体检，可叠加官方指南交叉；`--peer-patch` 打印已验证的 peer 修补建议 |
+| `scripts/log-doctor.mjs` | 一键解析 `~/.dsh/logs/` 的宿主故障（startup 头部/失败插件/等待服务/信号汇总） |
+| `scripts/sync-skill.mjs` | 把技能面同步到下游技能目录，`--check` 查漂移 |
 | `scripts/self-test.mjs` | 自检 |
 | `scripts/lib/scanner.mjs` | 词法扫描器、版本比较与 semver 范围判定（零依赖） |
 | `scripts/lib/guide-parser.mjs` | 官方指南解析与锚点抽取（含移除动词语义门） |
@@ -156,10 +166,11 @@ npm test   # node scripts/self-test.mjs，93 项断言
 
 ## 安全姿态
 
-- `env-doctor`、`code-scan`、`plugin-audit` 完全只读
+- `env-doctor`、`code-scan`、`plugin-audit`、`log-doctor` 完全只读
 - `env-heal` 默认 dry-run，真动手也是移动不删除（进 `~/.dsh/.trash/<日期>/`）
+- `sync-skill` 显式写下游技能目录，只复制固定技能面（`SKILL.md`/`README*`/`references`/`scripts`），`--check`/`--dry-run` 供先确认
 - 不改 DSH 本体，不动 `~/.dsh` 下的配置和 profile 声明
-- 不自动改插件代码，只报命中和官方修法
+- 不自动改插件代码，只报命中和官方修法；`--peer-patch` 也只打印建议
 - 网络只在 `--clone` 时用，都有超时，失败明确报错而不是静默跳过
 
 ## 老插件怎么办

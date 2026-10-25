@@ -8,11 +8,32 @@
 // 真实 Cordis 的服务解析、依赖注入、生命周期全部不参与。
 // 真冷启动验证用姊妹 skill 的 verify-runtime.mjs（隔离 profile 全链路）。
 // 走 Proxy 兜底的属性会被记录进 mockFallbacks——它越多，本次结果可信度越低。
+//
+// 契约校验（2026-10-25 实测复盘）：Mock 此前对任何未知属性都返回兜底代理，
+// 于是插件访问未声明 inject 的宿主服务（真 Cordis 直接抛
+// `cannot get property "X" without inject`，装载即崩）时冒烟静默通过——
+// 这正是历史 startup 日志里 `failed to register /llm-verifier rpc fallback:
+// cannot get property "webServer" without inject` 那一类事故。现在按真契约判：
+//   声明了 inject 的服务 Mock 没提供 → 兜底并披露（Mock 缺口，不是插件的错）
+//   未声明的非内建属性         → 抛契约错（与真宿主同形，不再静默）
 
 import fs from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { printJson } from './lib/scanner.mjs'
+
+// Cordis 内建 mixin 属性（ReflectService 构造时混入 ctx，无需 inject）：
+// reflect.get/set/provide/accessor/mixin、fiber.runtime/effect、registry.inject/plugin、
+// events.on/once/parallel/emit/serial/bail/waterfall，外加 logger 与宿主注入的 scope。
+// 判据取自 cordis/lib/index.js 的 ReflectService 构造与 LoggerService 装配（非臆造）。
+// 这些面 Mock 未全真实现，但绝不能因「未声明 inject」误伤——它们本来就不需要 inject。
+const BUILTIN_PROPS = new Set([
+  'logger', 'scope',
+  'get', 'set', 'provide', 'accessor', 'mixin',
+  'runtime', 'inject', 'plugin',
+  'on', 'once', 'emit',
+  'reflect', 'fiber', 'registry', 'events',
+])
 
 class MockContext {
   constructor() {
@@ -22,6 +43,7 @@ class MockContext {
     this.injectedList = []
     // 走 Proxy 兜底的属性名：插件摸到了 Mock 没有的宿主面，结果可信度要打折
     this.fallbackProps = new Set()
+    this._injectCache = null
 
     this.provide('logger', {
       info: () => {},
@@ -63,11 +85,10 @@ class MockContext {
 
     return new Proxy(this, {
       get: (target, prop, receiver) => {
-        if (prop in target) return Reflect.get(target, prop, receiver)
         if (typeof prop === 'symbol') return Reflect.get(target, prop, receiver)
-        if (target.services.has(prop)) return target.services.get(prop)
-        if (target.fallbackProps) target.fallbackProps.add(String(prop))
+        // effect 与事件方法：内建 mixin，无需 inject（target 上没有真身，按需造）
         if (prop === 'effect') {
+          target.fallbackProps.add(String(prop))
           return (cb) => {
             if (typeof cb === 'function') {
               try { return cb() } catch {}
@@ -75,11 +96,43 @@ class MockContext {
           }
         }
         if (['bail', 'waterfall', 'serial', 'parallel'].includes(prop)) {
+          target.fallbackProps.add(String(prop))
           return (event, ...args) => target.emit(event, ...args)
         }
-        return makeFallback()
+        // 内建 mixin 面：真 Cordis 无需 inject 即可访问。Mock 未全真实现的面照旧兜底，
+        // 不在这里造契约错（否则 dsh-ops 的 ctx.inject(...) 会以 not a function 假失败）。
+        if (BUILTIN_PROPS.has(prop)) {
+          if (prop in target) return Reflect.get(target, prop, receiver)
+          target.fallbackProps.add(String(prop))
+          return makeFallback()
+        }
+        // 宿主服务：真 Cordis 下未声明 inject 就是不可捕获的装载崩溃
+        if (target.services.has(prop)) {
+          if (!target.declaredInjects().has(prop)) {
+            throw new Error(`cannot get property "${prop}" without inject (Cordis contract violation)`)
+          }
+          return target.services.get(prop)
+        }
+        if (prop in target) return Reflect.get(target, prop, receiver)
+        // 声明了 inject 但 Mock 没提供 → 披露 Mock 缺口（插件声明是对的）
+        if (target.declaredInjects().has(prop)) {
+          target.fallbackProps.add(String(prop))
+          return makeFallback()
+        }
+        // 未声明的非内建属性：真 Cordis 抛 "without inject"，Mock 不再静默兜底
+        target.fallbackProps.add(String(prop))
+        throw new Error(`cannot get property "${prop}" without inject (Cordis contract violation)`)
       },
     })
+  }
+
+  // 声明的 inject 名单（懒缓存，injectedList 在构造后才由入口模块填）
+  declaredInjects() {
+    const list = this.injectedList
+    if (this._injectCache?.list !== list) {
+      this._injectCache = { list, set: new Set(Array.isArray(list) ? list : []) }
+    }
+    return this._injectCache.set
   }
 
   provide(name, value) {
@@ -171,16 +224,21 @@ export async function runQuickSmoke(pluginRoot) {
       registeredTools: registered.map((t) => t.name).filter(Boolean),
       // 兜底属性越多，Mock 与真实宿主的差距越大，结果越只能当「不崩」证据
       mockFallbacks: Array.from(ctx.fallbackProps).sort(),
+      // 未声明 inject 的宿主面访问：与真 Cordis 同形的契约错（为空即无此类问题）
+      undeclaredInjectAccess: [],
       caveat: '冒烟通过 ≠ 宿主兼容；真冷启动验证用 plugin-upgrade 的 verify-runtime.mjs',
     }
   } catch (err) {
+    const message = err?.message || String(err)
+    const isInjectContract = /without inject/.test(message)
     return {
       success: false,
-      stage: 'runtime_execution',
-      error: err.stack || err.message,
+      stage: isInjectContract ? 'inject_contract' : 'runtime_execution',
+      error: err.stack || message,
       pkgName: pkg.name,
       version: pkg.version,
       entry: entryFile,
+      undeclaredInjectAccess: isInjectContract ? [message.match(/"([^"]+)" without inject/)?.[1]].filter(Boolean) : [],
     }
   }
 }

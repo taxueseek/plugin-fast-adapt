@@ -1,6 +1,6 @@
 ---
 name: plugin-fast-adapt
-description: DSH 插件适配与破坏性变更核查，兼造插件脚手架与性能架构审计。run.mjs 一键编排全流程并把每次运行写进本地日志（list 回看、sanitize 脱敏后才能外发）；查 DeepSeek 官方最新版本，取该版本的官方升级指南，扫描本机插件代码（package 命中自动到目标宿主 node_modules 实测核查），报出哪些地方踩了破坏性变更并给出官方修法；scaffold 一条命令生成五形态可冒烟的插件骨架（package.json 不变量＋形态入口＋挂载层＋命名投影，生成即验证）；同时巡检本机 DSH 环境（profiles 覆盖层旧包残留、已装插件、运行中宿主、宿主半与客户端半双面启用就绪度——dsh.client 声明/产物/注入名册死链，web 端与桌面端一视同仁）。修完可秒级冒烟验证，升级时可顺带做插件性能与架构审计。老版本插件（官方指南覆盖不到 v0.1.7-rc.2 之前的走廊）转迁移 SOP，对照原仓库 plugin-upgrade 的人工卡片走廊走七阶段流程。当需要把 DSH 插件适配到新版本或老版本、从零创建 DSH 插件、给新插件生成起步骨架、排查升级后插件报错、核查插件是否用了已移除的包或 API、检查 ~/.dsh 覆盖层有无旧包残留、给插件做性能与架构体检时使用。触发词：适配 DSH 插件、升级插件、插件不兼容、dsh 升级后报错、插件用了废弃 API、检查覆盖层旧包、客户端卡 loading、entry did not activate、web boot 失败、注入死链、老版本 DSH 适配、历史走廊迁移、创建 DSH 插件、写 DSH 插件、插件脚手架、插件冒烟测试、插件性能审计、插件装了没生效。
+description: DSH 插件适配与破坏性变更核查，兼造插件脚手架与性能架构审计。run.mjs 一键编排全流程并把每次运行写进本地日志（list 回看、sanitize 脱敏后才能外发）；查 DeepSeek 官方最新版本，取该版本的官方升级指南，扫描本机插件代码（package 命中自动到目标宿主 node_modules 实测核查），报出哪些地方踩了破坏性变更并给出官方修法；scaffold 一条命令生成五形态可冒烟的插件骨架（package.json 不变量＋形态入口＋挂载层＋命名投影，生成即验证）；同时巡检本机 DSH 环境（profiles 覆盖层旧包残留、已装插件、运行中宿主、宿主半与客户端半双面启用就绪度——dsh.client 声明/产物/注入名册死链，web 端与桌面端一视同仁）。修完可秒级冒烟验证，升级时可顺带做插件性能与架构审计。老版本插件（官方指南覆盖不到 v0.1.7-rc.2 之前的走廊）转迁移 SOP，对照原仓库 plugin-upgrade 的人工卡片走廊走七阶段流程。当需要把 DSH 插件适配到新版本或老版本、从零创建 DSH 插件、给新插件生成起步骨架、排查升级后插件报错、核查插件是否用了已移除的包或 API、检查 ~/.dsh 覆盖层有无旧包残留、给插件做性能与架构体检、诊断宿主启动失败日志（端口占用/未声明 inject/客户端入口死链）、把独立仓的技能面同步到下游技能目录时使用。触发词：适配 DSH 插件、升级插件、插件不兼容、dsh 升级后报错、插件用了废弃 API、检查覆盖层旧包、客户端卡 loading、entry did not activate、web boot 失败、注入死链、老版本 DSH 适配、历史走廊迁移、创建 DSH 插件、写 DSH 插件、插件脚手架、插件冒烟测试、插件性能审计、插件装了没生效、宿主启动失败、StartupError、EADDRINUSE、日志诊断、下游同步、技能漂移。
 ---
 
 # plugin-fast-adapt
@@ -17,8 +17,10 @@ description: DSH 插件适配与破坏性变更核查，兼造插件脚手架与
 | 2 定版本 | `scripts/guide-sync.mjs` | 官方最新版本是什么？本机该不该跟？跟哪个？ |
 | 3 取差异 | `scripts/guide-sync.mjs --clone` | 本机到目标版本之间，官方列了哪些破坏性变更？ |
 | 4 查命中 | `scripts/code-scan.mjs` | 本机插件代码踩了其中哪几条？官方给的修法是什么？ |
-| 5 秒验（可选） | `scripts/quick-smoke.mjs` | 改完之后插件还能加载、apply、注册工具吗？ |
-| 6 体检（可选） | `scripts/plugin-audit.mjs` | 插件性能、弹性、上下文预算、生命周期得分如何？按新版本该做哪些优化？ |
+| 5 秒验（可选） | `scripts/quick-smoke.mjs` | 改完之后插件还能加载、apply、注册工具吗？未声明 inject 的宿主服务访问会被拦吗？ |
+| 6 体检（可选） | `scripts/plugin-audit.mjs` | 插件性能、弹性、上下文预算、生命周期得分如何？按新版本该做哪些优化？peer 该怎么改？ |
+| ★ 日志诊断 | `scripts/log-doctor.mjs` | `~/.dsh/logs/` 里宿主启动失败（端口占用/未声明 inject/客户端入口死链）的根因是什么？ |
+| ★ 下游同步 | `scripts/sync-skill.mjs` | 独立仓的技能面与下游技能目录有没有漂移？ |
 
 **不依赖任何人工维护的知识卡片。** 权威来源只有两处：npm registry 的版本信息，和 deepseek-harness 仓库的 `docs/upgrade-guide/`。所以上游发新版的那一刻，这个技能就自动跟上了，不存在「卡片滞后」的问题。
 
@@ -71,6 +73,8 @@ node scripts/guide-sync.mjs <本机版本> --clone
 
 优先复用本机已有的 harness clone（自动发现 `~/Documents/*/deepseek-harness`，或用 `DSH_HARNESS_CLONE` 指定），没有才 sparse clone 到 `~/.cache/dsh-plugin-fast-adapt/`。
 
+**取版锚点（2026-10-25 实测复盘）**：本机已是官方通道最新版时 `resolution.target` 为 `null`，旧实现因此拿不到指南语料、`run.mjs` 的 scan 阶段静默跳过（扫描走廊 `(peerFloor, hostVersion]` 明明有内容却报「无指南根或无窗口」）。现在取版锚点退回本机版本（`target || localVersion || dist-tags.latest`），走廊照常扫。
+
 ### 第三步：查插件踩了哪些变更
 
 ```sh
@@ -86,6 +90,8 @@ node scripts/code-scan.mjs <插件目录> <upgrade-guide 目录> <本机版本> 
 - `findingCount` / `guidesConsidered`：命中数与参考的指南条数
 
 命中分三类并带 `severity`：`package`（import 了已移除或已改名的包，critical，装载必炸）、`member`（调用了已移除的方法或字段，high，运行时炸）、`code`（字符串里出现已变更的错误码或事件名，medium，最可能撞同名）。findings 先按 severity 排再按文件行号；每条带 `evidence`（命中行原文）。包名锚点有语义门：只在与移除/改名动词同句时才成为锚点，语境引用不算。
+
+**扫描根（2026-10-25 实测复盘）**：`pickScanRoots` 取源码根并集——`src`（client/web 常嵌在 src 内部）与同级的 `client`/`web`/`ui` 一并扫；`lib`/`dist` 是构建产物、与 src 同义，只在没有任何源码根时才退回，否则同一处命中会按两份文件重复报。
 
 ### 一键编排与运行日志（run.mjs）
 
@@ -113,7 +119,14 @@ node scripts/quick-smoke.mjs <插件目录>
 
 纯内存模拟 Cordis 上下文，动态载入插件入口，毫秒到秒级验证：模块能加载、`apply` 契约能执行、工具能注册。改完代码后先跑它，挂了立刻回改，不用等真宿主冷启动。
 
-**边界**：冒烟通过 ≠ 宿主兼容。Mock 只覆盖 logger/tools/effect/on 等常见面；输出里的 `mockFallbacks` 列出了插件摸到但 Mock 没提供的属性——这个列表越长，本次结果可信度越低。真冷启动验证用原仓库 plugin-upgrade 的 `verify-runtime.mjs`。
+**边界**：冒烟通过 ≠ 宿主兼容。Mock 只覆盖 logger/tools/effect/on 等常见面；输出里的 `mockFallbacks` 列出了插件摸到但 Mock 没提供的属性（含内建 mixin 里 Mock 未全真实现的面）——这个列表越长，本次结果可信度越低。
+
+**契约校验（2026-10-25 实测复盘）**：此前 Mock 对任何未知属性都返回兜底代理，于是插件访问**未声明 `inject`** 的宿主服务（真 Cordis 直接抛 `cannot get property "X" without inject`，装载即崩）时冒烟静默通过——历史 startup 日志里 `failed to register /llm-verifier rpc fallback: cannot get property "webServer" without inject` 就是这一类。现在按真契约判：
+
+- 声明了 `inject` 的服务 Mock 没提供 → 兜底并披露（Mock 缺口，不是插件的错）；
+- 未声明的非内建属性 → 抛 `inject_contract` 阶段错（与真宿主同形）。
+
+判据取自 `cordis/lib/index.js` 的 ReflectService 构造与 LoggerService 装配，不是臆造。真冷启动验证仍用原仓库 plugin-upgrade 的 `verify-runtime.mjs`。
 
 ### 第六步（可选）：升级时顺带做性能与架构体检
 
@@ -125,6 +138,27 @@ node scripts/plugin-audit.mjs <插件目录> --guide <guide-root> <本机版本>
 四个维度从 100 分扣：性能（同步 I/O、无上限读取）、弹性（强依赖已移除包）、上下文预算（工具 Schema 体积）、生命周期（监听器与定时器清理）。检测走 scanner 状态机，注释和字符串里的同名词不算命中。三条 INFO 级提示不扣分：import type 引用已移除包（编译期风险非运行时）、peer 窗口按严格 semver 不含目标宿主（本生态 bundle 安装不强制 peer，是声明性约定；建议先经 satisfiesRange 自验证再输出）、工具描述里的宿主路径约定在宿主代码零命中（可能旧版约定已消亡，如 .dsh-filess，需人工确认）。
 
 带 `--guide` 时与 code-scan 同源交叉：package 命中先经宿主实测核查（包仍在目标宿主 → 降级 info 证伪；确实不存在 → HIGH 扣分附官方修法），命中清零前不建议先做性能优化。新版本引入的接缝（弱依赖 `ctx.get()` 替代强 import、peer 范围写法）就是「按新依赖做架构调整」的依据。
+
+**peer 修补建议**：对不含目标宿主的 peer 范围，`peerPatch` 给「与目标同三元组的 caret 线」替换写法，且每条都先用 `satisfiesRange` 自验证覆盖目标（验证不过的写法不给）。只对 `@deepseek-ai/dsh` 及其 `dsh-*` 套件子包生成——同 scope 的库（`@deepseek-ai/schemastery`、`@deepseek-ai/cordis`）有自己的版本线，拿宿主版本套它们的 peer 会给出错到离谱的建议。**只生成不自动改包**：改用户 `package.json` 是不可逆写，`--peer-patch` 打印后人工确认再落。
+
+## 宿主日志一键诊断（log-doctor）
+
+```sh
+node scripts/log-doctor.mjs [--logs <目录>] [--limit 5] [--pattern '^startup-']
+```
+
+宿主启动失败（`StartupError`、端口占用、未声明 inject、客户端入口死链）此前要人工逐个 grep `~/.dsh/logs/startup-*.log`，再从 300 多行的 JS 字面量里抠 `failedPlugins` 与 `waitingForServices`。本脚本把这条排障路径固化：解析每份 startup 日志的头部元信息与多行 error 块、消息数组（容忍宿主的 `[length]: N` 伪数组标记），抽取预置信号，汇总成按根因分组的诊断并给可执行动作。
+
+输出：`runs`（每份日志的 meta/failedPlugins/waitingForServices/signals）、`signalSummary`（按出现次数排序的信号 + 动作）、`verdict`（`clean`/`warnings`/`host-failure`）。非 startup 日志（maintain/env-sweeper/web-restart）只按全文扫信号。**边界**：日志是宿主写的 JS 字面量（非 JSON），只做行级启发式解析，解析不到的字段留 `null` 不猜；信号是文本命中，动作是「怎么确认/怎么修」的第一步，不替用户拍板。
+
+## 下游技能同步（sync-skill）
+
+```sh
+node scripts/sync-skill.mjs --dest <下游技能目录> --check   # 只查漂移（退出码 1 = 有漂移）
+node scripts/sync-skill.mjs --dest <下游技能目录>            # 同步
+```
+
+独立仓拆分后，`dsh-plugin-upgrade-skill/skills/plugin-fast-adapt` 留了一份静态副本；两份都是真文件时下游会静默滞后（2026-10-25 实测：主仓已加客户端半三层判定，下游还缺 `lib/client-graph.mjs`、`SKILL.md` 也旧），滞后副本被误跑时查不出新问题。同步面固定为技能读者真正会用的文件：`SKILL.md`、`README.md`、`README.en.md`、`references/**`、`scripts/**`（`package.json` 不入技能面）。`--check` 报缺失与内容漂移，`--dry-run` 只打印不落盘。
 
 ## 造插件：从零开始
 
@@ -175,7 +209,8 @@ node scripts/scaffold.mjs <namespace>/<name> --form tool|hook|service|config|llm
 - **`quick-smoke` 会执行插件代码**（动态 import 入口模块）。它只用于你自己的插件或审过的代码，不要对来路不明的目录跑。执行面限于 Node 进程内，但插件代码理论上能做任何 Node 能做的事。
 - **自愈默认 dry-run**。`env-heal` 不加 `--apply` 只报告；加了也是「移动」而不是删除，进 `~/.dsh/.trash/<日期>/`。
 - **不改 DSH 本体**。只读环境信息，不动 `~/.dsh` 下的配置和 profile 声明。
-- **不自动改插件代码**。只报命中和官方修法，改不改、怎么改由人决定。
+- **不自动改插件代码**。只报命中和官方修法，改不改、怎么改由人决定；`plugin-audit --peer-patch` 也只打印建议不写 `package.json`。
+- **`sync-skill` 显式写下游目录**，只复制固定技能面（`SKILL.md`/`README*`/`references`/`scripts`），`--check`/`--dry-run` 供先确认；改的是下游副本，不动主仓。
 - **网络只在 `--clone` 时用**。npm registry 和 git clone 都有超时，失败会明确报错而不是静默跳过；dist-tags 有 1 小时缓存，网络失败时降级用旧缓存并标 stale。
 - **日志只落本机**。run.mjs 的运行日志写在 `~/.cache/dsh-plugin-fast-adapt/runs/`，含本地路径与用户名，外发前必须 `run-log.mjs sanitize`。
 
@@ -185,7 +220,7 @@ node scripts/scaffold.mjs <namespace>/<name> --form tool|hook|service|config|llm
 npm test
 ```
 
-93 项断言，覆盖扫描器不误报（注释和字符串里的同名词不算命中）、不漏报、真实 semver 范围判定（prerelease tuple 规则，本轮与宿主自带 semver 对拍的 30 例锚点回归）、import type 区分、宿主实测核查分级、描述漂移检测、一键编排与运行日志（写入/索引/脱敏往返）、版本启发式、替换对识别、端到端命中、SOP 引用完整性、dist-tags 缓存三态、冒烟验证、四维审计、启用诊断（宿主半 Silent Pending＋客户端半三层判定：声明/产物/注入名册死链）、创作脚手架（五形态生成与冒烟闭环、命名投影语法、挂载层可识别、非法输入与非空目录拒绝）、创作体检门（硬门禁拦截、软指标不越权判红、跳过语义、scaffold 衔接）、跨平台模拟（Windows 根探测与缓存隔离）、文档断言数防漂移、扫描性能回归门。零网络、零外部依赖，任何机器上都能跑（Windows 分支已做模拟验证，真机待验）。
+102 项断言，覆盖扫描器不误报（注释和字符串里的同名词不算命中）、不漏报、真实 semver 范围判定（prerelease tuple 规则，本轮与宿主自带 semver 对拍的 30 例锚点回归）、import type 区分、宿主实测核查分级、描述漂移检测、一键编排与运行日志（写入/索引/脱敏往返）、版本启发式、替换对识别、端到端命中、SOP 引用完整性、dist-tags 缓存三态、冒烟验证（含未声明 inject 契约拦截与 Mock 缺口披露）、四维审计（含 peer 修补建议）、启用诊断（宿主半 Silent Pending＋客户端半三层判定：声明/产物/注入名册死链）、创作脚手架（五形态生成与冒烟闭环、命名投影语法、挂载层可识别、非法输入与非空目录拒绝）、创作体检门（硬门禁拦截、软指标不越权判红、跳过语义、scaffold 衔接）、日志诊断（startup 头部/失败插件/等待服务/信号/跨文件汇总）、下游同步漂移检查、跨平台模拟（Windows 根探测与缓存隔离）、文档断言数防漂移、扫描性能回归门。零网络、零外部依赖，任何机器上都能跑（Windows 分支已做模拟验证，真机待验）。
 
 ## 脚本清单
 
@@ -198,7 +233,9 @@ npm test
 | `scripts/guide-sync.mjs` | 定目标版本 + 取官方升级指南（dist-tags 带 1 小时缓存，失败降级旧缓存） |
 | `scripts/code-scan.mjs` | 扫描插件代码，匹配官方变更锚点 |
 | `scripts/quick-smoke.mjs` | 修完秒验（内存级 Cordis 冒烟，含 Mock 兜底披露） |
-| `scripts/plugin-audit.mjs` | 四维性能架构体检，可叠加官方指南交叉 |
+| `scripts/plugin-audit.mjs` | 四维性能架构体检，可叠加官方指南交叉；`--peer-patch` 打印已验证的 peer 修补建议 |
+| `scripts/log-doctor.mjs` | 一键解析 `~/.dsh/logs/` 的宿主故障（startup 头部/失败插件/等待服务/信号汇总） |
+| `scripts/sync-skill.mjs` | 把技能面同步到下游技能目录，`--check` 查漂移 |
 | `scripts/self-test.mjs` | 自检 |
 | `scripts/lib/scanner.mjs` | 词法扫描器与版本比较（零依赖） |
 | `scripts/lib/guide-parser.mjs` | 官方指南解析与锚点抽取（含移除动词语义门） |

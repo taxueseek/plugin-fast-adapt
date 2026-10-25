@@ -39,13 +39,17 @@ export function findSourceFiles(root, { maxDepth = 6 } = {}) {
   return out
 }
 
-// 优先扫 src/，没有再扫 lib/，都没有才全仓
+// 源码根并集：src 优先（client/web 常嵌在 src 内部），同级的 client/web/ui 一并扫。
+// lib/dist 是构建产物，与 src 同义——同时扫会把同一处命中按两份文件重复报，
+// 所以只在没有任何源码根时才退回构建产物（无 src 的纯构建插件）。
+const SOURCE_ROOTS = ['src', 'client', 'web', 'ui']
+const BUILD_ROOTS = ['lib', 'dist']
+
 export function pickScanRoots(pluginDir) {
-  const src = path.join(pluginDir, 'src')
-  if (fs.existsSync(src)) return [src]
-  const lib = path.join(pluginDir, 'lib')
-  if (fs.existsSync(lib)) return [lib]
-  return [pluginDir]
+  const sources = SOURCE_ROOTS.map((dir) => path.join(pluginDir, dir)).filter((full) => fs.existsSync(full))
+  if (sources.length > 0) return sources
+  const builds = BUILD_ROOTS.map((dir) => path.join(pluginDir, dir)).filter((full) => fs.existsSync(full))
+  return builds.length > 0 ? builds : [pluginDir]
 }
 
 // 锚点 a.b 是否匹配插件里的 x.y：

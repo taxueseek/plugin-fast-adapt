@@ -58,6 +58,32 @@ function getHostLibText() {
   }
 }
 
+// 宿主版本线只跟随 @deepseek-ai/dsh 及其 dsh-* 套件子包；同 scope 的库
+// （@deepseek-ai/schemastery、@deepseek-ai/cordis）有自己的版本线，
+// 拿宿主版本去套它们的 peer 范围会给出「^0.2.1-rc.3」这种错到离谱的建议。
+const isDshHostPackage = (name) => name === '@deepseek-ai/dsh' || name.startsWith('@deepseek-ai/dsh-')
+
+// peer 修补建议：对每个不含目标宿主的 peer 范围，给出「与目标同三元组的 caret 线」
+// 替换写法，且必须先用 satisfiesRange 自验证覆盖目标——验证不过的写法不给
+// （旧版推荐的 ">=x.y.z-0" 全收写法就是被自家 tuple 规则证伪的）。
+// 只做「生成」，不自动改包：改用户 package.json 是不可逆写，留给用户确认后落。
+export function peerPatchFor(pkg, targetVersion) {
+  if (!targetVersion || !pkg?.peerDependencies) return []
+  const patches = []
+  for (const [name, range] of Object.entries(pkg.peerDependencies)) {
+    const r = String(range)
+    if (!isDshHostPackage(name) || r.includes('*')) continue
+    if (satisfiesRange(targetVersion, r)) continue
+    const pv = parseVersion(targetVersion)
+    const candidate = pv.pre
+      ? `^${pv.major}.${pv.minor}.${pv.patch}-${pv.pre}`
+      : `^${pv.major}.${pv.minor}.${pv.patch}`
+    if (!satisfiesRange(targetVersion, candidate)) continue
+    patches.push({ package: name, from: r, to: candidate, verified: true })
+  }
+  return patches
+}
+
 export function auditPlugin(pluginDir, { scanResult = null, targetVersion = null, hostLibText = undefined } = {}) {
   const root = path.resolve(pluginDir)
   const pkgPath = path.join(root, 'package.json')
@@ -224,7 +250,7 @@ export function auditPlugin(pluginDir, { scanResult = null, targetVersion = null
     let suggested = null
     for (const [name, range] of Object.entries(pkg.peerDependencies)) {
       const r = String(range)
-      if (!name.startsWith('@deepseek-ai/') || r.includes('*')) continue
+      if (!isDshHostPackage(name) || r.includes('*')) continue
       if (satisfiesRange(targetVersionResolved, r)) continue
       if (suggested === null) {
         // 自验证建议：给出「与目标同三元组的 caret 线」写法，先算再给——
@@ -296,12 +322,14 @@ export function auditPlugin(pluginDir, { scanResult = null, targetVersion = null
     (report.scores.performance + report.scores.resilience + report.scores.contextBudget + report.scores.lifecycle) / 4
   )
   report.scannedFiles = files.length
+  report.peerPatch = peerPatchFor(pkg, targetVersionResolved)
   return report
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename)) {
   const args = process.argv.slice(2)
   const guideFlag = args.indexOf('--guide')
+  const peerPatchFlag = args.includes('--peer-patch')
 
   // --guide 后跟 3 个位置参数（root/local/target），不能算插件目录
   const positional = (list) => list.filter((a) => !a.startsWith('--'))
@@ -330,6 +358,17 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.met
     process.exit(1)
   }
   printJson(report)
+
+  if (peerPatchFlag) {
+    if (!report.peerPatch.length) {
+      process.stderr.write('\npeer 修补: 无需改动（所有范围都已覆盖目标宿主）\n')
+    } else {
+      process.stderr.write('\npeer 修补（已用 satisfiesRange 自验证，人工确认后改 package.json）:\n')
+      for (const p of report.peerPatch) {
+        process.stderr.write(`  ${p.package}: "${p.from}" → "${p.to}"\n`)
+      }
+    }
+  }
 
   process.stderr.write(
     `\n插件: ${report.plugin}（扫 ${report.scannedFiles} 个文件）\n` +

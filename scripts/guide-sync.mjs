@@ -171,6 +171,13 @@ export function syncGuides(targetVersion, { localClone = null } = {}) {
   return { source: 'unavailable', root: null, versions: [] }
 }
 
+// 取版锚点：优先官方目标版本；本机已在官方通道最新版（resolution.target=null）时
+// 退回本机版本——否则扫描走廊 (peerFloor, hostVersion] 拿不到指南语料，run.mjs
+// 的 scan 阶段会以「无指南根或无窗口」静默跳过（2026-10-25 实测复盘）。
+export function guideVersionFor(resolution, localVersion, distTags) {
+  return resolution?.target || localVersion || distTags?.latest || null
+}
+
 // 真正拉取（需要网络）。用 sparse clone 只取 docs/upgrade-guide。
 export function cloneGuides(targetVersion) {
   const tag = `dsh-v${targetVersion}`
@@ -198,23 +205,24 @@ export function cloneGuides(targetVersion) {
 
 // ── 主流程 ──────────────────────────────────────────────────────────────────
 
-export async function runGuideSync(localVersion, { clone = false } = {}) {
-  const metadata = await fetchNpmMetadata()
+export async function runGuideSync(localVersion, { clone = false, fetcher = null, localClone = null } = {}) {
+  const metadata = await fetchNpmMetadata({ fetcher })
   const resolution = resolveTargetVersion(localVersion, metadata['dist-tags'], Object.keys(metadata.versions || {}))
+  const guideVersion = guideVersionFor(resolution, localVersion, metadata['dist-tags'])
 
   let guides = { source: 'unavailable', root: null, versions: [] }
-  if (resolution.target) {
-    guides = syncGuides(resolution.target, { localClone: findLocalClone() })
+  if (guideVersion) {
+    guides = syncGuides(guideVersion, { localClone: localClone ?? findLocalClone() })
     if (guides.source === 'unavailable' && clone) {
       try {
-        guides = cloneGuides(resolution.target)
+        guides = cloneGuides(guideVersion)
       } catch (err) {
         guides = { source: 'error', root: null, versions: [], error: err.message }
       }
     }
   }
 
-  return { resolution, guides, metadataSource: metadata._metadataSource || 'network' }
+  return { resolution, guides, guideVersion, metadataSource: metadata._metadataSource || 'network' }
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename)) {
@@ -229,6 +237,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.met
       process.stderr.write(`判定: ${r.verdict}\n`)
       process.stderr.write(`理由: ${r.reason}\n`)
       process.stderr.write(`版本数据来源: ${result.metadataSource}${result.metadataSource === 'stale-cache' ? '（网络失败，降级用过期缓存）' : ''}\n`)
+      process.stderr.write(`取版锚点: ${result.guideVersion || '无'}\n`)
       if (result.guides.root) {
         process.stderr.write(`指南来源: ${result.guides.source} (${result.guides.versions.length} 个版本)\n`)
       } else if (result.guides.error) {

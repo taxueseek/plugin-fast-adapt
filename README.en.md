@@ -29,7 +29,7 @@ The authoritative description of breaking changes lives in the vendor harness re
 | Weaker models | Full card library in context, -3.07 pp | Six independent scripts, one small output each |
 | Code-level scanning | None | Anchor matching + four noise-reduction layers (measured below) |
 | Dependencies | — | Zero external: Node built-ins + `git`/`npm` commands |
-| Self-test | — | 93 assertions, zero network, runs on any machine |
+| Self-test | — | 102 assertions, zero network, runs on any machine |
 
 ## Six steps
 
@@ -59,13 +59,22 @@ Two optional steps complete the "verify as you build, audit as you upgrade" loop
 
 ```sh
 # 5. Post-fix smoke verification: in-memory Cordis mock checks module loading,
-#    the apply contract and tool registration
+#    the apply contract and tool registration. Undeclared-inject host-service
+#    access is rejected with the same contract error the real host throws.
 node scripts/quick-smoke.mjs <plugin-dir>
 
 # 6. Four-dimension audit while you are at it: performance, resilience,
 #    context budget, lifecycle
 node scripts/plugin-audit.mjs <plugin-dir>
 node scripts/plugin-audit.mjs <plugin-dir> --guide <guide-root> <local-version> <target-version>
+node scripts/plugin-audit.mjs <plugin-dir> --guide <guide-root> <local-version> <target-version> --peer-patch  # print verified peer patches
+
+# 7. One-command host-log diagnosis: StartupError / port-in-use /
+#    undeclared inject / dead client entry
+node scripts/log-doctor.mjs --pattern '^startup-' --limit 5
+
+# 8. Sync the skill surface to a downstream skill directory (--check = drift only)
+node scripts/sync-skill.mjs --dest <downstream-skill-dir> --check
 ```
 
 ## Scan accuracy: from 12 false positives to 0
@@ -78,7 +87,7 @@ A naive first version reported 12 findings on a real plugin; on inspection **all
 - Constant anchors come only from the `Change` section; matching requires the object parts to be mutual suffixes, so `engines.dsh` never collides with `result.dsh`
 - Package semantic gate: a package name becomes an anchor only when mentioned in a sentence with a removal/renaming verb — contextual mentions ("The mode fields of X accept only …", about field values) do not count. All 3 criticals reported on dsh-files were of this kind; the gate zeroed them
 
-Each finding carries a `severity` (package=critical, member=high, code=medium — fix the front of the list first) and an `evidence` line (the source line itself, so checking for false positives needs no file opening). The rules and the measurements behind them are in [references/heuristics.md](references/heuristics.md). The smoke test discloses its mock fallbacks: the `mockFallbacks` list in the output names every property the plugin touched but the mock does not provide — the longer that list, the less the result can be trusted. **A passing smoke test is not host compatibility**, and the tool says so in its output, not just in the docs.
+Each finding carries a `severity` (package=critical, member=high, code=medium — fix the front of the list first) and an `evidence` line (the source line itself, so checking for false positives needs no file opening). The rules and the measurements behind them are in [references/heuristics.md](references/heuristics.md). Scan roots are the union of source roots (`src` plus sibling `client`/`web`/`ui`); build outputs (`lib`/`dist`) are not scanned twice. The smoke test discloses its mock fallbacks: the `mockFallbacks` list in the output names every property the plugin touched but the mock does not provide — the longer that list, the less the result can be trusted. **A passing smoke test is not host compatibility**, and the tool says so in its output, not just in the docs. The smoke test also rejects undeclared-`inject` host-service access at the `inject_contract` stage, matching the real Cordis contract, instead of letting load-time crashes pass silently.
 
 ## Install
 
@@ -121,10 +130,10 @@ No TypeScript, no AST library, no HTTP client. Runs on Node 22.13+ (`import.meta
 Self-test:
 
 ```sh
-npm test   # node scripts/self-test.mjs, 93 assertions
+npm test   # node scripts/self-test.mjs, 102 assertions
 ```
 
-Covers scanner false positives (names in comments and strings are not hits), false negatives, version heuristics, replacement-pair recognition, end-to-end findings, SOP reference integrity, dist-tags cache states, smoke verification, the four-dimension audit, activation diagnostics, the plugin scaffolder (all five forms, naming-projection grammar, smoke closure, patch-layer recognizability, invalid-input and non-empty-target rejection), the write gate (hard-gate interception, soft metrics never overrule, skip semantics, scaffold handoff) and a scanner performance gate. Zero network, zero external dependencies, runs on any machine.
+Covers scanner false positives (names in comments and strings are not hits), false negatives, version heuristics, replacement-pair recognition, end-to-end findings, SOP reference integrity, dist-tags cache states, smoke verification (including the undeclared-inject contract rejection), the four-dimension audit (including peer patches), activation diagnostics, the plugin scaffolder (all five forms, naming-projection grammar, smoke closure, patch-layer recognizability, invalid-input and non-empty-target rejection), the write gate (hard-gate interception, soft metrics never overrule, skip semantics, scaffold handoff), log diagnosis, downstream-sync drift checks and a scanner performance gate. Zero network, zero external dependencies, runs on any machine.
 
 ## Scripts
 
@@ -137,7 +146,9 @@ Covers scanner false positives (names in comments and strings are not hits), fal
 | `scripts/guide-sync.mjs` | Resolve the target version and fetch the official guide (dist-tags cached 1 h, degrades to stale cache) |
 | `scripts/code-scan.mjs` | Scan plugin code against official change anchors |
 | `scripts/quick-smoke.mjs` | Post-fix smoke verification (in-memory Cordis mock, discloses fallbacks) |
-| `scripts/plugin-audit.mjs` | Four-dimension performance & architecture audit, optional `--guide` cross-check |
+| `scripts/plugin-audit.mjs` | Four-dimension performance & architecture audit, optional `--guide` cross-check; `--peer-patch` prints verified peer patches |
+| `scripts/log-doctor.mjs` | One-command diagnosis of `~/.dsh/logs/` (startup header / failed plugins / waiting services / signal summary) |
+| `scripts/sync-skill.mjs` | Sync the skill surface to a downstream skill directory; `--check` reports drift |
 | `scripts/self-test.mjs` | Self-test |
 | `scripts/lib/scanner.mjs` | Lexical scanner and version comparison (zero-dependency) |
 | `scripts/lib/guide-parser.mjs` | Official guide parsing and anchor extraction |
@@ -146,10 +157,11 @@ Covers scanner false positives (names in comments and strings are not hits), fal
 
 ## Safety posture
 
-- `env-doctor`, `code-scan` and `plugin-audit` are strictly read-only
+- `env-doctor`, `code-scan`, `plugin-audit` and `log-doctor` are strictly read-only
 - `env-heal` is dry-run by default and moves rather than deletes when applied (into `~/.dsh/.trash/<date>/`)
+- `sync-skill` writes to a downstream skill directory explicitly, copying only the fixed skill surface (`SKILL.md`/`README*`/`references`/`scripts`); `--check`/`--dry-run` let you inspect first
 - Never modifies DSH itself, nor config or profile declarations under `~/.dsh`
-- Never edits plugin code automatically; it reports findings and vendor fixes only
+- Never edits plugin code automatically; it reports findings and vendor fixes only, and `--peer-patch` prints rather than applies
 - Network is used only with `--clone`, always with a timeout, and failures are reported explicitly instead of silently skipped
 
 ## Legacy plugins
