@@ -104,7 +104,7 @@ function isIntroduced(introduced, anchor) {
 }
 
 // 从 guide 的 Migration 段落里挑出和命中符号最相关的一两条
-function pickMigrationSteps(guide, symbol) {
+export function pickMigrationSteps(guide, symbol) {
   if (!guide.migration) return []
   const steps = guide.migration.split(/\n\s*\d+\.\s+/).map((s) => s.trim()).filter(Boolean)
   const needle = symbol.toLowerCase()
@@ -242,6 +242,8 @@ export function scanPlugin(pluginDir, guides, { localVersion = null, targetVersi
               severity: SEVERITY_BY_KIND.package,
               evidence: evidenceOf(imp.line),
               guide: `${guide.version}/${guide.topic}`,
+              guideFile: guide.guideFile ?? null,
+              guideLine: guide.titleLine ?? null,
               title: guide.title,
               migration: pickMigrationSteps(guide, pkg),
             })
@@ -262,6 +264,8 @@ export function scanPlugin(pluginDir, guides, { localVersion = null, targetVersi
               severity: SEVERITY_BY_KIND.member,
               evidence: evidenceOf(hit.line),
               guide: `${guide.version}/${guide.topic}`,
+              guideFile: guide.guideFile ?? null,
+              guideLine: guide.titleLine ?? null,
               title: guide.title,
               migration: pickMigrationSteps(guide, hit.name),
             })
@@ -281,6 +285,8 @@ export function scanPlugin(pluginDir, guides, { localVersion = null, targetVersi
               severity: SEVERITY_BY_KIND.code,
               evidence: evidenceOf(str.line),
               guide: `${guide.version}/${guide.topic}`,
+              guideFile: guide.guideFile ?? null,
+              guideLine: guide.titleLine ?? null,
               title: guide.title,
               migration: pickMigrationSteps(guide, code),
             })

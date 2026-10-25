@@ -204,11 +204,22 @@ export function loadGuides(guideRoot, version) {
     const guidePath = path.join(versionDir, topic, 'guide.md')
     if (!fs.existsSync(guidePath)) continue
 
-    const parsed = parseGuideMarkdown(fs.readFileSync(guidePath, 'utf8'))
+    const raw = fs.readFileSync(guidePath, 'utf8')
+    const parsed = parseGuideMarkdown(raw)
     const anchors = extractAnchors(parsed.change, parsed.migration)
     if (!anchors.packages.length && !anchors.members.length && !anchors.codes.length) continue
 
-    guides.push({ version, topic, ...parsed, anchors })
+    // 出处锚点：指南内相对路径 + 标题行号。findings 带上它们，
+    // 每个结论都能回溯到官方原文位置，不用在指南目录里再搜标题。
+    let titleLine = null
+    for (const [i, line] of raw.split('\n').entries()) {
+      if (/^#\s+/.test(line.replace(/\r$/, ''))) {
+        titleLine = i + 1
+        break
+      }
+    }
+
+    guides.push({ version, topic, guideFile: `${version}/${topic}/guide.md`, titleLine, ...parsed, anchors })
   }
   return guides
 }
