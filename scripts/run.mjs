@@ -327,6 +327,14 @@ if (!flag('no-log')) {
 
 printJson(report)
 process.stderr.write(`\n${verdictLines.join('\n')}\n`)
-process.exit(
-  criticalOrHigh > 0 || report.typecheck?.status === 'fail' || realSmoke?.status === 'fail' ? 2 : 0
-)
+
+// 失败即指路：退出码 2 的三类原因各给一句「下一步」，排障路径从读文档变成读输出
+const exitFail = criticalOrHigh > 0 || report.typecheck?.status === 'fail' || realSmoke?.status === 'fail'
+if (exitFail) {
+  const next = []
+  if (criticalOrHigh > 0) next.push('按 scan.findings 的 migration 逐条清命中（evidence 行原文可核对是否误报）')
+  if (report.typecheck?.status === 'fail') next.push('typecheck 红——先修构建（尾部输出在 report.typecheck.tail）')
+  if (realSmoke?.status === 'fail') next.push('真冷启动失败——realSmoke.tail 有四类归因')
+  process.stderr.write(`\n下一步: ${next.join('；')}。修完重跑本命令；装了没生效跑 run-log doctor，宿主起不来跑 log-doctor\n`)
+}
+process.exit(exitFail ? 2 : 0)

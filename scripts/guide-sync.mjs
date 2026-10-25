@@ -15,6 +15,7 @@ import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { printJson, compareVersions } from './lib/scanner.mjs'
 import { listGuideVersions } from './lib/guide-parser.mjs'
+import { findGlobalDsh } from './env-doctor.mjs'
 
 // dist-tags 专用端点只回标签对象（实测 67 字节）；全量包文档是 267KB，
 // 而这里只用到 dist-tags，网络、解析、缓存落盘全是白付的。
@@ -205,6 +206,13 @@ export function cloneGuides(targetVersion) {
 
 // ── 主流程 ──────────────────────────────────────────────────────────────────
 
+// 盯梢退出码（--check 模式）：1=上游有新版（cron/launchd/agent 轮询的非零信号，
+// 此时新版指南已顺手预取进缓存）；0=无需动作（up-to-date/ahead/unknown-local）。
+// 判定失败（网络挂且无缓存）走 CLI catch 的 2，不与「有动作」混淆。
+export function upstreamCheckExit(resolution) {
+  return resolution?.verdict === 'upgrade-available' ? 1 : 0
+}
+
 export async function runGuideSync(localVersion, { clone = false, fetcher = null, localClone = null } = {}) {
   const metadata = await fetchNpmMetadata({ fetcher })
   const resolution = resolveTargetVersion(localVersion, metadata['dist-tags'], Object.keys(metadata.versions || {}))
@@ -226,8 +234,13 @@ export async function runGuideSync(localVersion, { clone = false, fetcher = null
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename)) {
-  const local = process.argv[2] || null
-  const allowClone = process.argv.includes('--clone')
+  // --check：盯梢模式。退出码给 cron/agent 轮询用（1=有新版，0=无需动作，2=判定失败），
+  // 有新版时顺手预取该版指南进缓存（clone=true），下次 run.mjs 零等待。
+  // 版本参数缺省时自动探测本机宿主版本，零参数可直接接定时器。
+  const checkMode = process.argv.includes('--check')
+  const positional = process.argv.slice(2).find((a) => !a.startsWith('--')) || null
+  const local = positional || (checkMode ? findGlobalDsh()?.version ?? null : null)
+  const allowClone = process.argv.includes('--clone') || checkMode
 
   runGuideSync(local, { clone: allowClone })
     .then((result) => {
@@ -245,9 +258,19 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.met
       } else {
         process.stderr.write('指南来源: 无（无目标版本或未拉取）\n')
       }
+      if (checkMode) {
+        const code = upstreamCheckExit(result.resolution)
+        if (code === 1) {
+          const prefetched = result.guides.source === 'clone' ? '已预取进缓存' : result.guides.root ? '缓存已就绪' : '预取失败（下次 run.mjs --clone 会补）'
+          process.stderr.write(`盯梢: 上游有新版 ${result.resolution.target}（${prefetched}）——逐插件跑 run.mjs 适配\n`)
+        } else {
+          process.stderr.write('盯梢: 无需动作\n')
+        }
+        process.exit(code)
+      }
     })
     .catch((err) => {
       process.stderr.write(`失败: ${err.message}\n`)
-      process.exit(1)
+      process.exit(checkMode ? 2 : 1)
     })
 }
