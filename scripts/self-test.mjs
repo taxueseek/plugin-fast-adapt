@@ -19,6 +19,7 @@ import { anchorMatches, verifyPackagesAgainstHost } from './code-scan.mjs'
 import { runQuickSmoke } from './quick-smoke.mjs'
 import { auditPlugin } from './plugin-audit.mjs'
 import { extractInjects, diagnoseActivation, candidateGlobalRoots, parsePatchEntries, probeEnvironment } from './env-doctor.mjs'
+import { readClientDecl, clientExportPath, overlayMountedNames, isDeliberateRosterInsert, collectRoster, diagnoseClientHalf } from './lib/client-graph.mjs'
 import { scaffoldPlugin, projectNames, detectHarnessVersion, UsageError } from './scaffold.mjs'
 import { runWriteGate } from './write-gate.mjs'
 import { listRuns, sanitizeRun } from './lib/runlog.mjs'
@@ -1229,6 +1230,150 @@ test('parsePatchEntries：多行 insert 与 id 覆盖条目算挂载，注释条
   assert.ok(entries.some((e) => e.includes('@taxueseek/argo-dsh')), `id 覆盖条目应被识别: ${JSON.stringify(entries)}`)
   assert.ok(!entries.some((e) => e.includes('dsh-mcp-client')), '注释条目不该算挂载')
   assert.ok(!entries.some((e) => e.includes('MiniMax')), '深层 config 的模型名不该进条目清单')
+})
+
+// ── 客户端半（dsh.client）三层判定：声明 / 产物 / 名册 ──────────────────────
+// 2026-10-25 实录：桌面 APP 起不来，宿主半冒烟全绿，真凶是客户端半的
+// manifest 死注入——另一半不查，冒烟通过就只是半张体检报告。
+
+test('readClientDecl：合法声明解析，缺失返回 null，形状错误报 invalid', () => {
+  const ok = readClientDecl('p', { dsh: { client: { platform: 'web', inject: ['a'], immediately: true } } })
+  assert.deepStrictEqual(ok, { platform: 'web', inject: ['a'], external: [], immediately: true })
+  assert.strictEqual(readClientDecl('p', {}), null, '无 dsh.client 返回 null')
+  assert.ok(readClientDecl('p', { dsh: { client: { inject: ['a'] } } }).invalid, 'platform 缺失应 invalid')
+  assert.ok(readClientDecl('p', { dsh: { client: { platform: 'web', inject: 'a' } } }).invalid, 'inject 非 string[] 应 invalid')
+})
+
+test('clientExportPath：字符串与 { default } 两种 exports 写法都能解析', () => {
+  assert.strictEqual(clientExportPath({ exports: { './client': './lib/client.js' } }), './lib/client.js')
+  assert.strictEqual(clientExportPath({ exports: { './client': { default: './c.js' } } }), './c.js')
+  assert.strictEqual(clientExportPath({ exports: {} }), null)
+})
+
+test('overlayMountedNames / isDeliberateRosterInsert：insert 块命中，注释块不算', () => {
+  const text = [
+    '# 注释掉的补挂不算',
+    '# - insert:',
+    '#   - id: client-runtime',
+    '- insert:',
+    '    - id: client-runtime',
+    "      name: '@deepseek-ai/dsh-client-runtime'",
+    '- id: other',
+    '  name: other-plugin',
+    '',
+  ].join('\n')
+  const names = overlayMountedNames(text)
+  assert.ok(names.has('@deepseek-ai/dsh-client-runtime'), `insert 目标应进名册: ${[...names]}`)
+  assert.ok(names.has('other-plugin'), 'id 覆盖条目也应进名册')
+  assert.ok(isDeliberateRosterInsert(text, '@deepseek-ai/dsh-client-runtime'), '显式 insert 应判有意保留')
+  assert.ok(!isDeliberateRosterInsert(text, 'other-plugin'), '非 insert 的 id 条目不算补挂')
+  assert.ok(!isDeliberateRosterInsert('# - insert:\n#   name: x', 'x'), '注释掉的 insert 不算')
+})
+
+function clientFixtureProfile({ bundlesList, overlayText, deps, weakDep } = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cgraph-profile-'))
+  fs.mkdirSync(path.join(dir, 'node_modules'), { recursive: true })
+  const depManifests = {}
+  for (const [name, client] of Object.entries(deps || {})) {
+    const scoped = name.startsWith('@')
+    const pkgDir = scoped
+      ? path.join(dir, 'node_modules', ...name.split('/'))
+      : path.join(dir, 'node_modules', name)
+    fs.mkdirSync(pkgDir, { recursive: true })
+    fs.writeFileSync(path.join(pkgDir, 'package.json'), JSON.stringify({ name, version: '1.0.0', dsh: client }))
+    depManifests[name] = pkgDir
+  }
+  if (weakDep) {
+    const pkgDir = path.join(dir, 'node_modules', weakDep)
+    fs.mkdirSync(pkgDir, { recursive: true })
+    fs.writeFileSync(path.join(pkgDir, 'package.json'), JSON.stringify({ name: weakDep, version: '1.0.0', dsh: { client: { platform: 'web', inject: [] } } }))
+  }
+  fs.writeFileSync(
+    path.join(dir, 'package.json'),
+    JSON.stringify({ name: 'profile', private: true, dependencies: {}, dsh: bundlesList ? { profile: { bundles: bundlesList } } : {} }),
+  )
+  if (overlayText) fs.writeFileSync(path.join(dir, 'cordis.patch.yml'), overlayText)
+  return dir
+}
+
+test('collectRoster：宿主内置 / bundles 列名 / overlay insert 三种强证据，dep 无行证据算弱', () => {
+  const hostRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cgraph-host-'))
+  const builtinDir = path.join(hostRoot, '@deepseek-ai', 'dsh-client-ui-settings')
+  fs.mkdirSync(builtinDir, { recursive: true })
+  fs.writeFileSync(path.join(builtinDir, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-client-ui-settings', dsh: { client: { platform: 'web', inject: [] } } }))
+
+  const profileDir = clientFixtureProfile({
+    bundlesList: ['bundled-plugin'],
+    overlayText: "- insert:\n    - id: crt\n      name: 'crt-shim'\n",
+    deps: { 'bundled-plugin': { client: { platform: 'web', inject: [] } } },
+    weakDep: 'loose-plugin',
+  })
+  const { roster, weak } = collectRoster({ hostRoots: [hostRoot], profileDir })
+  assert.strictEqual(roster.get('@deepseek-ai/dsh-client-ui-settings')?.source, 'host-builtin')
+  assert.strictEqual(roster.get('bundled-plugin')?.source, 'bundles')
+  assert.strictEqual(roster.get('crt-shim')?.source, 'overlay')
+  assert.strictEqual(weak.get('loose-plugin')?.source, 'dep-unmounted', '包在依赖里但无行证据应落弱档')
+})
+
+test('diagnoseClientHalf：无 dsh.client 声明 → 纯宿主半，OK', () => {
+  const dir = tmpPluginDir('cg-none')
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'host-only', version: '1.0.0', main: 'lib/index.js' }))
+  const r = diagnoseClientHalf({ pluginDir: dir, profiles: [] })
+  assert.strictEqual(r.declared, false)
+  assert.strictEqual(r.verdict, 'OK')
+})
+
+test('diagnoseClientHalf：注入目标全无证据 → critical 死链（10-25 桌面实录形态）', () => {
+  const dir = tmpPluginDir('cg-dead')
+  fs.mkdirSync(path.join(dir, 'lib'), { recursive: true })
+  fs.writeFileSync(path.join(dir, 'lib', 'client.js'), 'export function apply() {}\n')
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
+    name: 'dead-injector', version: '1.0.0', exports: { './client': './lib/client.js' },
+    dsh: { client: { platform: 'web', inject: ['@deepseek-ai/dsh-ghost'] } },
+  }))
+  const profileDir = clientFixtureProfile({ deps: { 'dead-injector': null } })
+  // 目标插件作为依赖装进 profile，但依赖清单里没有 dsh-ghost 包
+  const r = diagnoseClientHalf({ pluginDir: dir, hostRoots: [], profiles: [{ name: 'web', dir: profileDir }] })
+  assert.strictEqual(r.verdict, 'ERROR')
+  assert.ok(r.findings.some((f) => f.code === 'client-inject-dead' && f.severity === 'critical'), JSON.stringify(r.findings))
+})
+
+test('diagnoseClientHalf：目标有包无行证据 → info 弱档风险（WARN）', () => {
+  const dir = tmpPluginDir('cg-weak')
+  fs.mkdirSync(path.join(dir, 'lib'), { recursive: true })
+  fs.writeFileSync(path.join(dir, 'lib', 'client.js'), 'export function apply() {}\n')
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
+    name: 'weak-injector', version: '1.0.0', exports: { './client': './lib/client.js' },
+    dsh: { client: { platform: 'web', inject: ['loose-plugin'] } },
+  }))
+  const profileDir = clientFixtureProfile({ deps: { 'weak-injector': null }, weakDep: 'loose-plugin' })
+  const r = diagnoseClientHalf({ pluginDir: dir, hostRoots: [], profiles: [{ name: 'web', dir: profileDir }] })
+  assert.strictEqual(r.verdict, 'WARN')
+  assert.ok(r.findings.some((f) => f.code === 'client-inject-unmounted-evidence' && f.severity === 'info'), JSON.stringify(r.findings))
+})
+
+test('diagnoseClientHalf：注入目标 bundles 列名 → 强证据 OK', () => {
+  const dir = tmpPluginDir('cg-ok')
+  fs.mkdirSync(path.join(dir, 'lib'), { recursive: true })
+  fs.writeFileSync(path.join(dir, 'lib', 'client.js'), 'export function apply() {}\n')
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
+    name: 'healthy', version: '1.0.0', exports: { './client': './lib/client.js' },
+    dsh: { client: { platform: 'web', inject: ['bundled-plugin'] } },
+  }))
+  const profileDir = clientFixtureProfile({ bundlesList: ['bundled-plugin', 'healthy'], deps: { 'bundled-plugin': { client: { platform: 'web', inject: [] } }, healthy: null } })
+  const r = diagnoseClientHalf({ pluginDir: dir, hostRoots: [], profiles: [{ name: 'web', dir: profileDir }] })
+  assert.strictEqual(r.verdict, 'OK', JSON.stringify(r.findings))
+})
+
+test('diagnoseClientHalf：声明无 ./client 导出或产物缺失 → critical', () => {
+  const dir = tmpPluginDir('cg-missing')
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
+    name: 'no-bundle', version: '1.0.0',
+    dsh: { client: { platform: 'web', inject: [] } },
+  }))
+  const r = diagnoseClientHalf({ pluginDir: dir, profiles: [] })
+  assert.strictEqual(r.verdict, 'ERROR')
+  assert.ok(r.findings.some((f) => f.layer === 'artifact' && f.severity === 'critical'), JSON.stringify(r.findings))
 })
 
 // ── 跨平台模拟（Windows 真机验证待做，先锁住平台分支的行为） ────────────────

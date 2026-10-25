@@ -13,6 +13,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { printJson, isDshPackage, packageBase, parseVersion, compareVersions, peerFloor, maskSource, CODE } from './lib/scanner.mjs'
+import { diagnoseClientHalf, isDeliberateRosterInsert } from './lib/client-graph.mjs'
 
 const HOME = os.homedir()
 const DSH_DIR = path.join(HOME, '.dsh')
@@ -114,13 +115,25 @@ function scanOverlay(profile, globalVersion) {
   }
 
   const findings = []
+  let overlayText = ''
+  try {
+    overlayText = fs.readFileSync(path.join(DSH_DIR, 'profiles', profile, 'cordis.patch.yml'), 'utf8')
+  } catch {}
   for (const pkg of packages) {
     const reasons = []
     let severity = null
 
     if (RETIRED_PACKAGES.has(pkg.name)) {
-      reasons.push('上游宿主已移除该包，留在覆盖层会导致运行时装载冲突')
-      severity = 'critical'
+      if (overlayText && isDeliberateRosterInsert(overlayText, pkg.name)) {
+        // 2026-10-25 实录：web 端 client-runtime 垫片被 overlay 显式补挂
+        // （- insert 行），是有意保留的兼容层不是意外残留，误报 critical
+        // 会引导人拆掉还在供旧插件 require 的垫片。
+        reasons.push('上游宿主已移除该包，但 overlay 有显式补挂行（兼容垫片，有意保留）；确认全部消费方改净后可移除')
+        severity = 'info'
+      } else {
+        reasons.push('上游宿主已移除该包，留在覆盖层会导致运行时装载冲突')
+        severity = 'critical'
+      }
     }
 
     const globalSibling = findGlobalPackageVersion(pkg.name)
@@ -340,6 +353,27 @@ export function probeEnvironment(targetDir = process.cwd()) {
 
   const activation = diagnoseActivation(targetDir, installedPlugins)
 
+  // 客户端半（dsh.client）三层判定：宿主半冒烟覆盖不到的另一半。
+  // web profile 与桌面 APP 共用同一套 platform:web 前端，这里一视同仁。
+  const clientHalf = diagnoseClientHalf({
+    pluginDir: targetDir,
+    hostRoots: candidateGlobalRoots(),
+    profiles: profiles.map((name) => ({ name, dir: path.join(DSH_DIR, 'profiles', name) })),
+  })
+  if (clientHalf.checked && activation.checked) {
+    const order = { OK: 0, WARN: 1, ERROR: 2 }
+    if (order[clientHalf.verdict] > order[activation.verdict]) activation.verdict = clientHalf.verdict
+    activation.client = {
+      declared: clientHalf.declared,
+      platform: clientHalf.platform,
+      bundleReady: clientHalf.bundleReady,
+      findings: clientHalf.findings ?? [],
+      perProfile: clientHalf.perProfile ?? [],
+      verdict: clientHalf.verdict,
+    }
+    activation.clientRisks = clientHalf.findings?.filter((f) => f.severity !== 'info') ?? []
+  }
+
   return {
     timestamp: new Date().toISOString(),
     globalDsh,
@@ -371,7 +405,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.met
     `覆盖层问题: ${overlayCount} 处\n` +
     `运行中宿主进程: ${report.runningProcesses.length} 个\n` +
     (report.activation?.checked
-      ? `目标插件启用就绪: ${report.activation.verdict}${report.activation.pendingRisks.length ? `（Silent Pending 风险 ${report.activation.pendingRisks.length} 处）` : ''}\n`
+      ? `目标插件启用就绪: ${report.activation.verdict}${report.activation.pendingRisks.length ? `（Silent Pending 风险 ${report.activation.pendingRisks.length} 处）` : ''}${report.activation.client ? `｜客户端半: ${report.activation.client.verdict}${report.activation.clientRisks.length ? `（死链 ${report.activation.clientRisks.length} 处）` : ''}` : ''}\n`
       : '')
   )
 }
