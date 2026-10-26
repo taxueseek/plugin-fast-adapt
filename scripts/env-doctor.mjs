@@ -1,12 +1,17 @@
 #!/usr/bin/env node
 // env-doctor.mjs —— 第 1 步：探测本机 DSH 环境。
 //
-// 只读，不写任何东西。回答三个问题：
+// 只读，不写任何东西。回答四个问题：
 //   1. 本机装的 DSH 是什么版本？（全局 + 各 profile）
 //   2. profiles 覆盖层里有没有和主安装脱节的包？（issue #263 那一类）
-//   3. 当前有哪些插件，它们的 peer 声明覆盖哪个版本窗口？
+//   3. 共享 node_modules 农场（profiles/node_modules）有没有悬空软链？
+//   4. 当前有哪些插件，它们的 peer 声明覆盖哪个版本窗口？
 //
 // 输出 JSON，供后续步骤和人不读散文也能用。
+//
+// 两层 patch 都要看：各 profile 自己的 cordis.patch.yml，以及全局
+// ~/.dsh/cordis.patch.yml（dump-config 显示它拼在每个 profile 的最后一层，
+// 旧实现只读前者会把它整个漏掉）。
 
 import fs from 'node:fs'
 import os from 'node:os'
@@ -16,7 +21,12 @@ import { printJson, isDshPackage, isPluginForm, packageBase, parseVersion, compa
 import { diagnoseClientHalf, isDeliberateRosterInsert } from './lib/client-graph.mjs'
 
 const HOME = os.homedir()
-const DSH_DIR = path.join(HOME, '.dsh')
+// DSH 目录：默认 ~/.dsh。DSH_PFA_DSH_HOME 可覆盖（自检与容器场景用；
+// 不设时行为与旧版完全一致）。写成函数而不是常量：调用时求值，
+// 自检才能在每个用例里改指向临时 DSH 树。
+function dshDir() {
+  return process.env.DSH_PFA_DSH_HOME || path.join(HOME, '.dsh')
+}
 
 // ── 全局安装发现（不写死单一路径） ─────────────────────────────────────────
 
@@ -93,7 +103,7 @@ export function findGlobalDsh() {
 // ── profiles 覆盖层 ────────────────────────────────────────────────────────
 
 function listProfiles() {
-  const dir = path.join(DSH_DIR, 'profiles')
+  const dir = path.join(dshDir(), 'profiles')
   if (!fs.existsSync(dir)) return []
   return fs
     .readdirSync(dir, { withFileTypes: true })
@@ -104,7 +114,7 @@ function listProfiles() {
 }
 
 function scanOverlay(profile, globalVersion) {
-  const nodeModules = path.join(DSH_DIR, 'profiles', profile, 'node_modules', '@deepseek-ai')
+  const nodeModules = path.join(dshDir(), 'profiles', profile, 'node_modules', '@deepseek-ai')
   if (!fs.existsSync(nodeModules)) return []
 
   const packages = []
@@ -117,7 +127,7 @@ function scanOverlay(profile, globalVersion) {
   const findings = []
   let overlayText = ''
   try {
-    overlayText = fs.readFileSync(path.join(DSH_DIR, 'profiles', profile, 'cordis.patch.yml'), 'utf8')
+    overlayText = fs.readFileSync(path.join(dshDir(), 'profiles', profile, 'cordis.patch.yml'), 'utf8')
   } catch {}
   for (const pkg of packages) {
     const reasons = []
@@ -192,6 +202,88 @@ function findGlobalPackageVersion(name) {
   return globalPackageCache.get(name)
 }
 
+// ── 共享 node_modules 农场（悬空软链） ───────────────────────────────────────
+// ~/.dsh/profiles/node_modules 是指向宿主安装的软链农场（本机 250 个
+// @deepseek-ai/* 加 react-dom/express 等传递依赖）。宿主升级后包被移除，
+// 软链留在原地变成悬空链接：任何 require 它的插件都以 ERR_MODULE_NOT_FOUND
+// 收场（2026-10-26 实测 209 条断链，宿主启动日志里 client-runtime /
+// orca-agent-hooks 两行装载失败）。
+//
+// 它不在各 profile 的覆盖层目录里，旧实现只扫 profiles/<name>/node_modules，
+// 这一层完全看不见（overlayFindings 报 0）。单独成节而不是塞进 overlayFindings：
+// 两者字段语义不同——这里没有 profile、没有版本，只有软链目标，而且
+// 「修」的动作也不是把包移走，是清掉悬空链接本身。
+
+export function scanSharedFarm({ farmDir = null, hostRoots = null } = {}) {
+  const dir = farmDir ?? path.join(dshDir(), 'profiles', 'node_modules')
+  const roots = hostRoots ?? candidateGlobalRoots()
+  // 宿主安装树下的软链才是「宿主升级后包被移除」那一类；指向别处的
+  // 断链（如某个包自己的嵌套 node_modules）同样有害，但性质不同，分开标注。
+  const hostPrefixes = roots.map((r) => path.join(r, '@deepseek-ai'))
+  const result = { farmDir: dir, symlinkCount: 0, brokenCount: 0, hostBackedBroken: 0, findings: [] }
+  if (!fs.existsSync(dir)) return result
+
+  let entries = []
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true })
+  } catch {
+    return result
+  }
+
+  const links = []
+  for (const entry of entries) {
+    if (entry.name.startsWith('.')) continue
+    if (entry.name.startsWith('@')) {
+      let subs = []
+      try {
+        subs = fs.readdirSync(path.join(dir, entry.name), { withFileTypes: true })
+      } catch {
+        continue
+      }
+      for (const sub of subs) {
+        if (sub.name.startsWith('.')) continue
+        links.push({ name: `${entry.name}/${sub.name}`, linkPath: path.join(dir, entry.name, sub.name) })
+      }
+      continue
+    }
+    links.push({ name: entry.name, linkPath: path.join(dir, entry.name) })
+  }
+
+  for (const { name, linkPath } of links) {
+    let stat
+    try {
+      stat = fs.lstatSync(linkPath)
+    } catch {
+      continue
+    }
+    if (!stat.isSymbolicLink()) continue
+    result.symlinkCount++
+    let raw = null
+    try {
+      raw = fs.readlinkSync(linkPath)
+    } catch {
+      continue
+    }
+    const target = path.isAbsolute(raw) ? raw : path.resolve(path.dirname(linkPath), raw)
+    if (fs.existsSync(target)) continue
+    const hostBacked = hostPrefixes.some((prefix) => target === prefix || target.startsWith(prefix + path.sep))
+    result.brokenCount++
+    if (hostBacked) result.hostBackedBroken++
+    result.findings.push({
+      package: name,
+      target,
+      hostBacked,
+      severity: hostBacked ? 'critical' : 'info',
+      reasons: hostBacked
+        ? `软链指向宿主安装树下的 ${name}，该位置已不存在（宿主升级后包被移除）；消费它的插件会以 ERR_MODULE_NOT_FOUND 失败`
+        : `软链目标已不存在（${target}）；不属宿主安装树，但消费方仍会失败`,
+      path: linkPath,
+    })
+  }
+
+  return result
+}
+
 // ── 已装插件清单 ───────────────────────────────────────────────────────────
 
 // 解析 patch 层条目。多行 YAML 是常态（- insert: / - id: 换行后才是 name），
@@ -213,15 +305,38 @@ export function parsePatchEntries(text) {
   return entries
 }
 
-function listInstalledPlugins() {
+// 全局 patch 层：~/.dsh/cordis.patch.yml。dump-config 显示它拼在每个 profile
+// 的最后一层（本机由 Orca 写入 orca-agent-hooks 行），对所有 profile 生效。
+// 只读各 profile 自己的 patch 层会把它整个漏掉——该行引用的包没装，
+// 每次启动都报 "1 entry did not activate"，工具却报 0 处（2026-10-26 实测）。
+function readGlobalPatchLayer() {
+  const file = path.join(dshDir(), 'cordis.patch.yml')
+  if (!fs.existsSync(file)) return { file: null, entries: [], text: '' }
+  try {
+    const text = fs.readFileSync(file, 'utf8')
+    return { file, entries: parsePatchEntries(text), text }
+  } catch {
+    return { file, entries: [], text: '' }
+  }
+}
+
+export function listInstalledPlugins() {
+  const global = readGlobalPatchLayer()
   const plugins = []
   for (const profile of listProfiles()) {
-    const patchFile = path.join(DSH_DIR, 'profiles', profile, 'cordis.patch.yml')
+    const patchFile = path.join(dshDir(), 'profiles', profile, 'cordis.patch.yml')
     const patchEntries = []
     if (fs.existsSync(patchFile)) {
       patchEntries.push(...parsePatchEntries(fs.readFileSync(patchFile, 'utf8')))
     }
-    plugins.push({ profile, patchFile, patchEntries })
+    plugins.push({
+      profile,
+      patchFile,
+      globalPatchFile: global.file,
+      globalPatchEntries: global.entries,
+      // 全局层对所有 profile 生效，合并进来后 registered 判定才与宿主实际一致
+      patchEntries: [...global.entries, ...patchEntries],
+    })
   }
   return plugins
 }
@@ -256,6 +371,48 @@ const SERVICE_SIGNATURES = [
   { name: 'webServer', pattern: /web|server/ },
 ]
 
+const stripDotSlash = (p) => String(p).replace(/^\.\//, '')
+
+// 入口解析：Node 的解析顺序是 exports['.'] 优先于 main，两者都没有才退 lib/index.js。
+// 旧实现只看 main，遇到「无 main、入口写在 exports」的包会误报 ERROR——
+// 实测 @local/dsh-env-sweeper（exports['.'] = './index.js'，日志每天在写）
+// 被报成「入口产物不存在」，把人引导去修没坏的东西。
+export function resolveEntryFile(pkg) {
+  const exportsField = pkg.exports
+  if (typeof exportsField === 'string' && exportsField) return stripDotSlash(exportsField)
+  if (exportsField && typeof exportsField === 'object') {
+    const root = exportsField['.']
+    if (typeof root === 'string' && root) return stripDotSlash(root)
+    if (root && typeof root === 'object') {
+      const picked = root.default ?? root.import ?? root.require ?? root.node
+      if (typeof picked === 'string' && picked) return stripDotSlash(picked)
+    }
+  }
+  if (typeof pkg.main === 'string' && pkg.main) return stripDotSlash(pkg.main)
+  return 'lib/index.js'
+}
+
+// 声明入口存在就用它；不存在则退回 main 再退 lib/index.js（exports 只写了
+// types 子路径时，真实文件可能仍挂在 main 上）。
+function pickExistingEntry(root, pkg, declaredEntry) {
+  const candidates = [declaredEntry, typeof pkg.main === 'string' ? pkg.main : null, 'lib/index.js']
+    .filter(Boolean)
+    .map(stripDotSlash)
+  return candidates.find((f) => fs.existsSync(path.join(root, f))) ?? candidates[0]
+}
+
+// disabled 判定限定在同一个条目块内：按列表项「- 」为界切块，
+// 防止本插件条目被后面其他插件条目的 disabled: true 跨条目误伤
+// （误伤会跳过 Silent Pending 风险检查，把该报的吞掉）。
+function isDisabledInPatch(text, pkgName) {
+  if (!text) return false
+  const nameEsc = pkgName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const nameRe = new RegExp(`name:\\s*['"]?${nameEsc}['"]?`)
+  return text
+    .split(/(?=^\s*-\s)/m)
+    .some((block) => nameRe.test(block) && /disabled:\s*true/.test(block))
+}
+
 export function diagnoseActivation(targetDir, installedPlugins) {
   const root = path.resolve(targetDir)
   const pkg = readPackageJson(targetDir)
@@ -268,23 +425,22 @@ export function diagnoseActivation(targetDir, installedPlugins) {
     return { checked: false, verdict: 'N/A', reason: '目标不是 DSH 插件形态（无 @deepseek-ai/* 依赖、无 dsh.client），启用就绪检查不适用' }
   }
 
-  const main = pkg.main || 'lib/index.js'
-  const entryReady = fs.existsSync(path.join(root, main))
-  const injects = extractInjects(root, main)
+  const declaredEntry = resolveEntryFile(pkg)
+  const entryFile = pickExistingEntry(root, pkg, declaredEntry)
+  const entryReady = fs.existsSync(path.join(root, entryFile))
+  const injects = extractInjects(root, entryFile)
 
-  const perProfile = installedPlugins.map(({ profile, patchFile, patchEntries }) => {
-    let disabled = false
-    try {
-      const text = fs.readFileSync(patchFile, 'utf8')
-      const nameEsc = pkg.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-      // 判定 disabled 限定在同一个条目块内：按列表项「- 」为界切块，
-      // 防止本插件条目被后面其他插件条目的 disabled: true 跨条目误伤
-      // （误伤会跳过 Silent Pending 风险检查，把该报的吞掉）。
-      const nameRe = new RegExp(`name:\\s*['"]?${nameEsc}['"]?`)
-      disabled = text
-        .split(/(?=^\s*-\s)/m)
-        .some((block) => nameRe.test(block) && /disabled:\s*true/.test(block))
-    } catch {}
+  const perProfile = installedPlugins.map(({ profile, patchFile, patchEntries, globalPatchFile }) => {
+    const texts = [patchFile, globalPatchFile]
+      .filter(Boolean)
+      .map((f) => {
+        try {
+          return fs.readFileSync(f, 'utf8')
+        } catch {
+          return ''
+        }
+      })
+    const disabled = texts.some((text) => isDisabledInPatch(text, pkg.name))
     const registered = patchEntries.some((e) => e.includes(pkg.name))
     return { profile, registered, disabled }
   })
@@ -295,7 +451,7 @@ export function diagnoseActivation(targetDir, installedPlugins) {
       if (!registered || disabled) continue
       let patchText = ''
       try {
-        patchText = fs.readFileSync(path.join(DSH_DIR, 'profiles', profile, 'cordis.patch.yml'), 'utf8')
+        patchText = fs.readFileSync(path.join(dshDir(), 'profiles', profile, 'cordis.patch.yml'), 'utf8')
       } catch {}
       const available = SERVICE_SIGNATURES.filter((s) => s.pattern.test(patchText)).map((s) => s.name)
       for (const inj of injects) {
@@ -319,7 +475,7 @@ export function diagnoseActivation(targetDir, installedPlugins) {
   return {
     checked: true,
     package: pkg.name,
-    entry: { file: main, ready: entryReady },
+    entry: { file: entryFile, ready: entryReady },
     injects,
     perProfile,
     pendingRisks,
@@ -338,6 +494,8 @@ export function probeEnvironment(targetDir = process.cwd()) {
   }
 
   const installedPlugins = listInstalledPlugins()
+
+  const sharedFarm = scanSharedFarm({})
 
   const running = []
   try {
@@ -365,7 +523,7 @@ export function probeEnvironment(targetDir = process.cwd()) {
   const clientHalf = diagnoseClientHalf({
     pluginDir: targetDir,
     hostRoots: candidateGlobalRoots(),
-    profiles: profiles.map((name) => ({ name, dir: path.join(DSH_DIR, 'profiles', name) })),
+    profiles: profiles.map((name) => ({ name, dir: path.join(dshDir(), 'profiles', name) })),
   })
   if (clientHalf.checked && activation.checked) {
     const order = { OK: 0, WARN: 1, ERROR: 2 }
@@ -386,6 +544,7 @@ export function probeEnvironment(targetDir = process.cwd()) {
     globalDsh,
     profiles,
     overlayFindings: overlay,
+    sharedFarmFindings: sharedFarm,
     runningProcesses: running,
     installedPlugins,
     activation,
@@ -396,7 +555,7 @@ export function probeEnvironment(targetDir = process.cwd()) {
       peerWindows,
     },
     home: HOME,
-    dshDir: DSH_DIR,
+    dshDir: dshDir(),
   }
 }
 
@@ -406,10 +565,14 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.met
   printJson(report)
 
   const overlayCount = report.overlayFindings.length
+  const farm = report.sharedFarmFindings
   process.stderr.write(
     `\n全局 DSH: ${report.globalDsh?.version || '未检测到'} (${report.globalDsh?.source || 'n/a'})\n` +
     `profiles: ${report.profiles.join(', ') || '无'}\n` +
-    `覆盖层问题: ${overlayCount} 处\n` +
+    `覆盖层问题: ${overlayCount} 处` +
+    (farm && farm.brokenCount
+      ? `｜共享农场悬空软链: ${farm.brokenCount} 处（指向宿主 ${farm.hostBackedBroken}）`
+      : '') + '\n' +
     `运行中宿主进程: ${report.runningProcesses.length} 个\n` +
     (report.activation?.checked
       ? `目标插件启用就绪: ${report.activation.verdict}${report.activation.pendingRisks.length ? `（Silent Pending 风险 ${report.activation.pendingRisks.length} 处）` : ''}${report.activation.client ? `｜客户端半: ${report.activation.client.verdict}${report.activation.clientRisks.length ? `（死链 ${report.activation.clientRisks.length} 处）` : ''}` : ''}\n`

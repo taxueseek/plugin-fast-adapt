@@ -29,7 +29,7 @@ DSH 插件适配与破坏性变更核查，兼从零造插件脚手架。查官�
 | 弱模型表现 | 全套卡片进上下文，-3.07 pp | 六个独立脚本，每步只产出一份小输出 |
 | 代码级扫描 | 无 | 锚点匹配 + 四层降噪（见下文实测） |
 | 依赖 | — | 零外部依赖：Node 内置模块 + `git`/`npm` 命令 |
-| 自检 | — | 122 项断言，零网络，任何机器能跑 |
+| 自检 | — | 129 项断言，零网络，任何机器能跑 |
 
 ## 流程
 
@@ -145,7 +145,7 @@ node scripts/write-gate.mjs <插件目录>   # 出生证：硬门禁自动判，
 自检：
 
 ```sh
-npm test   # node scripts/self-test.mjs，122 项断言
+npm test   # node scripts/self-test.mjs，129 项断言
 ```
 
 开发者建议启用提交前门禁（一次性）：`git config core.hooksPath .githooks`——commit 时自动跑自检，改完真源忘了 sync-skill 在这一刻被拦。

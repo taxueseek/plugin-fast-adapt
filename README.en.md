@@ -29,7 +29,7 @@ The authoritative description of breaking changes lives in the vendor harness re
 | Weaker models | Full card library in context, -3.07 pp | Six independent scripts, one small output each |
 | Code-level scanning | None | Anchor matching + four noise-reduction layers (measured below) |
 | Dependencies | — | Zero external: Node built-ins + `git`/`npm` commands |
-| Self-test | — | 122 assertions, zero network, runs on any machine |
+| Self-test | — | 129 assertions, zero network, runs on any machine |
 
 ## Pipeline
 
@@ -150,7 +150,7 @@ No TypeScript, no AST library, no HTTP client. Runs on Node 22.13+ (`import.meta
 Self-test:
 
 ```sh
-npm test   # node scripts/self-test.mjs, 122 assertions
+npm test   # node scripts/self-test.mjs, 129 assertions
 ```
 
 Contributors should enable the pre-commit gate (one time): `git config core.hooksPath .githooks` — every commit runs the self-test, so a forgotten downstream sync is caught at commit time.

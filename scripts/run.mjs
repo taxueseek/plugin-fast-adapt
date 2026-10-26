@@ -189,12 +189,18 @@ stages.env = {
   globalDsh: env.globalDsh,
   profiles: env.profiles,
   overlayFindings: env.overlayFindings?.length ?? 0,
+  sharedFarmBroken: env.sharedFarmFindings?.brokenCount ?? 0,
+  sharedFarmHostBacked: env.sharedFarmFindings?.hostBackedBroken ?? 0,
   runningProcesses: env.runningProcesses?.length ?? 0,
   activation: env.activation?.verdict ?? null,
 }
 const hostVersion = env.globalDsh?.version ?? null
 if ((env.overlayFindings?.length ?? 0) > 0) {
   stages.env.warning = '覆盖层有旧包残留，先跑 env-heal 再谈适配（issue #263 类事故）。'
+} else if ((env.sharedFarmFindings?.brokenCount ?? 0) > 0) {
+  // 共享农场（profiles/node_modules）的悬空软链不在各 profile 覆盖层里，
+  // env-heal 不处理这一层；先报出来让人清，别让它继续以 ERR_MODULE_NOT_FOUND 的形式出现。
+  stages.env.warning = `共享 node_modules 农场有 ${env.sharedFarmFindings.brokenCount} 条悬空软链（指向宿主 ${env.sharedFarmFindings.hostBackedBroken}），消费它们的插件会装载失败；env-heal 不覆盖这一层，需手工清。`
 }
 
 // 2. 定版本：宿主是否落后官方 + 扫描窗口

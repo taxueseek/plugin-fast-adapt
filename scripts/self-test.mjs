@@ -18,7 +18,7 @@ import { resolveTargetVersion, fetchNpmMetadata, runGuideSync, guideVersionFor, 
 import { anchorMatches, verifyPackagesAgainstHost, pickScanRoots, scanPluginFromGuideRoot } from './code-scan.mjs'
 import { runQuickSmoke } from './quick-smoke.mjs'
 import { auditPlugin, peerPatchFor } from './plugin-audit.mjs'
-import { extractInjects, diagnoseActivation, candidateGlobalRoots, parsePatchEntries, probeEnvironment } from './env-doctor.mjs'
+import { extractInjects, diagnoseActivation, candidateGlobalRoots, parsePatchEntries, probeEnvironment, resolveEntryFile, scanSharedFarm, listInstalledPlugins } from './env-doctor.mjs'
 import { readClientDecl, clientExportPath, overlayMountedNames, isDeliberateRosterInsert, collectRoster, diagnoseClientHalf } from './lib/client-graph.mjs'
 import { scaffoldPlugin, projectNames, detectHarnessVersion, UsageError } from './scaffold.mjs'
 import { runWriteGate } from './write-gate.mjs'
@@ -1820,6 +1820,160 @@ test('parsePatchEntries：多行 insert 与 id 覆盖条目算挂载，注释条
   assert.ok(entries.some((e) => e.includes('@taxueseek/argo-dsh')), `id 覆盖条目应被识别: ${JSON.stringify(entries)}`)
   assert.ok(!entries.some((e) => e.includes('dsh-mcp-client')), '注释条目不该算挂载')
   assert.ok(!entries.some((e) => e.includes('MiniMax')), '深层 config 的模型名不该进条目清单')
+})
+
+// ── 环境层盲区：共享农场悬空软链 + 全局 patch 层 ────────────────────────────
+// 2026-10-26 实测：env-doctor 报「覆盖层问题 0 处」，实际共享农场有 209 条
+// 悬空软链（宿主启动日志里 client-runtime / orca-agent-hooks 两行装载失败），
+// 全局 patch 层的 orca-agent-hooks 行也完全看不见。三处都是「报 0」比「报错」
+// 更危险——它让人以为环境是干净的。
+
+test('scanSharedFarm：悬空软链被识别，指向宿主安装树的标 critical', () => {
+  const farm = tmpPluginDir('farm')
+  const host = tmpPluginDir('farm-host')
+  fs.mkdirSync(path.join(farm, '@deepseek-ai'), { recursive: true })
+  fs.symlinkSync(
+    path.join(host, '@deepseek-ai', 'dsh', 'node_modules', '@deepseek-ai', 'dsh-ghost'),
+    path.join(farm, '@deepseek-ai', 'dsh-ghost'),
+  )
+  const aliveTarget = path.join(farm, 'alive-pkg')
+  fs.mkdirSync(aliveTarget, { recursive: true })
+  fs.symlinkSync(aliveTarget, path.join(farm, 'alive'))
+  fs.mkdirSync(path.join(farm, 'plain-dir'), { recursive: true })
+
+  const r = scanSharedFarm({ farmDir: farm, hostRoots: [host] })
+  assert.strictEqual(r.symlinkCount, 2, '只数软链，普通目录不算')
+  assert.strictEqual(r.brokenCount, 1, '活链不算断链')
+  assert.strictEqual(r.hostBackedBroken, 1)
+  assert.strictEqual(r.findings[0].package, '@deepseek-ai/dsh-ghost')
+  assert.strictEqual(r.findings[0].severity, 'critical')
+  assert.ok(r.findings[0].reasons.includes('宿主升级'), '原因要说清是宿主升级后包被移除')
+})
+
+test('scanSharedFarm：目标不在宿主树下的断链标 info；目录不存在返回空结果', () => {
+  const farm = tmpPluginDir('farm2')
+  const elsewhere = tmpPluginDir('farm2-else')
+  fs.symlinkSync(path.join(elsewhere, 'gone'), path.join(farm, 'gone-link'))
+  const r = scanSharedFarm({ farmDir: farm, hostRoots: [tmpPluginDir('farm2-host')] })
+  assert.strictEqual(r.brokenCount, 1)
+  assert.strictEqual(r.hostBackedBroken, 0)
+  assert.strictEqual(r.findings[0].severity, 'info')
+
+  const missing = scanSharedFarm({ farmDir: path.join(farm, 'nope'), hostRoots: [] })
+  assert.strictEqual(missing.brokenCount, 0)
+  assert.deepStrictEqual(missing.findings, [])
+})
+
+test('全局 patch 层：~/.dsh/cordis.patch.yml 对所有 profile 生效（挂载与禁用都算）', () => {
+  const dsh = path.join(tmpPluginDir('dshhome'), '.dsh')
+  const web = path.join(dsh, 'profiles', 'web')
+  fs.mkdirSync(web, { recursive: true })
+  // 全局层只挂 orca-agent-hooks（本机 Orca 写入的形状），profile 层只挂 web-only
+  fs.writeFileSync(path.join(dsh, 'cordis.patch.yml'), [
+    '# >>> orca-managed-dsh-hooks (managed by Orca; do not edit) >>>',
+    '- insert:',
+    '    - id: orca-agent-hooks',
+    "      name: '@deepseek-ai/dsh-hooks-claude-code'",
+    '      config:',
+    "        configPath: '/tmp/dsh-hooks.json'",
+    '# <<< orca-managed-dsh-hooks <<<',
+    '',
+  ].join('\n'))
+  fs.writeFileSync(path.join(web, 'cordis.patch.yml'), [
+    '- id: web-only',
+    "  name: 'web-only-plugin'",
+    '',
+  ].join('\n'))
+  const dir = tmpPluginDir('act-global')
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
+    name: 'orca-agent-hooks', version: '1.0.0', main: 'lib/index.js',
+    peerDependencies: { '@deepseek-ai/dsh': '>=0.1.0-0' },
+  }))
+  fs.mkdirSync(path.join(dir, 'lib'), { recursive: true })
+  fs.writeFileSync(path.join(dir, 'lib', 'index.js'), 'export function apply() {}\n')
+
+  process.env.DSH_PFA_DSH_HOME = dsh
+  try {
+    const plugins = listInstalledPlugins()
+    assert.strictEqual(plugins.length, 1)
+    assert.ok(plugins[0].patchEntries.some((e) => e.includes('@deepseek-ai/dsh-hooks-claude-code')), '全局层条目要进 patchEntries')
+    assert.ok(plugins[0].patchEntries.some((e) => e.includes('web-only-plugin')), 'profile 层条目也要在')
+    // 只被全局层挂载的插件，registered 必须为 true——否则每次启动失败都看不见
+    const act = diagnoseActivation(dir, plugins)
+    assert.strictEqual(act.perProfile[0].registered, true, '全局层挂载的插件算已挂载')
+  } finally {
+    delete process.env.DSH_PFA_DSH_HOME
+  }
+})
+
+test('全局 patch 层的 disabled 也参与判定', () => {
+  const dsh = path.join(tmpPluginDir('dshhome2'), '.dsh')
+  const web = path.join(dsh, 'profiles', 'web')
+  fs.mkdirSync(web, { recursive: true })
+  fs.writeFileSync(path.join(dsh, 'cordis.patch.yml'), [
+    '- insert:',
+    '    - id: ghost-off',
+    "      name: 'ghost-off'",
+    '      disabled: true',
+    '',
+  ].join('\n'))
+  const dir = tmpPluginDir('act-global-dis')
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
+    name: 'ghost-off', version: '1.0.0', main: 'lib/index.js',
+    peerDependencies: { '@deepseek-ai/dsh': '>=0.1.0-0' },
+  }))
+  fs.mkdirSync(path.join(dir, 'lib'), { recursive: true })
+  fs.writeFileSync(path.join(dir, 'lib', 'index.js'), 'export function apply() {}\n')
+
+  process.env.DSH_PFA_DSH_HOME = dsh
+  try {
+    const act = diagnoseActivation(dir, listInstalledPlugins())
+    assert.strictEqual(act.perProfile[0].disabled, true, '全局层的 disabled: true 要算')
+  } finally {
+    delete process.env.DSH_PFA_DSH_HOME
+  }
+})
+
+test('resolveEntryFile：exports 优先于 main，无 main 无 exports 才退 lib/index.js', () => {
+  assert.strictEqual(resolveEntryFile({ exports: './index.js' }), 'index.js', '字符串 exports')
+  assert.strictEqual(resolveEntryFile({ exports: { '.': './src/main.mjs' } }), 'src/main.mjs', '对象 exports 的 . 是字符串')
+  assert.strictEqual(
+    resolveEntryFile({ exports: { '.': { types: './lib/types/index.d.ts', default: './lib/index.js' } } }),
+    'lib/index.js',
+    '条件 exports 取 default，不取 types',
+  )
+  assert.strictEqual(resolveEntryFile({ exports: { './client': './lib/client.js' } }), 'lib/index.js', '只有子路径 exports 时退默认')
+  assert.strictEqual(resolveEntryFile({ main: './dsh/index.js' }), 'dsh/index.js', '无 exports 用 main')
+  assert.strictEqual(resolveEntryFile({}), 'lib/index.js', '都没有退 lib/index.js')
+})
+
+test('diagnoseActivation：入口写在 exports 的包不再被误报 ERROR（dsh-env-sweeper 实录）', () => {
+  const dir = tmpPluginDir('act-exports')
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
+    name: 't-exports', version: '1.0.0',
+    exports: { '.': './index.js', './package.json': './package.json' },
+    dsh: { bundle: { patch: './cordis.patch.yml' } },
+  }))
+  fs.writeFileSync(path.join(dir, 'index.js'), 'export function apply() {}\n')
+  const act = diagnoseActivation(dir, [{ profile: 'web', patchFile: '/nonexistent', patchEntries: ['name: t-exports'] }])
+  assert.strictEqual(act.entry.file, 'index.js')
+  assert.strictEqual(act.entry.ready, true)
+  assert.strictEqual(act.verdict, 'OK', '入口存在且已挂载应为 OK，不是 ERROR')
+})
+
+test('diagnoseActivation：exports 指向不存在的文件时退回 main，不算缺入口', () => {
+  const dir = tmpPluginDir('act-exports-fb')
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
+    name: 't-exports-fb', version: '1.0.0',
+    main: 'lib/index.js',
+    exports: { '.': './types-only.d.ts' },
+    peerDependencies: { '@deepseek-ai/dsh': '>=0.1.0-0' },
+  }))
+  fs.mkdirSync(path.join(dir, 'lib'), { recursive: true })
+  fs.writeFileSync(path.join(dir, 'lib', 'index.js'), 'export function apply() {}\n')
+  const act = diagnoseActivation(dir, [{ profile: 'web', patchFile: '/nonexistent', patchEntries: ['name: t-exports-fb'] }])
+  assert.strictEqual(act.entry.file, 'lib/index.js', 'exports 只指向不存在的 types 时退回 main')
+  assert.strictEqual(act.entry.ready, true)
 })
 
 // ── 客户端半（dsh.client）三层判定：声明 / 产物 / 名册 ──────────────────────
