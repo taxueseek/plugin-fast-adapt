@@ -1,6 +1,6 @@
 ---
 name: plugin-fast-adapt
-description: DSH 插件适配与破坏性变更核查，兼造插件脚手架与性能架构审计。run.mjs 一键编排全流程并把每次运行写进本地日志（list 回看、doctor 交叉核对宿主日志、sanitize 脱敏后才能外发）；查 DeepSeek 官方最新版本，取该版本的官方升级指南，扫描本机插件代码（package 命中自动到目标宿主 node_modules 实测核查），报出哪些地方踩了破坏性变更并给出官方修法；seams 接缝查询一个包名/API 符号在指南与本机宿主里的双源结论（还在不在、哪个版本移除的）；scaffold 一条命令生成五形态可冒烟的插件骨架（package.json 不变量＋形态入口＋挂载层＋命名投影，生成即验证）；同时巡检本机 DSH 环境（profiles 覆盖层旧包残留、共享 node_modules 农场悬空软链、两层 patch（各 profile 层＋全局 ~/.dsh/cordis.patch.yml）、已装插件、运行中宿主、宿主半与客户端半双面启用就绪度——dsh.client 声明/产物/注入名册死链，web 端与桌面端一视同仁）。修完可秒级冒烟验证，--real-smoke 再补干净 profile 真装真启档（桥接原仓库 verify-runtime），升级时可顺带做插件性能与架构审计。老版本插件（官方指南覆盖不到 v0.1.7-rc.2 之前的走廊）转迁移 SOP，对照原仓库 plugin-upgrade 的人工卡片走廊走七阶段流程。当需要把 DSH 插件适配到新版本或老版本、从零创建 DSH 插件、给新插件生成起步骨架、排查升级后插件报错、核查插件是否用了已移除的包或 API、查某个包/API 在目标宿主还在不在、检查 ~/.dsh 覆盖层有无旧包残留、给插件做性能与架构体检、诊断宿主启动失败日志（端口占用/未声明 inject/客户端入口死链）、把独立仓的技能面同步到下游技能目录时使用。触发词：适配 DSH 插件、升级插件、插件不兼容、dsh 升级后报错、插件用了废弃 API、接缝查询、这个 API 还在不在、检查覆盖层旧包、客户端卡 loading、entry did not activate、web boot 失败、注入死链、老版本 DSH 适配、历史走廊迁移、创建 DSH 插件、写 DSH 插件、插件脚手架、插件冒烟测试、插件性能审计、插件装了没生效、宿主启动失败、StartupError、EADDRINUSE、日志诊断、下游同步、技能漂移。
+description: DSH 插件适配与破坏性变更核查，兼造插件脚手架与性能架构审计。run.mjs 一键编排全流程并把每次运行写进本地日志（list 回看、doctor 交叉核对宿主日志、sanitize 脱敏后才能外发）；查 DeepSeek 官方最新版本，取该版本的官方升级指南，扫描本机插件代码（package 命中自动到目标宿主 node_modules 实测核查），报出哪些地方踩了破坏性变更并给出官方修法；seams 接缝查询一个包名/API 符号在指南与本机宿主里的双源结论（还在不在、哪个版本移除的）；scaffold 一条命令生成五形态可运行插件（完整入口实现＋挂载层＋命名投影，真基类装载验证）；同时巡检本机 DSH 环境（profiles 覆盖层旧包残留、共享 node_modules 农场悬空软链、两层 patch（各 profile 层＋全局 ~/.dsh/cordis.patch.yml）、已装插件、运行中宿主、宿主半与客户端半双面启用就绪度——dsh.client 声明/产物/注入名册死链，web 端与桌面端一视同仁）。修完可秒级冒烟验证，--real-smoke 再补干净 profile 真装真启档（桥接原仓库 verify-runtime），升级时可顺带做插件性能与架构审计。老版本插件（官方指南覆盖不到 v0.1.7-rc.2 之前的走廊）转迁移 SOP，对照原仓库 plugin-upgrade 的人工卡片走廊走七阶段流程。当需要把 DSH 插件适配到新版本或老版本、从零创建 DSH 插件、给新插件生成可运行起点、排查升级后插件报错、核查插件是否用了已移除的包或 API、查某个包/API 在目标宿主还在不在、检查 ~/.dsh 覆盖层有无旧包残留、给插件做性能与架构体检、诊断宿主启动失败日志（端口占用/未声明 inject/客户端入口死链）、把独立仓的技能面同步到下游技能目录时使用。触发词：适配 DSH 插件、升级插件、插件不兼容、dsh 升级后报错、插件用了废弃 API、接缝查询、这个 API 还在不在、检查覆盖层旧包、客户端卡 loading、entry did not activate、web boot 失败、注入死链、老版本 DSH 适配、历史走廊迁移、创建 DSH 插件、写 DSH 插件、插件脚手架、插件冒烟测试、插件性能审计、插件装了没生效、宿主启动失败、StartupError、EADDRINUSE、日志诊断、下游同步、技能漂移。
 ---
 
 # plugin-fast-adapt
@@ -12,7 +12,7 @@ description: DSH 插件适配与破坏性变更核查，兼造插件脚手架与
 | 步 | 脚本 | 回答什么 |
 | --- | --- | --- |
 | ★ 一键全链（推荐入口） | `scripts/run.mjs` | 环境→定版→指南→扫描→体检→冒烟→typecheck 一条命令跑完，出统一报告并写本地运行日志 |
-| 0 造骨架（可选） | `scripts/scaffold.mjs` | 从零造插件：一条命令出五形态可冒烟骨架，生成即验证 |
+| 0 造插件（可选） | `scripts/scaffold.mjs` | 从零造出可运行插件：一条命令出五形态完整入口，生成即验证 |
 | 1 探测环境 | `scripts/env-doctor.mjs` | 本机装的 DSH 是哪个版本？覆盖层有没有旧包？共享农场有没有悬空软链？两层 patch 都读到了吗？装了哪些插件？插件启用就绪吗？ |
 | 2 定版本 | `scripts/guide-sync.mjs` | 官方最新版本是什么？本机该不该跟？跟哪个？ |
 | 3 取差异 | `scripts/guide-sync.mjs --clone` | 本机到目标版本之间，官方列了哪些破坏性变更？ |
@@ -185,7 +185,7 @@ node scripts/sync-skill.mjs --dest <下游技能目录>            # 同步
 
 ## 造插件：从零开始
 
-第一步用本 skill 的 scaffold 一条命令出可冒烟骨架：
+第一步用本 skill 的 scaffold 一条命令出可运行插件：
 
 ```sh
 node scripts/scaffold.mjs <namespace>/<name> --form tool|hook|service|config|llm-adapter [--out <目录>] [--harness <版本>] [--no-smoke]
@@ -193,11 +193,11 @@ node scripts/scaffold.mjs <namespace>/<name> --form tool|hook|service|config|llm
 
 它只做确定性的事，不碰裁量：
 
-- **五件套生成**：package.json（免构建纯 ESM 不变量：`type: module`、main 与 exports 双指 `lib/index.js`、files 含挂载层）、按形态的最小可跑入口（tool 用 raw JSON Schema 注册、hook 走 waterfall 并显式 `next()`、service/config/llm-adapter 用宿主基类形态）、`cordis.patch.yml` 最小挂载条目（没有它装了不生效，env-doctor 的 activation 查的就是这层）、`dsh-plugin.naming.json`、README＋.gitignore
+- **五件套生成**：package.json（免构建纯 ESM 不变量：`type: module`、main 与 exports 双指 `lib/index.js`、files 含挂载层）、按形态的完整入口实现（tool 用 raw JSON Schema 注册、hook 走 waterfall 并显式 `next()`、service 继承宿主 Service 并注册服务名、config 导出真 Schemastery Schema、llm-adapter 继承宿主 LlmAdapter 并注册路由；入口里的能力是能跑通的起点实现，换成你的即可）、`cordis.patch.yml` 最小挂载条目（没有它装了不生效，env-doctor 的 activation 查的就是这层）、`dsh-plugin.naming.json`、README＋.gitignore
 - **命名投影**：loader id／service／tool／command／skill／event／route 全部按上游 naming-conventions 的 collision-resistant 规则从 coordinate 推导，生成物已过上游 validate-names 的 `--strict` 校验（0 错误 0 警告）
-- **当场验证**：tool/hook 两形态零依赖直接冒烟（生成即验证注册）；service/config/llm-adapter 依赖宿主 `@deepseek-ai/*` 基类，诚实跳过冒烟并标注装包后手动跑；llm-adapter 的基类 import 来源上游文档没有钉死，骨架里是 TODO 占位，生成后必须对照目标宿主 checkout 核名
+- **当场验证（两层，缺一层报一层）**：tool/hook 走零依赖内存冒烟；五形态都走真基类装载——本机装了宿主时用真实 `@deepseek-ai/*` 基类 import 入口，验基类 API 用对没对（Service 继承与 `super(ctx, name)`、Schema 真校验、LlmAdapter 继承与路由注册）。本机没装宿主时如实跳过，不伪造通过
 
-目标目录非空即拒绝（不动用户文件）；非法 coordinate 在写盘前拒绝。骨架只保证结构与命名合规，能力实现仍以真源文档为准：
+目标目录非空即拒绝（不动用户文件）；非法 coordinate 在写盘前拒绝。生成物保证「能装载、契约成立、能力可跑」；完整契约仍以真源文档为准：
 
 | 需求 | 去 where |
 | --- | --- |
@@ -243,7 +243,7 @@ node scripts/scaffold.mjs <namespace>/<name> --form tool|hook|service|config|llm
 npm test
 ```
 
-129 项断言，覆盖扫描器不误报（注释和字符串里的同名词不算命中）、不漏报、真实 semver 范围判定（prerelease tuple 规则，本轮与宿主自带 semver 对拍的 30 例锚点回归）、扫描窗口计算（宿主包 peer 精确匹配、cordis/schemastery 版本线不混入、倒挂守卫回退留痕）、目标形态判定（dsh 命名空间/生态依赖证据、非插件 N/A、工具仓跳过 Cordis 生命周期）、import type 区分、宿主实测核查分级、描述漂移检测、指南出处锚点（guideFile/guideLine 落盘往返）、接缝查询双源结论（一致已移除/宿主仍在报分歧/无记录如实说/探不到宿主不伪造）、运行日志×宿主日志交叉核对、--real-smoke 桥接档位（fail→退出码 2、tail 归因透传、失败指路）、一键编排与运行日志（写入/索引/脱敏往返、phases 三态、dirty 标记、90 天保留清理）、上游盯梢退出码（upgrade-available→1 其余→0）、同步提交命令建议（git 仓给只 add 同步路径的命令、非 git 静默跳过）、版本启发式、替换对识别、端到端命中、SOP 引用完整性、dist-tags 缓存三态、冒烟验证（含未声明 inject 契约拦截与 Mock 缺口披露）、四维审计（含 peer 修补建议）、启用诊断（宿主半 Silent Pending＋客户端半三层判定：声明/产物/注入名册死链）、环境层盲区三处（共享 node_modules 农场悬空软链的 critical/info 分级、全局 patch 层对所有 profile 生效且 disabled 也参与判定、入口解析按 exports 优先于 main 防无 main 包被误报 ERROR）、创作脚手架（五形态生成与冒烟闭环、命名投影语法、挂载层可识别、非法输入与非空目录拒绝）、创作体检门（硬门禁拦截、软指标不越权判红、跳过语义、scaffold 衔接）、日志诊断（startup 头部/失败插件/等待服务/信号/跨文件汇总）、下游同步漂移检查＋真机零漂移拦截、self-test 体积门禁（超 2200 行即红）、跨平台模拟（Windows 根探测与缓存隔离）、文档断言数防漂移、扫描性能回归门。自检零网络、零外部依赖，任何机器上都能跑（Windows 分支已做模拟验证，真机待验）。
+132 项断言，覆盖扫描器不误报（注释和字符串里的同名词不算命中）、不漏报、真实 semver 范围判定（prerelease tuple 规则，本轮与宿主自带 semver 对拍的 30 例锚点回归）、扫描窗口计算（宿主包 peer 精确匹配、cordis/schemastery 版本线不混入、倒挂守卫回退留痕）、目标形态判定（dsh 命名空间/生态依赖证据、非插件 N/A、工具仓跳过 Cordis 生命周期）、import type 区分、宿主实测核查分级、描述漂移检测、指南出处锚点（guideFile/guideLine 落盘往返）、接缝查询双源结论（一致已移除/宿主仍在报分歧/无记录如实说/探不到宿主不伪造）、运行日志×宿主日志交叉核对、--real-smoke 桥接档位（fail→退出码 2、tail 归因透传、失败指路）、一键编排与运行日志（写入/索引/脱敏往返、phases 三态、dirty 标记、90 天保留清理）、上游盯梢退出码（upgrade-available→1 其余→0）、同步提交命令建议（git 仓给只 add 同步路径的命令、非 git 静默跳过）、版本启发式、替换对识别、端到端命中、SOP 引用完整性、dist-tags 缓存三态、冒烟验证（含未声明 inject 契约拦截与 Mock 缺口披露）、四维审计（含 peer 修补建议）、启用诊断（宿主半 Silent Pending＋客户端半三层判定：声明/产物/注入名册死链）、环境层盲区三处（共享 node_modules 农场悬空软链的 critical/info 分级、全局 patch 层对所有 profile 生效且 disabled 也参与判定、入口解析按 exports 优先于 main 防无 main 包被误报 ERROR）、创作脚手架（五形态生成与冒烟闭环、命名投影语法、挂载层可识别、非法输入与非空目录拒绝）、创作体检门（硬门禁拦截、软指标不越权判红、跳过语义、scaffold 衔接）、日志诊断（startup 头部/失败插件/等待服务/信号/跨文件汇总）、下游同步漂移检查＋真机零漂移拦截、self-test 体积门禁（超 2200 行即红）、跨平台模拟（Windows 根探测与缓存隔离）、文档断言数防漂移、扫描性能回归门。自检零网络、零外部依赖，任何机器上都能跑（Windows 分支已做模拟验证，真机待验）。
 
 提交前门禁：`git config core.hooksPath .githooks`（一次性）启用 pre-commit 钩子，commit 时自动跑本自检——改完真源忘了 sync-skill 在这一刻被拦，不用等有人跑 npm test。
 

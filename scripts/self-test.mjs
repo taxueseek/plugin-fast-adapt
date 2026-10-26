@@ -26,14 +26,15 @@ import { listRuns, sanitizeRun, writeRunLog, pruneRuns } from './lib/runlog.mjs'
 import { parseStartupLog, parseMessages, diagnoseLogs } from './log-doctor.mjs'
 import { checkSkillSync, syncSkill, suggestCommitCommand } from './sync-skill.mjs'
 import { querySeams } from './seams.mjs'
+import { resolveHostModules, verifyWithHostModules } from './lib/host-modules.mjs'
 import { correlateRuns } from './run-log.mjs'
 
 const SCRIPTS = path.dirname(fileURLToPath(import.meta.url))
 
-const tests = []
-function test(name, fn) {
-  tests.push({ name, fn })
-}
+// 用例登记与运行已抽到 scripts/self-test/harness.mjs；章节按节拆到同目录的
+// *.test.mjs，本文件只 import 各节并执行（2200 行体积门禁，见文件末）。
+import { test, tmpPluginDir, runTests, tests } from './self-test/harness.mjs'
+import './self-test/scaffold.test.mjs'
 
 process.stderr.write('plugin-fast-adapt 自检\n\n')
 
@@ -604,224 +605,9 @@ test('文档宣称的断言数与实际一致（防手工漂移）', () => {
   assert.ok(checked >= 5, `应至少核对 5 处断言数，实际 ${checked} 处`)
 })
 
-// ── 创作脚手架（第 0 步）─────────────────────────────────────────────────────
-// 生成物三重验证：结构断言（文件与 package.json 不变量）、冒烟闭环（零依赖
-// 形态真跑 quick-smoke）、挂载层可被 env-doctor 的 parsePatchEntries 识别
-// （「装了不生效」是 env-doctor 查的头号事故，生成的骨架必须天然可挂载）。
-
-const SCAFFOLD_FORMS = ['tool', 'hook', 'service', 'config', 'llm-adapter']
-const scaffoldDirs = []
-
-async function scaffoldTo(name, options) {
-  const dir = tmpPluginDir(`scaffold-${name}`)
-  scaffoldDirs.push(dir)
-  return scaffoldPlugin({ outDir: dir, harnessVersion: '0.2.1-rc.3', ...options })
-}
-
-test('scaffold：tool 形态端到端——五件套生成＋冒烟注册工具＋挂载层可识别', async () => {
-  const result = await scaffoldTo('tool', { coordinate: 'taxueseek/demo-tool', form: 'tool' })
-  for (const f of ['package.json', 'lib/index.js', 'cordis.patch.yml', 'dsh-plugin.naming.json', 'README.md', '.gitignore']) {
-    assert.ok(fs.existsSync(path.join(result.outDir, f)), `应生成 ${f}`)
-  }
-  const pkg = JSON.parse(fs.readFileSync(path.join(result.outDir, 'package.json'), 'utf8'))
-  assert.strictEqual(pkg.type, 'module')
-  assert.strictEqual(pkg.main, './lib/index.js')
-  assert.strictEqual(pkg.exports['.'], './lib/index.js')
-  assert.deepStrictEqual(pkg.files, ['lib', 'cordis.patch.yml'])
-  assert.strictEqual(pkg.dsh.bundle.patch, './cordis.patch.yml')
-  assert.strictEqual(pkg.name, '@taxueseek/dsh-demo-tool')
-  const manifest = JSON.parse(fs.readFileSync(path.join(result.outDir, 'dsh-plugin.naming.json'), 'utf8'))
-  assert.deepStrictEqual(manifest.names.loaderIds, ['taxueseek-demo-tool'])
-  assert.deepStrictEqual(manifest.names.tools, ['taxueseek_demo_tool_query'])
-  const patch = fs.readFileSync(path.join(result.outDir, 'cordis.patch.yml'), 'utf8')
-  const entries = parsePatchEntries(patch)
-  assert.strictEqual(entries.length, 1, '挂载层应恰好一条活跃条目')
-  assert.ok(entries[0].includes('@taxueseek/dsh-demo-tool') && entries[0].includes('taxueseek-demo-tool'), '条目应含包名与 loader id')
-  assert.strictEqual(result.smoke.run, true)
-  assert.strictEqual(result.smoke.success, true)
-  assert.deepStrictEqual(result.smoke.registeredTools, ['taxueseek_demo_tool_query'])
-  assert.strictEqual(result.smoke.mockFallbacks.length, 0, 'tool 骨架应零 Mock 兜底（register 与 inject 都被 Mock 覆盖）')
-})
-
-test('scaffold：hook 形态冒烟通过且不误注册工具', async () => {
-  const result = await scaffoldTo('hook', { coordinate: 'taxueseek/demo-hook', form: 'hook' })
-  assert.strictEqual(result.smoke.success, true)
-  assert.deepStrictEqual(result.smoke.registeredTools, [])
-})
-
-test('scaffold：依赖宿主基类的三形态诚实跳过冒烟并保留核名提醒', async () => {
-  const expectations = {
-    service: (src) => src.includes('extends Service'),
-    config: (src) => src.includes('Schema.object'),
-    'llm-adapter': (src) => src.includes('TODO') && src.includes('以目标宿主 checkout 为准'),
-  }
-  for (const form of ['service', 'config', 'llm-adapter']) {
-    const result = await scaffoldTo(form, { coordinate: `taxueseek/demo-${form}`, form })
-    assert.strictEqual(result.smoke, null, `${form} 不该自动冒烟（依赖宿主基类，Mock 覆盖不了）`)
-    const src = fs.readFileSync(path.join(result.outDir, 'lib', 'index.js'), 'utf8')
-    assert.ok(expectations[form](src), `${form} 入口缺关键结构`)
-  }
-})
-
-test('scaffold：命名投影符合官方语法与 collision-resistant 规则', () => {
-  const n = projectNames('alice', 'web-search')
-  assert.strictEqual(n.coordinate, 'alice/web-search')
-  assert.strictEqual(n.packageName, '@alice/dsh-web-search')
-  assert.deepStrictEqual(n.loaderIds, ['alice-web-search'])
-  assert.deepStrictEqual(n.services, ['aliceWebSearchIndex'])
-  assert.deepStrictEqual(n.tools, ['alice_web_search_query'])
-  assert.deepStrictEqual(n.events, ['alice-web-search/ready'])
-  assert.deepStrictEqual(n.routes, [{ kind: 'exact', path: '/api/plugins/alice-web-search/query' }])
-  const kebab = /^[a-z]([a-z0-9]*(-[a-z0-9]+)*)?$/
-  for (const value of [...n.commands, ...n.skills, ...n.settingsNamespaces, ...n.skillProviders]) {
-    assert.ok(kebab.test(value), `${value} 应为 kebab`)
-  }
-  assert.ok(kebab.test(n.pluginNames[0]), '插件名应为 kebab')
-})
-
-test('scaffold：非法输入拒绝且不落盘', async () => {
-  const dir = tmpPluginDir('scaffold-reject')
-  scaffoldDirs.push(dir)
-  for (const bad of [{ coordinate: 'Alice/tool' }, { coordinate: 'no-slash' }, { coordinate: 'a/b/c' }, { coordinate: 'taxueseek/demo-tool', form: 'widget' }]) {
-    await assert.rejects(
-      () => scaffoldPlugin({ outDir: dir, harnessVersion: '0.0.0', ...bad }),
-      UsageError,
-      `${JSON.stringify(bad)} 应被拒绝`
-    )
-  }
-  assert.strictEqual(fs.readdirSync(dir).length, 0, '拒绝必须发生在写盘前')
-})
-
-test('scaffold：目标目录非空时拒绝覆盖', async () => {
-  const dir = tmpPluginDir('scaffold-occupied')
-  scaffoldDirs.push(dir)
-  fs.writeFileSync(path.join(dir, 'user-file.txt'), 'keep')
-  await assert.rejects(
-    () => scaffoldPlugin({ coordinate: 'taxueseek/demo-tool', form: 'tool', outDir: dir, harnessVersion: '0.0.0' }),
-    UsageError
-  )
-  assert.strictEqual(fs.readFileSync(path.join(dir, 'user-file.txt'), 'utf8'), 'keep', '用户文件不能动')
-})
-
-test('scaffold：显式 harness 版本优先于本机探测', async () => {
-  const result = await scaffoldTo('versioned', { coordinate: 'taxueseek/demo-ver', form: 'tool', harnessVersion: '9.9.9' })
-  assert.strictEqual(result.harnessVersion, '9.9.9')
-  const pkg = JSON.parse(fs.readFileSync(path.join(result.outDir, 'package.json'), 'utf8'))
-  assert.ok(pkg.description.includes('9.9.9'), 'description 应记录目标宿主版本')
-})
-
-test('scaffold：Windows 模拟下宿主探测不依赖 POSIX 布局', () => {
-  const winVersion = detectHarnessVersion({ platform: 'win32', env: { APPDATA: 'X:\\npm' } })
-  assert.ok(winVersion === null || typeof winVersion === 'string', 'win 模拟探测应安全返回，不抛路径异常')
-})
-
-// ── 创作体检门（造完即验）────────────────────────────────────────────────────
-// 核心设计是判定分层：硬门禁只有三条（entry/smoke/critical），fail 才判红；
-// audit 分数、high/medium 命中、WARN 全部只透传进 discretion 不拍板。
-// 断言围绕两件事：硬门禁真的拦得住，软指标真的不越权。
-
-const gateEnvWithoutDsh = (dir) => {
-  // 真实探测但抹掉宿主版本：指南自动发现必走不到缓存，code-scan 诚实跳过。
-  // 自检因此不依赖本机 ~/.cache/dsh-plugin-fast-adapt/ 的状态，任何机器同绿。
-  const env = probeEnvironment(dir)
-  return { ...env, globalDsh: null }
-}
-
-test('write-gate：tool 骨架出生证——硬门禁全过、软指标只进裁量区', async () => {
-  const result = await scaffoldTo('gate-pass', { coordinate: 'taxueseek/gate-pass', form: 'tool', harnessVersion: '0.2.1-rc.3' })
-  const gate = await runWriteGate(result.outDir, { detectEnv: gateEnvWithoutDsh })
-  assert.strictEqual(gate.verdict, 'pass')
-  const gates = Object.fromEntries(gate.hardGates.map((g) => [g.gate, g]))
-  assert.strictEqual(gates.entry.pass, true)
-  assert.strictEqual(gates.smoke.pass, true)
-  assert.ok(!('code-scan-critical' in gates), '无宿主版本时应不设 critical 门而非放行')
-  assert.ok(gate.skipped.some((s) => s.step === 'code-scan'), 'code-scan 应诚实跳过并给补法')
-  assert.ok(gate.discretion.some((d) => d.item === 'audit-scores'), 'audit 分数应在裁量区')
-  assert.ok(gate.discretion.some((d) => d.item === 'not-installed'), '未挂载 profile 应报事实不判红')
-})
-
-test('write-gate：入口缺失硬门禁拦截', async () => {
-  const result = await scaffoldTo('gate-broken', { coordinate: 'taxueseek/gate-broken', form: 'tool', harnessVersion: '0.2.1-rc.3' })
-  fs.rmSync(path.join(result.outDir, 'lib', 'index.js'))
-  const gate = await runWriteGate(result.outDir, { detectEnv: gateEnvWithoutDsh })
-  assert.strictEqual(gate.verdict, 'fail')
-  const gates = Object.fromEntries(gate.hardGates.map((g) => [g.gate, g]))
-  assert.strictEqual(gates.entry.pass, false)
-  assert.strictEqual(gates.smoke.pass, false)
-})
-
-test('write-gate：critical 命中（import 已移除包）拦截硬门禁', async () => {
-  const result = await scaffoldTo('gate-critical', { coordinate: 'taxueseek/gate-critical', form: 'tool', harnessVersion: '0.2.1-rc.3' })
-  fs.writeFileSync(
-    path.join(result.outDir, 'lib', 'extra.js'),
-    `import { x } from '@deepseek-ai/dsh-removed-in-history'\nexport const y = x\n`
-  )
-  // 假指南根：<guideRoot>/v<version>/<topic>/guide.md，锚点写已移除包
-  const guideRoot = tmpPluginDir('gate-guides')
-  scaffoldDirs.push(guideRoot)
-  const guideDir = path.join(guideRoot, 'v0.2.1-rc.3', 'package-removal')
-  fs.mkdirSync(guideDir, { recursive: true })
-  fs.writeFileSync(
-    path.join(guideDir, 'guide.md'),
-    [
-      '---',
-      'kind: upgrade-guide',
-      'description: "test fixture"',
-      '---',
-      '# Removed package',
-      '',
-      '## Change',
-      '',
-      'The package @deepseek-ai/dsh-removed-in-history was removed.',
-      '',
-      '## Migration',
-      '',
-      '1. Remove the import of @deepseek-ai/dsh-removed-in-history.',
-      '',
-    ].join('\n')
-  )
-  const gate = await runWriteGate(result.outDir, { guideRoot, detectEnv: gateEnvWithoutDsh })
-  assert.strictEqual(gate.verdict, 'fail', 'import 已移除包必须判红')
-  const criticalGate = gate.hardGates.find((g) => g.gate === 'code-scan-critical')
-  assert.ok(criticalGate, '显式 --guide 时应设 critical 门')
-  assert.strictEqual(criticalGate.pass, false)
-})
-
-test('write-gate：audit 扣分不越权判红（软指标分层的关键回归）', async () => {
-  const result = await scaffoldTo('gate-audit', { coordinate: 'taxueseek/gate-audit', form: 'tool', harnessVersion: '0.2.1-rc.3' })
-  // 造一个 performance 会扣分的文件（同步 I/O），audit 分数必然 <100
-  fs.writeFileSync(
-    path.join(result.outDir, 'lib', 'heavy.js'),
-    `import fs from 'node:fs'\nexport function readAll(p) { return fs.readFileSync(p, 'utf8') }\n`
-  )
-  const gate = await runWriteGate(result.outDir, { detectEnv: gateEnvWithoutDsh })
-  const auditItem = gate.discretion.find((d) => d.item === 'audit-scores')
-  assert.ok(auditItem.data.scores.performance < 100, 'fixture 应真的触发 audit 扣分，否则本断言失去对象')
-  assert.strictEqual(gate.verdict, 'pass', 'audit 扣分是裁量项，不能影响硬门禁判定')
-})
-
-test('write-gate：--skip-smoke 跳过后 smoke 不进门禁且给原因', async () => {
-  const result = await scaffoldTo('gate-skip', { coordinate: 'taxueseek/gate-skip', form: 'tool', harnessVersion: '0.2.1-rc.3' })
-  const gate = await runWriteGate(result.outDir, { skipSmoke: true, detectEnv: gateEnvWithoutDsh })
-  assert.ok(!gate.hardGates.some((g) => g.gate === 'smoke'), '跳过后不该有 smoke 门')
-  assert.ok(gate.skipped.some((s) => s.step === 'smoke'), '跳过要给原因')
-})
-
-test('scaffold 衔接：nextSteps 与生成 README 都指向体检门', async () => {
-  const result = await scaffoldTo('gate-link', { coordinate: 'taxueseek/gate-link', form: 'tool', harnessVersion: '0.2.1-rc.3' })
-  assert.ok(result.nextSteps.some((s) => s.includes('write-gate.mjs')), 'nextSteps 应指向 write-gate')
-  const readme = fs.readFileSync(path.join(result.outDir, 'README.md'), 'utf8')
-  assert.ok(readme.includes('write-gate.mjs'), '生成的 README 应指向 write-gate')
-  assert.ok(readme.includes('--skip-smoke'), 'README 应说明重复冒烟的免跑方式')
-})
 
 // ── guide-sync dist-tags 缓存 ────────────────────────────────────────────────
 // 本机网络查 npm registry 曾实测 15s 超时失败；缓存命中应为 0 网络依赖。
-
-function tmpPluginDir(name) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `fast-adapt-${name}-`))
-  return dir
-}
 
 test('dist-tags TTL 内读缓存不打网络', async () => {
   const cache = path.join(tmpPluginDir('cache1'), 'npm-metadata.json')
@@ -2158,27 +1944,6 @@ test('扫描器对触点密集大文件保持线性（性能回归门）', () =>
 
 // ── 汇总 ────────────────────────────────────────────────────────────────────
 
-// scaffold 用例的临时产物用完即删（os.tmpdir 只存可再生文件，不留唯一副本）
-for (const dir of scaffoldDirs) {
-  try { fs.rmSync(dir, { recursive: true, force: true }) } catch {}
-}
-
-let passed = 0
-const failures = []
-
-for (const { name, fn } of tests) {
-  try {
-    await fn()
-    passed++
-    process.stderr.write(`  ok  ${name}\n`)
-  } catch (err) {
-    failures.push({ name, err })
-    process.stderr.write(`FAIL  ${name}\n      ${err.message}\n`)
-  }
-}
-
-process.stderr.write(`\n${passed} 项通过，${failures.length} 项失败\n`)
-if (failures.length) {
-  process.exit(1)
-}
-process.stderr.write('[PASS] plugin-fast-adapt 自检全部通过\n')
+// 登记与运行都在 harness.mjs；本文件只负责 import 各节 + 跑。
+// 2200 行体积门禁盯的是本文件——超了就按节继续拆，别往回塞用例。
+await runTests()

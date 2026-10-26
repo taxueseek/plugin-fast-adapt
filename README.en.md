@@ -2,9 +2,9 @@
 
 [简体中文](README.md) | English
 
-[![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D22.13-blue.svg)](package.json) [![Dependencies](https://img.shields.io/badge/dependencies-0-blue.svg)](#dependencies) [![Self-test](https://img.shields.io/badge/self--test-129%20passing-brightgreen.svg)](#dependencies)
+[![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D22.13-blue.svg)](package.json) [![Dependencies](https://img.shields.io/badge/dependencies-0-blue.svg)](#dependencies) [![Self-test](https://img.shields.io/badge/self--test-132%20passing-brightgreen.svg)](#dependencies)
 
-> **Every time DSH ships a new release, existing plugins can stop working.** This skill reads the vendor's official upgrade guide directly, scans your plugin code, and reports which breaking changes you hit together with the vendor's own fix instructions; it also scaffolds a smoke-testable plugin from zero in one command.
+> **Every time DSH ships a new release, existing plugins can stop working.** This skill reads the vendor's official upgrade guide directly, scans your plugin code, and reports which breaking changes you hit together with the vendor's own fix instructions; it also scaffolds a runnable plugin from zero in one command and verifies it.
 
 ## At a glance
 
@@ -13,10 +13,10 @@
 | Upstream ships a new release | Works immediately, zero changes (reads vendor sources, no hand-curated cards) |
 | Scan false positives | 12 → 0 (four noise-reduction layers) |
 | Verifying one change | 3,600 s real host cold start → millisecond-scale in-memory smoke test |
-| Self-test | 129 assertions, runs offline |
+| Self-test | 132 assertions, runs offline |
 | External dependencies | 0 (Node built-ins + the `git`/`npm` commands only) |
 | Network | Only used to fetch vendor sources; the core steps are fully offline |
-| Scaffolding | One command emits a smoke-testable skeleton in five forms, then a write gate issues the birth certificate |
+| Scaffolding | One command emits a runnable plugin in five forms, verified on creation, then a write gate issues the birth certificate |
 
 ## What problem it solves
 
@@ -35,8 +35,8 @@ This project takes a different approach: **maintain the method of obtaining know
 - **Cheap verification**: the in-memory Cordis smoke test returns in milliseconds to seconds, with no real host cold start; add `--real-smoke` when you need real-host evidence (clean profile, install and boot)
 - **Zero external dependencies**: Node built-ins plus the `git`/`npm` commands only — no TypeScript, no AST library, no HTTP client
 - **Very light network dependence**: only "fetching vendor sources" touches the network — version resolution reads npm `dist-tags`, guide fetching clones the official repo. `dist-tags` is cached for 1 hour and degrades to the stale cache with an explicit `stale` marker; guides reuse an existing local clone first, and `--no-clone` skips the fetch. Environment inspection, code scanning, smoke tests, audits, log diagnosis and seam queries are fully offline
-- **Reproducible**: 129 assertions, runs offline; CI runs on every push and pull request
-- **More than adaptation**: `scaffold.mjs` emits a smoke-testable skeleton in five forms in one command, and `write-gate.mjs` issues a birth certificate when you are done
+- **Reproducible**: 132 assertions, runs offline; CI runs on every push and pull request
+- **More than adaptation**: `scaffold.mjs` emits a runnable plugin in five forms in one command (verified against the real host base classes), and `write-gate.mjs` issues a birth certificate when you are done
 - **Honest about its limits**: a passing smoke test is not host compatibility, and the tool says so in its output; soft audit metrics are passed through, never turned into a verdict on your behalf
 
 ## Install
@@ -154,9 +154,11 @@ Each finding carries a `severity` (package=critical, member=high, code=medium �
 node scripts/scaffold.mjs <namespace>/<name> --form tool|hook|service|config|llm-adapter [--out <dir>] [--harness <version>]
 ```
 
-One command emits a smoke-testable skeleton: package.json (build-free pure-ESM invariants), a minimal runnable entry per form, a `cordis.patch.yml` mounting row, and a `dsh-plugin.naming.json` with collision-resistant naming projections derived in full (the output passes upstream validate-names in `--strict` mode). The tool and hook forms are dependency-free and smoke-tested on the spot; service, config and llm-adapter need host `@deepseek-ai/*` base classes, so scaffolding honestly skips their smoke run and says so. Non-empty target directories and invalid coordinates are rejected before anything is written.
+One command emits a runnable plugin in five forms: package.json (build-free pure-ESM invariants), a complete entry implementation per form, a `cordis.patch.yml` mounting row, and a `dsh-plugin.naming.json` with collision-resistant naming projections derived in full (the output passes upstream validate-names in `--strict` mode). Non-empty target directories and invalid coordinates are rejected before anything is written.
 
-The skeleton guarantees structure and naming compliance only; capability implementation still follows the five form references of [plugin-write](https://github.com/oh-my-dsh/dsh-plugin-upgrade-skill/tree/main/skills/plugin-write). When the capability is written, gate it in one command:
+The entry ships a working starting capability (echo tool, observing hook, example service method, config with defaults, OpenAI-compatible adapter) — swap in your own; the full contract still follows the five form references of [plugin-write](https://github.com/oh-my-dsh/dsh-plugin-upgrade-skill/tree/main/skills/plugin-write).
+
+Verification runs in two layers, and each layer reports when it is skipped: tool and hook use the dependency-free in-memory smoke test; all five forms run a real-base-class load check — when the host is installed, the entry is imported against the real `@deepseek-ai/*` base classes to prove the API is used correctly (Service inheritance and `super(ctx, name)`, real Schema validation, LlmAdapter inheritance and route registration). When no host is installed it is honestly skipped, never faked. When the capability is written, gate it in one command:
 
 ```sh
 node scripts/write-gate.mjs <plugin-dir>   # birth certificate: hard gates auto-judged, soft metrics passed through
@@ -173,7 +175,7 @@ No TypeScript, no AST library, no HTTP client. Runs on Node 22.13+ (`import.meta
 Self-test:
 
 ```sh
-npm test   # node scripts/self-test.mjs, 129 assertions
+npm test   # node scripts/self-test.mjs, 132 assertions
 ```
 
 Contributors should enable the pre-commit gate (one time): `git config core.hooksPath .githooks` — every commit runs the self-test, so a forgotten downstream sync is caught at commit time.
@@ -190,7 +192,7 @@ To gate your own plugin's repository at commit time (smoke/typecheck as hard gat
 | `scripts/run.mjs` | One-command orchestration of the full chain (env → version → guide → scan → audit → smoke → typecheck), unified report plus a local run log; `--real-smoke` bridges upstream verify-runtime for a real-cold-boot tier |
 | `scripts/run-log.mjs` | Run-log viewing (list/show), cross-checking (doctor: run logs × host startup logs) and sanitised export (sanitize) |
 | `scripts/seams.mjs` | Seam query: dual-source verdict for one package/API symbol across official guide anchors and the local host install |
-| `scripts/scaffold.mjs` | Scaffold a plugin from zero: one command emits a smoke-testable skeleton in any of the five forms (package.json invariants + form entry + patch layer + naming projections), verified on creation |
+| `scripts/scaffold.mjs` | Scaffold a plugin from zero: one command emits a runnable plugin in any of the five forms (package.json invariants + complete form entry + patch layer + naming projections), verified on creation |
 | `scripts/write-gate.mjs` | Gate a finished plugin: orchestrates smoke + activation readiness + four-dimension audit + official-guide scan into a birth certificate; only three hard gates auto-judge, soft metrics pass through untouched |
 | `scripts/env-doctor.mjs` | Probe the local DSH environment (version, overlay, plugins, processes, activation readiness) |
 | `scripts/env-heal.mjs` | Heal stale overlay packages (dry-run by default) |
@@ -203,6 +205,7 @@ To gate your own plugin's repository at commit time (smoke/typecheck as hard gat
 | `scripts/self-test.mjs` | Self-test |
 | `scripts/lib/scanner.mjs` | Lexical scanner and version comparison (zero-dependency) |
 | `scripts/lib/guide-parser.mjs` | Official guide parsing and anchor extraction |
+| `scripts/lib/host-modules.mjs` | Resolves the host `@deepseek-ai/*` base classes and runs the real-base-class load check |
 | `references/legacy-migration-sop.md` | Legacy migration SOP (for ranges the official guide does not cover) |
 | `references/heuristics.md` | Scan noise-reduction rules and the measurements behind them |
 | `references/ci-snippet.md` | CI gate template for plugin repositories (smoke/typecheck hard gates + audit soft report) |

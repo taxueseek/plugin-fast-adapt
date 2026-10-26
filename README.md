@@ -2,7 +2,7 @@
 
 **简体中文** | [English](README.en.md)
 
-[![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D22.13-blue.svg)](package.json) [![外部依赖](https://img.shields.io/badge/外部依赖-0-blue.svg)](#依赖与自检) [![自检](https://img.shields.io/badge/自检-129项断言-brightgreen.svg)](#依赖与自检)
+[![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D22.13-blue.svg)](package.json) [![外部依赖](https://img.shields.io/badge/外部依赖-0-blue.svg)](#依赖与自检) [![自检](https://img.shields.io/badge/自检-132项断言-brightgreen.svg)](#依赖与自检)
 
 > **DSH 每次发新版，老插件就可能启动不了。** 这个技能直连 DeepSeek 官方升级指南，扫你的插件代码，报出踩了哪几条破坏性变更、官方给的修法是什么；还能一条命令从零造出可运行的插件。
 
@@ -13,10 +13,10 @@
 | 上游发新版 | 无需任何改动，直接可用（直连官方源，不维护知识卡片） |
 | 扫描误报 | 12 处 → 0（四层降噪） |
 | 验证一次改动 | 3600 秒真宿主冷启动 → 毫秒级内存冒烟 |
-| 自检 | 129 项断言，离线可跑 |
+| 自检 | 132 项断言，离线可跑 |
 | 外部依赖 | 0（只用 Node 内置模块 + `git`/`npm` 命令） |
 | 网络 | 只取官方源时用，核心步骤全离线 |
-| 造插件 | 一条命令出五形态可冒烟骨架，写完再过体检门 |
+| 造插件 | 一条命令出五形态可运行插件，生成即验证 |
 
 ## 它解决什么
 
@@ -36,7 +36,7 @@ DSH（DeepSeek Harness）是一个「所有功能都以插件形式存在」的 
 - **零外部依赖**：只用 Node 内置模块加 `git`/`npm` 命令，没有 TypeScript、没有 AST 库、没有网络请求库
 - **网络依赖很轻**：只有「取官方源」走网络——定版本读 npm 的 dist-tags、取指南 clone 官方仓库。dist-tags 缓存 1 小时，失败降级旧缓存并明确标 stale；指南优先复用本机已有 clone，`--no-clone` 可跳过。环境巡检、代码扫描、冒烟、体检、日志诊断、接缝查询全离线
 - **可复现**：129 项自检离线可跑；CI 在 push 和 PR 上自动跑
-- **不止适配**：`scaffold.mjs` 一条命令生成五形态可冒烟骨架，`write-gate.mjs` 写完出「出生证」
+- **不止适配**：`scaffold.mjs` 一条命令生成五形态可运行插件（真基类装载验证），`write-gate.mjs` 写完出「出生证」
 - **边界诚实**：冒烟通过不等于宿主兼容，这句话写在工具输出里；体检的软指标只透传，不替用户说「合格」
 
 ## 安装
@@ -149,9 +149,11 @@ node scripts/sync-skill.mjs --dest <下游技能目录> --check
 node scripts/scaffold.mjs taxueseek/my-tool --form tool|hook|service|config|llm-adapter [--out <目录>] [--harness <版本>]
 ```
 
-一条命令生成可冒烟骨架：package.json（免构建纯 ESM 不变量）、按形态的最小可跑入口、`cordis.patch.yml` 挂载条目、`dsh-plugin.naming.json` 命名投影（collision-resistant 规则全量推导，生成物已过上游 validate-names 的 `--strict` 校验）。tool/hook 两形态零依赖当场冒烟（生成即验证注册）；service/config/llm-adapter 依赖宿主 `@deepseek-ai/*` 基类，诚实跳过并标注装包后手动跑。目标目录非空即拒绝，非法 coordinate 在写盘前拒绝。
+一条命令生成五形态可运行插件：package.json（免构建纯 ESM 不变量）、按形态的完整入口实现、`cordis.patch.yml` 挂载条目、`dsh-plugin.naming.json` 命名投影（collision-resistant 规则全量推导，生成物已过上游 validate-names 的 `--strict` 校验）。目标目录非空即拒绝，非法 coordinate 在写盘前拒绝。
 
-骨架只保证结构与命名合规，能力实现仍以 [plugin-write](https://github.com/oh-my-dsh/dsh-plugin-upgrade-skill/tree/main/skills/plugin-write) 的五份 form reference 为契约真源。写完能力后一条命令过体检门：
+入口里的能力是能跑通的起点实现（回显工具、观察式钩子、示例服务方法、带默认值的配置、OpenAI 兼容 adapter），换成你的能力即可；完整契约仍以 [plugin-write](https://github.com/oh-my-dsh/dsh-plugin-upgrade-skill/tree/main/skills/plugin-write) 的五份 form reference 为契约真源。
+
+验证分两层，缺一层就报一层：tool/hook 走零依赖内存冒烟；五形态都走真基类装载——本机装了宿主时用真实 `@deepseek-ai/*` 基类 import 入口，验基类 API 用对没对（Service 继承与 `super(ctx, name)`、Schema 真校验、LlmAdapter 继承与路由注册）。本机没装宿主时如实跳过，不伪造通过。写完能力后一条命令过体检门：
 
 ```sh
 node scripts/write-gate.mjs <插件目录>   # 出生证：硬门禁自动判，软指标透传待裁量
@@ -168,7 +170,7 @@ node scripts/write-gate.mjs <插件目录>   # 出生证：硬门禁自动判，
 自检：
 
 ```sh
-npm test   # node scripts/self-test.mjs，129 项断言
+npm test   # node scripts/self-test.mjs，132 项断言
 ```
 
 开发者建议启用提交前门禁（一次性）：`git config core.hooksPath .githooks`——commit 时自动跑自检，改完真源忘了 sync-skill 在这一刻被拦。
@@ -185,7 +187,7 @@ npm test   # node scripts/self-test.mjs，129 项断言
 | `scripts/run.mjs` | 一键编排全流程（环境→定版→指南→扫描→体检→冒烟→typecheck），出统一报告并写本地运行日志；`--real-smoke` 桥接原仓库 verify-runtime 补真冷启动档 |
 | `scripts/run-log.mjs` | 运行日志查看（list/show）、交叉核对（doctor：运行日志×宿主启动日志）与脱敏导出（sanitize） |
 | `scripts/seams.mjs` | 接缝查询：一个包名/API 符号在官方指南锚点表与本机宿主里的双源结论 |
-| `scripts/scaffold.mjs` | 从零造插件：一条命令生成五形态可冒烟骨架（package.json 不变量＋形态入口＋挂载层＋命名投影），生成即验证 |
+| `scripts/scaffold.mjs` | 从零造插件：一条命令生成五形态可运行插件（package.json 不变量＋完整形态入口＋挂载层＋命名投影），生成即验证 |
 | `scripts/write-gate.mjs` | 造完即验：编排冒烟＋启用就绪＋四维体检＋官方指南核查出「出生证」；硬门禁仅三条自动判，软指标只透传不拍板 |
 | `scripts/env-doctor.mjs` | 探测本机 DSH 环境（版本、覆盖层、插件、进程、启用就绪度） |
 | `scripts/env-heal.mjs` | 覆盖层旧包自愈（默认 dry-run） |
@@ -199,6 +201,7 @@ npm test   # node scripts/self-test.mjs，129 项断言
 | `scripts/lib/scanner.mjs` | 词法扫描器、版本比较与 semver 范围判定（零依赖） |
 | `scripts/lib/guide-parser.mjs` | 官方指南解析与锚点抽取（含移除动词语义门） |
 | `scripts/lib/runlog.mjs` | 运行日志写入、索引与脱敏 |
+| `scripts/lib/host-modules.mjs` | 解析本机宿主的 `@deepseek-ai/*` 基类模块，做真基类装载验证 |
 | `references/legacy-migration-sop.md` | 老插件迁移 SOP（官方指南覆盖不到时的对照手册） |
 | `references/heuristics.md` | 扫描降噪规则与实测依据 |
 | `references/ci-snippet.md` | 插件仓 CI 门禁模板（冒烟/typecheck 硬门＋体检软门） |

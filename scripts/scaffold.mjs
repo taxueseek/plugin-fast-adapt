@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// scaffold.mjs —— 第 0 步（可选）：从零造插件，一条命令出可冒烟的骨架。
+// scaffold.mjs —— 第 0 步（可选）：从零造出可运行的插件，一条命令生成并验证。
 //
 // 输入 coordinate（namespace/name）+ 形态（tool/hook/service/config/llm-adapter），
 // 生成五件套：package.json、lib/index.js、cordis.patch.yml、dsh-plugin.naming.json、
@@ -8,27 +8,33 @@
 //
 // 模板依据（不得凭记忆改写契约）：
 //   - 形态契约：上游 plugin-write skill 五份 form reference（tool/hook/service/
-//     config/llm-adapter-plugin.md），本文件只抽最小可跑骨架，完整规则仍以原文为准
+//     config/llm-adapter-plugin.md），五份模板都是能跑通的完整实现（不是 TODO
+//     骨架），完整规则仍以原文为准
 //   - 命名投影：上游 naming-conventions.md 的 community coordinate 表
 //   - 挂载层形状：对拍本机真实插件（argo-dsh / plainspoken-writing-dsh 的
 //     cordis.patch.yml，均为 `- insert:` + `- id:` + `name:` 条目）
 //   - 免构建路线：外部插件不带构建链（对拍 argo-dsh：纯 JS、零依赖、main 直指
-//     源文件），tool/hook 骨架因此零 npm 依赖即可冒烟
+//     源文件）
+//
+// 验证分两层，缺一层就报一层：
+//   - quick-smoke（tool/hook）：零依赖内存 Mock，验契约形状与工具注册
+//   - 真基类装载（五形态全跑）：本机装了宿主时，用真实 @deepseek-ai/* 基类
+//     import 入口，验基类 API 用对没对（Service 继承与 super(ctx, name)、
+//     Schema 真校验、LlmAdapter 继承与路由注册）。见 lib/host-modules.mjs
 //
 // 诚实边界：
-//   - service/config/llm-adapter 依赖宿主提供的 @deepseek-ai/* 基类（cordis/
-//     schemastery/dsh-llm），本机没装就 import 不了，自动冒烟只对 tool/hook 跑；
-//     其余三形态生成结构骨架，装包后手动跑 quick-smoke
-//   - llm-adapter 的基类导出与包名上游文档没有钉死，骨架里是 TODO 占位，
-//     生成后必须对照目标宿主 checkout 核对（参考 packages/llm/llm-deepseek）
-//   - 骨架语法与结构由本脚本保证；naming 的完整语义校验（碰撞推荐、registry
-//     查询）仍走上游 plugin-write 的 validate-names / query-registry 两个脚本
+//   - 本机没装宿主时真基类装载跳过（available:false），不伪造通过；装包后可跑
+//     quick-smoke 补验
+//   - 生成物保证「能装载、契约成立、能力可跑」；业务能力仍是起点实现，换成你的
+//     能力即可。naming 的完整语义校验（碰撞推荐、registry 查询）仍走上游
+//     plugin-write 的 validate-names / query-registry 两个脚本
 
 import fs from 'node:fs'
 import path from 'node:path'
 import { printJson } from './lib/scanner.mjs'
 import { parsePatchEntries, candidateGlobalRoots } from './env-doctor.mjs'
 import { runQuickSmoke } from './quick-smoke.mjs'
+import { verifyWithHostModules } from './lib/host-modules.mjs'
 
 const FORMS = ['tool', 'hook', 'service', 'config', 'llm-adapter']
 
@@ -96,7 +102,7 @@ export function detectHarnessVersion({ env = process.env, platform = process.pla
   return null
 }
 
-// ── 骨架模板 ────────────────────────────────────────────────────────────────
+// ── 插件模板 ────────────────────────────────────────────────────────────────
 
 function packageJsonTemplate(names, form, harnessVersion) {
   const formSentence = {
@@ -173,8 +179,9 @@ function patchYmlTemplate(names) {
 
 function entryTemplate(form, names) {
   if (form === 'tool') {
-    return `// 零依赖最小工具插件：raw JSON Schema 注册（registry 原生支持这条路）。
-// 要类型增强（defineTool 自动校验参数与推导 execute 类型）时，装
+    return `// 零依赖可运行工具插件：raw JSON Schema 注册（registry 原生支持这条路）。
+// execute 里是能跑通的最小能力——换成你的能力即可，其余结构照留。
+// 要类型增强（defineTool 自动校验参数并推导 execute 类型）时，装
 // @deepseek-ai/dsh-tools 后按上游 plugin-write skill 的 tool-plugin.md 迁移。
 // 完整契约（execute 的九条义务、输出投影、UI 卡片、Code Mode）见该文档。
 
@@ -184,41 +191,42 @@ export const inject = ['tools']
 export function apply(ctx) {
   ctx.tools.register({
     name: '${names.tools[0]}',
-    description: 'TODO: 一句话说清这个工具给模型什么能力。',
+    description: '把传入的文本原样回显。用来验证「插件装载 → 工具注册 → 模型调用」整条链路是否通。',
     parameters: {
-      query: { type: 'string', required: true, description: 'TODO: 参数含义' },
+      text: { type: 'string', required: true, description: '要回显的文本' },
     },
     async execute(args, exec) {
-      // TODO: 实现真正的能力。exec.signal 中止时尽快返回；抛错即 isError。
-      return { query: args.query }
+      // exec.signal 中止时尽快返回；抛错即 isError。
+      return { text: args.text }
     },
   })
 }
 `
   }
   if (form === 'hook') {
-    return `// 零依赖最小钩子插件：在 tools/pre-execute 扩展点拦截工具调用。
+    return `// 零依赖可运行钩子插件：在 tools/pre-execute 扩展点拦截工具调用。
 // waterfall 语义（重点）：监听器收到 (...args, next)。不调 next() 就是
 // 短路整条链——只做观察的监听器必须调 next() 把决定权交回去，静默接管
-// 是这个形态最危险的坑。完整扩展点表与规则见上游 plugin-write 的
-// hook-plugin.md。
+// 是这个形态最危险的坑。完整扩展点表与规则见上游 plugin-write 的 hook-plugin.md。
 
 export const name = '${names.pluginNames[0]}'
 
 export function apply(ctx) {
   ctx.on('tools/pre-execute', async (exec, next) => {
-    // TODO: 策略判断。返回 { kind: 'deny', reason } 拒绝；
-    // { kind: 'ask', ... } 走 ctx.approval 征求批准；放行就 return next()。
+    // 观察式钩子：记一条日志就放行。换成你的策略——
+    // 返回 { kind: 'deny', reason } 拒绝；{ kind: 'ask', ... } 走 ctx.approval 征求批准。
+    ctx.logger.info('${names.pluginNames[0]}: 拦截到工具调用 %s', exec.name ?? '(未命名)')
     return next()
   })
 }
 `
   }
   if (form === 'service') {
-    return `// 最小服务插件：class 形态向其他插件提供 ctx 能力。
+    return `// 可运行服务插件：class 形态向其他插件通过 ctx 提供能力。
 // 依赖宿主提供的 @deepseek-ai/cordis（Service 基类），本机装了 DSH 宿主或
 // 在插件目录 npm install 后才能 import。加载期强依赖缺失时插件静默 pending
 // 不报错（Cordis 的已知陷阱，env-doctor 的 activation 段查这个）。
+// 消费者声明 inject: ['${names.camel}Index']，即可用 ctx.${names.camel}Index 访问。
 // 完整契约（声明合并、typed events、HMR、capability seam 拆包判据）见
 // 上游 plugin-write 的 service-plugin.md。
 
@@ -231,20 +239,27 @@ export default class ${names.pascal}Service extends Service {
     super(ctx, '${names.camel}Index')
   }
 
-  // TODO: 公共方法写 JSDoc @param/@returns；消费者声明 inject:
-  // ['${names.camel}Index'] 使用本服务。
+  /**
+   * 示例方法：去掉首尾空白。换成你的能力即可。
+   * @param {string} text
+   * @returns {string}
+   */
+  format(text) {
+    return String(text ?? '').trim()
+  }
 }
 `
   }
   if (form === 'config') {
-    return `// 最小配置插件：cordis.yml 的 config 行提供用户配置。
+    return `// 可运行配置插件：cordis.yml 的 config 行提供用户配置。
 // 依赖宿主提供的 @deepseek-ai/schemastery。必须导出 Schemastery Schema，
 // 不能导出普通对象（Cordis 走 Standard Schema 接口校验，普通对象会在
 // 加载期失败）。无效配置必须在加载期显式报错，不许静默吞。
-// 完整规则（!!js 边界、凭据不入配置、HMR）见上游 plugin-write 的
-// config-plugin.md。
+// 完整规则（!!js 边界、凭据不入配置、HMR）见上游 plugin-write 的 config-plugin.md。
 
 import Schema from '@deepseek-ai/schemastery'
+
+export const name = '${names.pluginNames[0]}'
 
 export const Config = Schema.object({
   greeting: Schema.string().default('Hello'),
@@ -252,29 +267,111 @@ export const Config = Schema.object({
 
 export function apply(ctx, config) {
   // config 已过 Schema 校验并填好默认值。
-  // TODO: 可调参数一律走 Config，不许在代码里写死部署值。
+  // 可调参数一律走 Config，不许在代码里写死部署值。
+  ctx.logger.info('${names.pluginNames[0]}: greeting = %s', config.greeting)
 }
 `
   }
-  // llm-adapter —— 五形态里唯一「生成后必须对照宿主源码核名」的：
-  // 基类 LlmAdapter 的 import 来源上游文档没有钉死，不能替用户猜。
-  return `// ⚠ LLM adapter 是五形态里协议义务最重的（streaming 闭联集、usage 先于
-// finish、tool-call 参数原样透传、两条错误路径、attribution 头、空闲超时
-// 上限……），本骨架只是结构起点。
-//
-// 生成后必做：对照目标宿主 checkout 核对 LlmAdapter 的 import 来源与导出
-// 名（参考 packages/llm/llm-deepseek），再按上游 plugin-write 的
-// llm-adapter-plugin.md 逐条过「协议义务」清单。
+  // llm-adapter —— 五形态里协议义务最重的（streaming 闭联集、usage 先于
+  // finish、tool-call 参数原样透传、两条错误路径、attribution 头、空闲超时
+  // 上限……）。本实现覆盖主路径与最常见的错误路径，能直接对着 OpenAI 兼容
+  // 端点跑通；完整清单见上游 plugin-write 的 llm-adapter-plugin.md。
+  return `// 可运行 LLM adapter：接入一个 OpenAI 兼容端点。
+// 依赖宿主提供的 @deepseek-ai/dsh-llm（LlmAdapter / LlmError / attributionHeaders）
+// 与 @deepseek-ai/schemastery（Config Schema）。
+// 协议义务很多，完整清单见上游 plugin-write 的 llm-adapter-plugin.md。
+
+import { LlmAdapter, LlmError, attributionHeaders } from '@deepseek-ai/dsh-llm'
+import Schema from '@deepseek-ai/schemastery'
 
 export const name = '${names.pluginNames[0]}'
 export const inject = ['llm']
 
-// TODO: import { LlmAdapter } from '<以目标宿主 checkout 为准>'
-// TODO: class Adapter extends LlmAdapter { async *stream(options) { ... } }
+export const Config = Schema.object({
+  apiKey: Schema.string().role('secret'),
+  baseUrl: Schema.string().default('https://api.openai.com/v1'),
+  model: Schema.string().default('gpt-4o-mini'),
+})
 
-export function apply(ctx) {
-  // TODO: ctx.llm.registerAdapter(['${names.base}'], new Adapter())
-  // 同一 provider 路由重复注册会抛错；replace() 可原子换路由集。
+export class ${names.pascal}Adapter extends LlmAdapter {
+  constructor(options) {
+    super()
+    this.options = options
+  }
+
+  providerInfo(provider) {
+    return { id: provider, name: provider }
+  }
+
+  async *stream(options) {
+    const baseUrl = String(this.options.baseUrl ?? 'https://api.openai.com/v1').replace(/\\/+$/, '')
+    let res
+    try {
+      res = await fetch(baseUrl + '/chat/completions', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: 'Bearer ' + String(this.options.apiKey ?? ''),
+          ...attributionHeaders(),
+        },
+        body: JSON.stringify({
+          model: options.model ?? this.options.model,
+          messages: options.messages,
+          stream: true,
+        }),
+        signal: options.signal,
+      })
+    } catch (err) {
+      if (options.signal?.aborted) throw new LlmError('请求已中止', 'ABORTED')
+      throw new LlmError('传输失败：' + err.message, 'TRANSPORT')
+    }
+    if (!res.ok) throw new LlmError('provider 返回 HTTP ' + res.status, 'PROVIDER_HTTP', res.status)
+
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let text = ''
+    let index = 0
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\\n')
+      buffer = lines.pop() ?? ''
+      for (const line of lines) {
+        const trimmed = line.trim()
+        if (!trimmed.startsWith('data:')) continue
+        const data = trimmed.slice(5).trim()
+        if (data === '[DONE]') continue
+        let chunk
+        try {
+          chunk = JSON.parse(data)
+        } catch {
+          continue
+        }
+        const delta = chunk.choices?.[0]?.delta
+        if (typeof delta?.content === 'string' && delta.content) {
+          text += delta.content
+          yield { type: 'text-delta', index, text: delta.content }
+        }
+      }
+    }
+
+    // usage 必须先于 finish，且 finish 之后不再产出任何 chunk。
+    if (text) {
+      yield { type: 'block-start', index, blockType: 'text' }
+      yield { type: 'block-end', index, block: { type: 'text', text } }
+    }
+    yield {
+      type: 'usage',
+      usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+    }
+    yield { type: 'finish', reason: { kind: 'stop' } }
+  }
+}
+
+export function apply(ctx, config) {
+  ctx.llm.registerAdapter(['${names.base}'], new ${names.pascal}Adapter(config))
 }
 `
 }
@@ -283,7 +380,7 @@ function readmeTemplate(names, form, harnessVersion) {
   const REF_ROOT = 'https://github.com/oh-my-dsh/dsh-plugin-upgrade-skill/tree/main/skills/plugin-write'
   return `# ${names.packageName}
 
-DSH ${form} 形态插件骨架，由 [dsh-plugin-fast-adapt](https://github.com/taxueseek/plugin-fast-adapt) 的 scaffold 生成，针对 dsh-v${harnessVersion || 'unknown（未探测到本机宿主）'}。
+DSH ${form} 形态插件，由 [dsh-plugin-fast-adapt](https://github.com/taxueseek/plugin-fast-adapt) 的 scaffold 生成，针对 dsh-v${harnessVersion || 'unknown（未探测到本机宿主）'}。
 
 ## 文件
 
@@ -298,7 +395,7 @@ DSH ${form} 形态插件骨架，由 [dsh-plugin-fast-adapt](https://github.com/
 3. **体检**：\`node <fast-adapt>/scripts/plugin-audit.mjs .\` 四维打分
 4. **命名完整校验**（碰撞推荐 + registry 查询，可选联网）：
    \`node <plugin-write>/scripts/validate-names.mjs --manifest ./dsh-plugin.naming.json\`
-5. **对照形态文档补能力**：${REF_ROOT}/references/ 下五份 form reference，本骨架只给了最小可跑结构
+5. **对照形态文档补能力**：${REF_ROOT}/references/ 下五份 form reference，入口里的能力是起点实现（能跑通），换成你的能力即可
 
 ## 测试挂载
 
@@ -350,6 +447,15 @@ export async function scaffoldPlugin({ coordinate, form, outDir, harnessVersion 
     }
   }
 
+  // 真基类装载验证：本机装了宿主时，用真实 @deepseek-ai/* 基类 import 入口，
+  // 验「基类 API 用对没对」——quick-smoke 的内存 Mock 覆盖不到这一半。
+  // 没装宿主时返回 available:false，不伪造通过。
+  const hostVerify = await verifyWithHostModules({
+    pluginDir: resolvedOut,
+    entryFile: 'lib/index.js',
+    form,
+  })
+
   return {
     coordinate: names.coordinate,
     form,
@@ -363,6 +469,7 @@ export async function scaffoldPlugin({ coordinate, form, outDir, harnessVersion 
       services: names.services,
     },
     smoke,
+    hostVerify,
     nextSteps: [
       '写完能力后跑: node scripts/write-gate.mjs <outDir>  # 出生证：冒烟＋启用就绪＋四维体检＋指南核查（刚生成完可加 --skip-smoke 免重复冒烟）',
       'node scripts/env-doctor.mjs <outDir>  # 单看启用就绪度',
@@ -407,7 +514,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.met
       autoSmoke: !flags.noSmoke,
     })
     printJson(result)
-    process.stderr.write(`\n[骨架已生成] ${result.coordinate}（${result.form}）→ ${result.outDir}\n`)
+    process.stderr.write(`\n[插件已生成] ${result.coordinate}（${result.form}）→ ${result.outDir}\n`)
     process.stderr.write(`目标宿主: dsh-v${result.harnessVersion || '未探测到，README 里已如实标注'}\n`)
     if (result.smoke) {
       if (result.smoke.success) {
@@ -417,7 +524,19 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.met
         process.exit(1)
       }
     } else {
-      process.stderr.write('冒烟: 跳过（本形态依赖宿主基类，装包后手动跑 quick-smoke）\n')
+      process.stderr.write('冒烟: 跳过（本形态零依赖冒烟不适用，改由真基类装载验证）\n')
+    }
+    const hv = result.hostVerify
+    if (hv?.available) {
+      if (hv.success) {
+        process.stderr.write(`真基类装载: 通过（宿主 dsh-v${hv.hostVersion}，${hv.checks.length} 项契约全绿）\n`)
+      } else {
+        const failed = hv.checks.filter((c) => !c.ok).map((c) => c.name).join('、')
+        process.stderr.write(`真基类装载: 失败——${failed}${hv.error ? `（${hv.error}）` : ''}\n`)
+        process.exit(1)
+      }
+    } else {
+      process.stderr.write(`真基类装载: 跳过（${hv?.reason ?? '本机未装宿主'}；装包后可跑 quick-smoke）\n`)
     }
     process.stderr.write(`下一步:\n  - ${result.nextSteps.join('\n  - ')}\n`)
   } catch (err) {
