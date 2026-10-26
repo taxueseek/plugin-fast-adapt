@@ -2,7 +2,7 @@
 
 [简体中文](README.md) | English
 
-[![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D22.13-blue.svg)](package.json) [![Dependencies](https://img.shields.io/badge/dependencies-0-blue.svg)](#dependencies) [![Self-test](https://img.shields.io/badge/self--test-129%20passing,%20zero%20network-brightgreen.svg)](#dependencies)
+[![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D22.13-blue.svg)](package.json) [![Dependencies](https://img.shields.io/badge/dependencies-0-blue.svg)](#dependencies) [![Self-test](https://img.shields.io/badge/self--test-129%20passing-brightgreen.svg)](#dependencies)
 
 > **Every time DSH ships a new release, existing plugins can stop working.** This skill reads the vendor's official upgrade guide directly, scans your plugin code, and reports which breaking changes you hit together with the vendor's own fix instructions; it also scaffolds a smoke-testable plugin from zero in one command.
 
@@ -13,8 +13,9 @@
 | Upstream ships a new release | Works immediately, zero changes (reads vendor sources, no hand-curated cards) |
 | Scan false positives | 12 → 0 (four noise-reduction layers) |
 | Verifying one change | 3,600 s real host cold start → millisecond-scale in-memory smoke test |
-| Self-test | 129 assertions, zero network, runs on any machine |
+| Self-test | 129 assertions, runs offline |
 | External dependencies | 0 (Node built-ins + the `git`/`npm` commands only) |
+| Network | Only used to fetch vendor sources; the core steps are fully offline |
 | Scaffolding | One command emits a smoke-testable skeleton in five forms, then a write gate issues the birth certificate |
 
 ## What problem it solves
@@ -33,7 +34,8 @@ This project takes a different approach: **maintain the method of obtaining know
 - **Zero false positives**: four noise-reduction layers took a real plugin from 12 false positives to 0, and every finding carries `severity`, `evidence` and provenance anchors pointing straight at the official guide
 - **Cheap verification**: the in-memory Cordis smoke test returns in milliseconds to seconds, with no real host cold start; add `--real-smoke` when you need real-host evidence (clean profile, install and boot)
 - **Zero external dependencies**: Node built-ins plus the `git`/`npm` commands only — no TypeScript, no AST library, no HTTP client
-- **Reproducible**: 129 assertions, zero network, runs on any machine; CI runs on every push and pull request
+- **Very light network dependence**: only "fetching vendor sources" touches the network — version resolution reads npm `dist-tags`, guide fetching clones the official repo. `dist-tags` is cached for 1 hour and degrades to the stale cache with an explicit `stale` marker; guides reuse an existing local clone first, and `--no-clone` skips the fetch. Environment inspection, code scanning, smoke tests, audits, log diagnosis and seam queries are fully offline
+- **Reproducible**: 129 assertions, runs offline; CI runs on every push and pull request
 - **More than adaptation**: `scaffold.mjs` emits a smoke-testable skeleton in five forms in one command, and `write-gate.mjs` issues a birth certificate when you are done
 - **Honest about its limits**: a passing smoke test is not host compatibility, and the tool says so in its output; soft audit metrics are passed through, never turned into a verdict on your behalf
 
@@ -73,6 +75,8 @@ Run the whole chain with one command (recommended); every run writes a local log
 ```sh
 node scripts/run.mjs <plugin-dir>        # env → version → guide → scan → audit → smoke → typecheck
 node scripts/run.mjs <plugin-dir> --real-smoke   # plus one more tier: install & boot in a clean profile (bridges upstream verify-runtime)
+node scripts/run.mjs <plugin-dir> --offline      # skip fetching vendor sources (no npm read, no clone); local five steps only
+node scripts/run.mjs <plugin-dir> --no-clone     # resolve the version but do not fetch the guide (use an existing local clone)
 node scripts/run-log.mjs list           # review past runs (tool version@commit included)
 node scripts/run-log.mjs doctor         # cross-check run logs × host startup logs (first stop for "plugin erroring")
 node scripts/run-log.mjs sanitize --latest --out share.json   # sanitise before sharing
@@ -174,7 +178,7 @@ npm test   # node scripts/self-test.mjs, 129 assertions
 
 Contributors should enable the pre-commit gate (one time): `git config core.hooksPath .githooks` — every commit runs the self-test, so a forgotten downstream sync is caught at commit time.
 
-Covers scanner false positives (names in comments and strings are not hits), false negatives, version heuristics, replacement-pair recognition, end-to-end findings (with guide file + line provenance anchors), dual-source seam-query verdicts (agree-removed / host-still-present disagreement / honest no-record), run-log × host-log cross-checks, the --real-smoke bridge tier (fail → exit 2 with a next-step pointer), the upstream-watch exit codes, the sync commit-command suggestion (adds only the synced path), SOP reference integrity, dist-tags cache states, smoke verification (including the undeclared-inject contract rejection), the four-dimension audit (including peer patches), activation diagnostics, the plugin scaffolder (all five forms, naming-projection grammar, smoke closure, patch-layer recognizability, invalid-input and non-empty-target rejection), the write gate (hard-gate interception, soft metrics never overrule, skip semantics, scaffold handoff), log diagnosis, downstream-sync drift checks plus a real-machine zero-drift gate, a self-test size gate and a scanner performance gate. Zero network, zero external dependencies, runs on any machine.
+Covers scanner false positives (names in comments and strings are not hits), false negatives, version heuristics, replacement-pair recognition, end-to-end findings (with guide file + line provenance anchors), dual-source seam-query verdicts (agree-removed / host-still-present disagreement / honest no-record), run-log × host-log cross-checks, the --real-smoke bridge tier (fail → exit 2 with a next-step pointer), the upstream-watch exit codes, the sync commit-command suggestion (adds only the synced path), SOP reference integrity, dist-tags cache states, smoke verification (including the undeclared-inject contract rejection), the four-dimension audit (including peer patches), activation diagnostics, the plugin scaffolder (all five forms, naming-projection grammar, smoke closure, patch-layer recognizability, invalid-input and non-empty-target rejection), the write gate (hard-gate interception, soft metrics never overrule, skip semantics, scaffold handoff), log diagnosis, downstream-sync drift checks plus a real-machine zero-drift gate, a self-test size gate and a scanner performance gate. The self-test itself is zero-network and zero-dependency, and runs on any machine.
 
 To gate your own plugin's repository at commit time (smoke/typecheck as hard gates, audit as a soft report), see [references/ci-snippet.md](references/ci-snippet.md).
 
@@ -210,7 +214,7 @@ To gate your own plugin's repository at commit time (smoke/typecheck as hard gat
 - `sync-skill` writes to a downstream skill directory explicitly, copying only the fixed skill surface (`SKILL.md`/`README*`/`references`/`scripts`); `--check`/`--dry-run` let you inspect first
 - Never modifies DSH itself, nor config or profile declarations under `~/.dsh`
 - Never edits plugin code automatically; it reports findings and vendor fixes only, and `--peer-patch` prints rather than applies
-- Network is used only with `--clone`, always with a timeout, and failures are reported explicitly instead of silently skipped
+- Network is used only for "fetching vendor sources": version resolution reads npm `dist-tags`, guide fetching clones the official repo. Both have timeouts and report failures explicitly instead of silently skipping; `dist-tags` is cached for 1 hour and degrades to the stale cache with a `stale` marker; guides reuse an existing local clone first, and `--no-clone` skips the fetch
 
 ## Legacy plugins
 

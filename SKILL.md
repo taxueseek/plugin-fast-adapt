@@ -111,7 +111,7 @@ node scripts/code-scan.mjs <插件目录> <upgrade-guide 目录> <本机版本> 
 node scripts/seams.mjs <包名或符号> [--guide <guide-root>] [--host <版本>]
 ```
 
-回答「这个接缝在我的目标宿主还在不在」，双源合成：指南源（锚点表全走廊，哪个版本声称移除/改名了它、原文在哪一行、官方修法）× 宿主源（包看 node_modules 实测，符号看宿主套件源码文本命中——弱证据，如实标注）。裸 `dsh-*` 名自动归一到 `@deepseek-ai/` scope 再查。诚实三态：双源都说没有才下「已移除」；指南说没有但宿主里有，报分歧不替人拍板；双源都无记录时明说「指南未提及不代表 API 不存在」。默认零网络（指南根走缓存）。
+回答「这个接缝在我的目标宿主还在不在」，双源合成：指南源（锚点表全走廊，哪个版本声称移除/改名了它、原文在哪一行、官方修法）× 宿主源（包看 node_modules 实测，符号看宿主套件源码文本命中——弱证据，如实标注）。裸 `dsh-*` 名自动归一到 `@deepseek-ai/` scope 再查。诚实三态：双源都说没有才下「已移除」；指南说没有但宿主里有，报分歧不替人拍板；双源都无记录时明说「指南未提及不代表 API 不存在」。不走网络（指南根走缓存）。
 
 ### 一键编排与运行日志（run.mjs）
 
@@ -234,7 +234,7 @@ node scripts/scaffold.mjs <namespace>/<name> --form tool|hook|service|config|llm
 - **不改 DSH 本体**。只读环境信息，不动 `~/.dsh` 下的配置和 profile 声明。
 - **不自动改插件代码**。只报命中和官方修法，改不改、怎么改由人决定；`plugin-audit --peer-patch` 也只打印建议不写 `package.json`。
 - **`sync-skill` 显式写下游目录**，只复制固定技能面（`SKILL.md`/`README*`/`references`/`scripts`），`--check`/`--dry-run` 供先确认；改的是下游副本，不动主仓。
-- **网络只在 `--clone` 时用**。npm registry 和 git clone 都有超时，失败会明确报错而不是静默跳过；dist-tags 有 1 小时缓存，网络失败时降级用旧缓存并标 stale。
+- **网络只用在「取官方源」这一步**（定版本读 npm 的 dist-tags、取指南 clone 官方仓库）。两处都有超时，失败会明确报错而不是静默跳过；dist-tags 有 1 小时缓存，网络失败时降级用旧缓存并标 stale；指南优先复用本机已有 clone，`--no-clone` 可跳过。
 - **日志只落本机**。run.mjs 的运行日志写在 `~/.cache/dsh-plugin-fast-adapt/runs/`，含本地路径与用户名，外发前必须 `run-log.mjs sanitize`。
 
 ## 自检
@@ -243,7 +243,7 @@ node scripts/scaffold.mjs <namespace>/<name> --form tool|hook|service|config|llm
 npm test
 ```
 
-129 项断言，覆盖扫描器不误报（注释和字符串里的同名词不算命中）、不漏报、真实 semver 范围判定（prerelease tuple 规则，本轮与宿主自带 semver 对拍的 30 例锚点回归）、扫描窗口计算（宿主包 peer 精确匹配、cordis/schemastery 版本线不混入、倒挂守卫回退留痕）、目标形态判定（dsh 命名空间/生态依赖证据、非插件 N/A、工具仓跳过 Cordis 生命周期）、import type 区分、宿主实测核查分级、描述漂移检测、指南出处锚点（guideFile/guideLine 落盘往返）、接缝查询双源结论（一致已移除/宿主仍在报分歧/无记录如实说/探不到宿主不伪造）、运行日志×宿主日志交叉核对、--real-smoke 桥接档位（fail→退出码 2、tail 归因透传、失败指路）、一键编排与运行日志（写入/索引/脱敏往返、phases 三态、dirty 标记、90 天保留清理）、上游盯梢退出码（upgrade-available→1 其余→0）、同步提交命令建议（git 仓给只 add 同步路径的命令、非 git 静默跳过）、版本启发式、替换对识别、端到端命中、SOP 引用完整性、dist-tags 缓存三态、冒烟验证（含未声明 inject 契约拦截与 Mock 缺口披露）、四维审计（含 peer 修补建议）、启用诊断（宿主半 Silent Pending＋客户端半三层判定：声明/产物/注入名册死链）、环境层盲区三处（共享 node_modules 农场悬空软链的 critical/info 分级、全局 patch 层对所有 profile 生效且 disabled 也参与判定、入口解析按 exports 优先于 main 防无 main 包被误报 ERROR）、创作脚手架（五形态生成与冒烟闭环、命名投影语法、挂载层可识别、非法输入与非空目录拒绝）、创作体检门（硬门禁拦截、软指标不越权判红、跳过语义、scaffold 衔接）、日志诊断（startup 头部/失败插件/等待服务/信号/跨文件汇总）、下游同步漂移检查＋真机零漂移拦截、self-test 体积门禁（超 2200 行即红）、跨平台模拟（Windows 根探测与缓存隔离）、文档断言数防漂移、扫描性能回归门。零网络、零外部依赖，任何机器上都能跑（Windows 分支已做模拟验证，真机待验）。
+129 项断言，覆盖扫描器不误报（注释和字符串里的同名词不算命中）、不漏报、真实 semver 范围判定（prerelease tuple 规则，本轮与宿主自带 semver 对拍的 30 例锚点回归）、扫描窗口计算（宿主包 peer 精确匹配、cordis/schemastery 版本线不混入、倒挂守卫回退留痕）、目标形态判定（dsh 命名空间/生态依赖证据、非插件 N/A、工具仓跳过 Cordis 生命周期）、import type 区分、宿主实测核查分级、描述漂移检测、指南出处锚点（guideFile/guideLine 落盘往返）、接缝查询双源结论（一致已移除/宿主仍在报分歧/无记录如实说/探不到宿主不伪造）、运行日志×宿主日志交叉核对、--real-smoke 桥接档位（fail→退出码 2、tail 归因透传、失败指路）、一键编排与运行日志（写入/索引/脱敏往返、phases 三态、dirty 标记、90 天保留清理）、上游盯梢退出码（upgrade-available→1 其余→0）、同步提交命令建议（git 仓给只 add 同步路径的命令、非 git 静默跳过）、版本启发式、替换对识别、端到端命中、SOP 引用完整性、dist-tags 缓存三态、冒烟验证（含未声明 inject 契约拦截与 Mock 缺口披露）、四维审计（含 peer 修补建议）、启用诊断（宿主半 Silent Pending＋客户端半三层判定：声明/产物/注入名册死链）、环境层盲区三处（共享 node_modules 农场悬空软链的 critical/info 分级、全局 patch 层对所有 profile 生效且 disabled 也参与判定、入口解析按 exports 优先于 main 防无 main 包被误报 ERROR）、创作脚手架（五形态生成与冒烟闭环、命名投影语法、挂载层可识别、非法输入与非空目录拒绝）、创作体检门（硬门禁拦截、软指标不越权判红、跳过语义、scaffold 衔接）、日志诊断（startup 头部/失败插件/等待服务/信号/跨文件汇总）、下游同步漂移检查＋真机零漂移拦截、self-test 体积门禁（超 2200 行即红）、跨平台模拟（Windows 根探测与缓存隔离）、文档断言数防漂移、扫描性能回归门。自检零网络、零外部依赖，任何机器上都能跑（Windows 分支已做模拟验证，真机待验）。
 
 提交前门禁：`git config core.hooksPath .githooks`（一次性）启用 pre-commit 钩子，commit 时自动跑本自检——改完真源忘了 sync-skill 在这一刻被拦，不用等有人跑 npm test。
 
