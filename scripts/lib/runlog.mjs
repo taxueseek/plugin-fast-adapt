@@ -7,7 +7,8 @@
 // 设计取舍（奥卡姆）：
 //   - 一次运行一个自包含 JSON + index.jsonl 一行摘要。分析跨运行趋势走 index，
 //     复盘单次细节走 run 文件，不引入数据库。
-//   - 日志只落 ~/.cache/dsh-plugin-fast-adapt/runs/，不出本机。
+//   - 日志只落本机；台账根走 ~/.local/state（要按保留期留存的运行史），可再生的
+//     dist-tags 缓存与 harness 指南快照仍走 ~/.cache（guide-sync.mjs）。
 //   - 对外反馈用 sanitize() 脱敏：home 前缀、用户名、机器名、插件绝对路径。
 
 import fs from 'node:fs'
@@ -16,8 +17,33 @@ import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 
 // 日志根可注入（DSH_PFA_RUNS_DIR）：self-test 用临时目录，不写真实用户缓存。
+// 默认根走 XDG_STATE 而非 ~/.cache——台账是有保留期的运行史不是可再生缓存，
+// 放 ~/.cache 会被本机清理工具整目录扫掉（2026-10-26 实测：历史台账全失，
+// 90 天保留策略形同虚设）。旧根有数据时一次性搬过来，失败静默降级——
+// 日志是增益不是依赖，磁盘只读时审计流程本身照常出结果。
+const DEFAULT_LOG_ROOT = path.join(os.homedir(), '.local', 'state', 'dsh-plugin-fast-adapt', 'runs')
+const LEGACY_LOG_ROOT = path.join(os.homedir(), '.cache', 'dsh-plugin-fast-adapt', 'runs')
+
+export function migrateLogRoot(root, legacyRoot = LEGACY_LOG_ROOT) {
+  try {
+    if (legacyRoot === root || !fs.existsSync(legacyRoot)) return false
+    if (fs.readdirSync(legacyRoot).length === 0) return false
+    if (fs.existsSync(root)) {
+      if (fs.readdirSync(root).length > 0) return false
+      fs.rmdirSync(root)
+    }
+    fs.mkdirSync(path.dirname(root), { recursive: true })
+    fs.renameSync(legacyRoot, root)
+    return true
+  } catch {
+    return false
+  }
+}
+
 export function getLogRoot() {
-  return process.env.DSH_PFA_RUNS_DIR || path.join(os.homedir(), '.cache', 'dsh-plugin-fast-adapt', 'runs')
+  if (process.env.DSH_PFA_RUNS_DIR) return process.env.DSH_PFA_RUNS_DIR
+  migrateLogRoot(DEFAULT_LOG_ROOT)
+  return DEFAULT_LOG_ROOT
 }
 
 function indexFile() {

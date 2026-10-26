@@ -22,7 +22,7 @@ import { extractInjects, diagnoseActivation, candidateGlobalRoots, parsePatchEnt
 import { readClientDecl, clientExportPath, overlayMountedNames, isDeliberateRosterInsert, collectRoster, diagnoseClientHalf } from './lib/client-graph.mjs'
 import { scaffoldPlugin, projectNames, detectHarnessVersion, UsageError } from './scaffold.mjs'
 import { runWriteGate } from './write-gate.mjs'
-import { listRuns, sanitizeRun, writeRunLog, pruneRuns } from './lib/runlog.mjs'
+import { listRuns, sanitizeRun, writeRunLog, pruneRuns, migrateLogRoot } from './lib/runlog.mjs'
 import { parseStartupLog, parseMessages, diagnoseLogs } from './log-doctor.mjs'
 import { checkSkillSync, syncSkill, suggestCommitCommand } from './sync-skill.mjs'
 import { querySeams } from './seams.mjs'
@@ -594,6 +594,7 @@ test('文档宣称的断言数与实际一致（防手工漂移）', () => {
     const text = fs.readFileSync(doc, 'utf8')
     const numbers = [
       ...text.matchAll(/(\d+)\s*项断言/g),
+      ...text.matchAll(/(\d+)\s*项自检/g),
       ...text.matchAll(/(\d+)\s*assertions/g),
     ].map((m) => Number(m[1]))
     assert.ok(numbers.length > 0, `${path.basename(doc)} 应写明断言数，否则本断言失去保护对象`)
@@ -651,6 +652,23 @@ test('缓存过期后重新拉网络并落盘', async () => {
   assert.strictEqual(meta['dist-tags'].latest, '0.2.1-rc.3')
   const onDisk = JSON.parse(fs.readFileSync(cache, 'utf8'))
   assert.strictEqual(onDisk.data['dist-tags'].latest, '0.2.1-rc.3', '新数据应写回缓存')
+})
+
+test('runGuideSync 缓存根可注入：合成元数据只落指定根，真实用户缓存不被写', async () => {
+  const cacheRoot = tmpPluginDir('guide-cache-root')
+  const localClone = tmpPluginDir('guide-local-inject')
+  fs.mkdirSync(path.join(localClone, 'docs', 'upgrade-guide', 'v0.2.1-rc.2'), { recursive: true })
+  fs.writeFileSync(path.join(localClone, 'docs', 'upgrade-guide', 'v0.2.1-rc.2', 'x.md'), '# x\n')
+  const distTags = { latest: '0.2.1-rc.2', next: '0.2.1-rc.3', alpha: '0.2.1-alpha.5' }
+  const fetcher = async () => ({ ok: true, json: async () => distTags })
+  const realCache = path.join(os.homedir(), '.cache', 'dsh-plugin-fast-adapt', 'npm-metadata.json')
+  const realBefore = fs.existsSync(realCache) ? fs.readFileSync(realCache, 'utf8') : null
+  const result = await runGuideSync('0.2.1-rc.2', { fetcher, localClone, cacheRoot })
+  assert.strictEqual(result.metadataSource, 'network')
+  const onDisk = JSON.parse(fs.readFileSync(path.join(cacheRoot, 'npm-metadata.json'), 'utf8'))
+  assert.strictEqual(onDisk.data['dist-tags'].latest, '0.2.1-rc.2', '元数据应写进注入的缓存根')
+  const realAfter = fs.existsSync(realCache) ? fs.readFileSync(realCache, 'utf8') : null
+  assert.strictEqual(realAfter, realBefore, '自检不得写真实用户缓存（实录：合成 dist-tags 毒化真实 1h TTL 读数）')
 })
 
 // ── quick-smoke：修完秒验 ────────────────────────────────────────────────────
@@ -836,7 +854,7 @@ test('guide-sync：本机已是通道最新版时仍取本机版本当取版锚�
   fs.writeFileSync(path.join(localClone, 'docs', 'upgrade-guide', 'v0.2.1-rc.2', 'x.md'), '# x\n')
   const distTags = { latest: '0.2.1-rc.2', next: '0.2.1-rc.3', alpha: '0.2.1-alpha.5' }
   const fetcher = async () => ({ ok: true, json: async () => distTags })
-  const result = await runGuideSync('0.2.1-rc.3', { fetcher, localClone })
+  const result = await runGuideSync('0.2.1-rc.3', { fetcher, localClone, cacheRoot: tmpPluginDir('guide-anchor-cache') })
   assert.strictEqual(result.resolution.verdict, 'up-to-date-on-channel')
   assert.strictEqual(result.resolution.target, null)
   assert.strictEqual(result.guideVersion, '0.2.1-rc.3', 'target 为空时取版锚点应退回本机版本')
@@ -1164,6 +1182,28 @@ test('seams：符号查询给宿主文本弱证据与迁移目标档', () => {
     fs.rmSync(root, { recursive: true, force: true })
     fs.rmSync(nm, { recursive: true, force: true })
   }
+})
+
+test('runlog 旧 ~/.cache 台账一次性搬迁到新根；新根非空不动、无旧根无操作', () => {
+  const legacy = tmpPluginDir('runs-legacy')
+  const fresh = tmpPluginDir('runs-fresh')
+  fs.mkdirSync(legacy, { recursive: true })
+  fs.writeFileSync(path.join(legacy, 'index.jsonl'), '{"file":"a.json"}\n')
+  fs.writeFileSync(path.join(legacy, 'a.json'), '{}\n')
+  assert.strictEqual(migrateLogRoot(fresh, legacy), true, '旧根有数据应整体搬迁（含 index.jsonl）')
+  assert.ok(fs.existsSync(path.join(fresh, 'index.jsonl')), '索引应随目录一起到新根')
+  assert.strictEqual(fs.existsSync(legacy), false, '搬迁后旧根不复在')
+
+  const legacy2 = tmpPluginDir('runs-legacy2')
+  const busy = tmpPluginDir('runs-busy')
+  fs.mkdirSync(legacy2, { recursive: true })
+  fs.writeFileSync(path.join(legacy2, 'index.jsonl'), 'x\n')
+  fs.mkdirSync(busy, { recursive: true })
+  fs.writeFileSync(path.join(busy, 'index.jsonl'), 'y\n')
+  assert.strictEqual(migrateLogRoot(busy, legacy2), false, '新根已有内容说明在用，不回退')
+  assert.ok(fs.existsSync(path.join(legacy2, 'index.jsonl')), '新根非空时旧根原样保留')
+
+  assert.strictEqual(migrateLogRoot(tmpPluginDir('runs-fresh2'), tmpPluginDir('runs-never')), false, '无旧根是无操作')
 })
 
 test('run-log doctor：运行日志 × 宿主启动日志交叉核对', () => {

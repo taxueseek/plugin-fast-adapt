@@ -130,8 +130,8 @@ export function resolveTargetVersion(localVersion, distTags) {
 
 // ── B. 指南获取 ────────────────────────────────────────────────────────────
 
-function cacheDirFor(version) {
-  return path.join(CACHE_ROOT, `harness-dsh-v${version}`)
+function cacheDirFor(version, cacheRoot = CACHE_ROOT) {
+  return path.join(cacheRoot, `harness-dsh-v${version}`)
 }
 
 // 本机可能已有 harness clone，优先复用，省一次网络
@@ -151,8 +151,8 @@ function findLocalClone() {
   return null
 }
 
-export function syncGuides(targetVersion, { localClone = null } = {}) {
-  const cacheDir = cacheDirFor(targetVersion)
+export function syncGuides(targetVersion, { localClone = null, cacheRoot = CACHE_ROOT } = {}) {
+  const cacheDir = cacheDirFor(targetVersion, cacheRoot)
 
   if (fs.existsSync(path.join(cacheDir, 'docs', 'upgrade-guide'))) {
     return {
@@ -180,9 +180,9 @@ export function guideVersionFor(resolution, localVersion, distTags) {
 }
 
 // 真正拉取（需要网络）。用 sparse clone 只取 docs/upgrade-guide。
-export function cloneGuides(targetVersion) {
+export function cloneGuides(targetVersion, { cacheRoot = CACHE_ROOT } = {}) {
   const tag = `dsh-v${targetVersion}`
-  const dest = cacheDirFor(targetVersion)
+  const dest = cacheDirFor(targetVersion, cacheRoot)
 
   fs.mkdirSync(path.dirname(dest), { recursive: true })
   const tmp = `${dest}.tmp-${process.pid}`
@@ -213,17 +213,20 @@ export function upstreamCheckExit(resolution) {
   return resolution?.verdict === 'upgrade-available' ? 1 : 0
 }
 
-export async function runGuideSync(localVersion, { clone = false, fetcher = null, localClone = null } = {}) {
-  const metadata = await fetchNpmMetadata({ fetcher })
+// cacheRoot 可注入（默认真实缓存根）：与 runlog 的 DSH_PFA_RUNS_DIR 同一条纪律——
+// 自检直调本函数时不许碰真实用户缓存（2026-10-26 实录：合成 dist-tags 落进真实
+// 缓存，真实 run.mjs 在 1h TTL 内读到的是自检刷进去的版本数据）。
+export async function runGuideSync(localVersion, { clone = false, fetcher = null, localClone = null, cacheRoot = CACHE_ROOT } = {}) {
+  const metadata = await fetchNpmMetadata({ fetcher, cachePath: path.join(cacheRoot, 'npm-metadata.json') })
   const resolution = resolveTargetVersion(localVersion, metadata['dist-tags'], Object.keys(metadata.versions || {}))
   const guideVersion = guideVersionFor(resolution, localVersion, metadata['dist-tags'])
 
   let guides = { source: 'unavailable', root: null, versions: [] }
   if (guideVersion) {
-    guides = syncGuides(guideVersion, { localClone: localClone ?? findLocalClone() })
+    guides = syncGuides(guideVersion, { localClone: localClone ?? findLocalClone(), cacheRoot })
     if (guides.source === 'unavailable' && clone) {
       try {
-        guides = cloneGuides(guideVersion)
+        guides = cloneGuides(guideVersion, { cacheRoot })
       } catch (err) {
         guides = { source: 'error', root: null, versions: [], error: err.message }
       }

@@ -121,7 +121,7 @@ node scripts/run.mjs <插件目录> [--target <版本>] [--from <版本>] [--no-
 
 按上面的流程依次跑环境、定版、指南、扫描、体检、冒烟、typecheck（执行插件自有的 typecheck script，与冒烟同信任级），输出一份统一 JSON 报告；扫描窗口自动取「插件在宿主包上声明的 peer 下限 → 宿主版本」的走廊（`--from`/`--target` 可覆盖，倒挂自动回退并留痕）。`--real-smoke` 默认关，显式启用后桥接原仓库 plugin-upgrade 的 `verify-runtime.mjs`：干净 profile 安装→启动→四类归因（插件代码/依赖解析/profile 配置/宿主运行时），fail 计入退出码 2，脚本不在本机（探测兄弟仓 `dsh-plugin-upgrade-skill`，或 `PFA_VERIFY_RUNTIME` 指路径）时诚实跳过给补法，Windows 按 POSIX-only 声明跳过。退出码：0 干净，2 有 critical/high 命中、typecheck 红或真冷启动失败。
 
-每次运行写本地日志（`~/.cache/dsh-plugin-fast-adapt/runs/`，一次一个自包含 JSON + index.jsonl 一行摘要），记录工具版本与 commit——2026-10-25 实测教训：跑了一份滞后拷贝产出 4 个本已修复的误报，没有日志这类「跑的是哪版工具」完全不可观测。索引摘要带 `phases` 三态（scan/smoke/typecheck/realSmoke 各 ok|skipped|fail|error）与 `toolDirty` 星标（工具仓当时有未提交改动，版本号与 commit 可能拆对）——扫描没跑不再与「体检满分」在同一行里混淆（dsh-image-gen 实录：scan skipped、auditScore 照记 100）。运行日志保留 90 天，写入时惰性清理过期文件与对应索引行。
+每次运行写本地日志（`~/.local/state/dsh-plugin-fast-adapt/runs/`，一次一个自包含 JSON + index.jsonl 一行摘要；旧 `~/.cache/dsh-plugin-fast-adapt/runs/` 有数据时首次运行自动整体搬迁——台账是要留存的运行史，放 `~/.cache` 会被本机清理工具整目录扫掉，可再生的 dist-tags 缓存与指南快照仍走 `~/.cache`），记录工具版本与 commit——2026-10-25 实测教训：跑了一份滞后拷贝产出 4 个本已修复的误报，没有日志这类「跑的是哪版工具」完全不可观测。索引摘要带 `phases` 三态（scan/smoke/typecheck/realSmoke 各 ok|skipped|fail|error）与 `toolDirty` 星标（工具仓当时有未提交改动，版本号与 commit 可能拆对）——扫描没跑不再与「体检满分」在同一行里混淆（dsh-image-gen 实录：scan skipped、auditScore 照记 100）。运行日志保留 90 天，写入时惰性清理过期文件与对应索引行。
 
 ```sh
 node scripts/run-log.mjs list [--limit 20]              # 最近运行一览（含工具版本@commit）
@@ -235,7 +235,7 @@ node scripts/scaffold.mjs <namespace>/<name> --form tool|hook|service|config|llm
 - **不自动改插件代码**。只报命中和官方修法，改不改、怎么改由人决定；`plugin-audit --peer-patch` 也只打印建议不写 `package.json`。
 - **`sync-skill` 显式写下游目录**，只复制固定技能面（`SKILL.md`/`README*`/`references`/`scripts`），`--check`/`--dry-run` 供先确认；改的是下游副本，不动主仓。
 - **网络只用在「取官方源」这一步**（定版本读 npm 的 dist-tags、取指南 clone 官方仓库）。两处都有超时，失败会明确报错而不是静默跳过；dist-tags 有 1 小时缓存，网络失败时降级用旧缓存并标 stale；指南优先复用本机已有 clone，`--no-clone` 可跳过。
-- **日志只落本机**。run.mjs 的运行日志写在 `~/.cache/dsh-plugin-fast-adapt/runs/`，含本地路径与用户名，外发前必须 `run-log.mjs sanitize`。
+- **日志只落本机**。run.mjs 的运行日志写在 `~/.local/state/dsh-plugin-fast-adapt/runs/`，含本地路径与用户名，外发前必须 `run-log.mjs sanitize`。
 
 ## 自检
 
@@ -243,7 +243,7 @@ node scripts/scaffold.mjs <namespace>/<name> --form tool|hook|service|config|llm
 npm test
 ```
 
-132 项断言，覆盖扫描器不误报（注释和字符串里的同名词不算命中）、不漏报、真实 semver 范围判定（prerelease tuple 规则，本轮与宿主自带 semver 对拍的 30 例锚点回归）、扫描窗口计算（宿主包 peer 精确匹配、cordis/schemastery 版本线不混入、倒挂守卫回退留痕）、目标形态判定（dsh 命名空间/生态依赖证据、非插件 N/A、工具仓跳过 Cordis 生命周期）、import type 区分、宿主实测核查分级、描述漂移检测、指南出处锚点（guideFile/guideLine 落盘往返）、接缝查询双源结论（一致已移除/宿主仍在报分歧/无记录如实说/探不到宿主不伪造）、运行日志×宿主日志交叉核对、--real-smoke 桥接档位（fail→退出码 2、tail 归因透传、失败指路）、一键编排与运行日志（写入/索引/脱敏往返、phases 三态、dirty 标记、90 天保留清理）、上游盯梢退出码（upgrade-available→1 其余→0）、同步提交命令建议（git 仓给只 add 同步路径的命令、非 git 静默跳过）、版本启发式、替换对识别、端到端命中、SOP 引用完整性、dist-tags 缓存三态、冒烟验证（含未声明 inject 契约拦截与 Mock 缺口披露）、四维审计（含 peer 修补建议）、启用诊断（宿主半 Silent Pending＋客户端半三层判定：声明/产物/注入名册死链）、环境层盲区三处（共享 node_modules 农场悬空软链的 critical/info 分级、全局 patch 层对所有 profile 生效且 disabled 也参与判定、入口解析按 exports 优先于 main 防无 main 包被误报 ERROR）、创作脚手架（五形态生成与冒烟闭环、命名投影语法、挂载层可识别、非法输入与非空目录拒绝）、创作体检门（硬门禁拦截、软指标不越权判红、跳过语义、scaffold 衔接）、日志诊断（startup 头部/失败插件/等待服务/信号/跨文件汇总）、下游同步漂移检查＋真机零漂移拦截、self-test 体积门禁（超 2200 行即红）、跨平台模拟（Windows 根探测与缓存隔离）、文档断言数防漂移、扫描性能回归门。自检零网络、零外部依赖，任何机器上都能跑（Windows 分支已做模拟验证，真机待验）。
+134 项断言，覆盖扫描器不误报（注释和字符串里的同名词不算命中）、不漏报、真实 semver 范围判定（prerelease tuple 规则，本轮与宿主自带 semver 对拍的 30 例锚点回归）、扫描窗口计算（宿主包 peer 精确匹配、cordis/schemastery 版本线不混入、倒挂守卫回退留痕）、目标形态判定（dsh 命名空间/生态依赖证据、非插件 N/A、工具仓跳过 Cordis 生命周期）、import type 区分、宿主实测核查分级、描述漂移检测、指南出处锚点（guideFile/guideLine 落盘往返）、接缝查询双源结论（一致已移除/宿主仍在报分歧/无记录如实说/探不到宿主不伪造）、运行日志×宿主日志交叉核对、--real-smoke 桥接档位（fail→退出码 2、tail 归因透传、失败指路）、一键编排与运行日志（写入/索引/脱敏往返、phases 三态、dirty 标记、90 天保留清理）、上游盯梢退出码（upgrade-available→1 其余→0）、同步提交命令建议（git 仓给只 add 同步路径的命令、非 git 静默跳过）、版本启发式、替换对识别、端到端命中、SOP 引用完整性、dist-tags 缓存三态、runGuideSync 缓存根注入（自检不写真实用户缓存）、runlog 台账根一次性搬迁（旧 `~/.cache` 根迁 `~/.local/state`）、冒烟验证（含未声明 inject 契约拦截与 Mock 缺口披露）、四维审计（含 peer 修补建议）、启用诊断（宿主半 Silent Pending＋客户端半三层判定：声明/产物/注入名册死链）、环境层盲区三处（共享 node_modules 农场悬空软链的 critical/info 分级、全局 patch 层对所有 profile 生效且 disabled 也参与判定、入口解析按 exports 优先于 main 防无 main 包被误报 ERROR）、创作脚手架（五形态生成与冒烟闭环、命名投影语法、挂载层可识别、非法输入与非空目录拒绝）、创作体检门（硬门禁拦截、软指标不越权判红、跳过语义、scaffold 衔接）、日志诊断（startup 头部/失败插件/等待服务/信号/跨文件汇总）、下游同步漂移检查＋真机零漂移拦截、self-test 体积门禁（超 2200 行即红）、跨平台模拟（Windows 根探测与缓存隔离）、文档断言数防漂移（含「项自检」同义写法）、扫描性能回归门。自检零网络、零外部依赖，任何机器上都能跑（Windows 分支已做模拟验证，真机待验）。
 
 提交前门禁：`git config core.hooksPath .githooks`（一次性）启用 pre-commit 钩子，commit 时自动跑本自检——改完真源忘了 sync-skill 在这一刻被拦，不用等有人跑 npm test。
 
