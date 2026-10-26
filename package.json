@@ -1,9 +1,19 @@
 {
   "name": "plugin-fast-adapt",
-  "version": "0.2.0",
-  "private": true,
+  "version": "0.1.1",
   "description": "DSH 插件适配与破坏性变更核查：直连官方升级指南，零外部依赖",
   "type": "module",
+  "bin": {
+    "plugin-fast-adapt": "scripts/cli.mjs"
+  },
+  "files": [
+    "SKILL.md",
+    "README.md",
+    "README.en.md",
+    "LICENSE",
+    "scripts/**/*.mjs",
+    "references/**/*.md"
+  ],
   "scripts": {
     "test": "node scripts/self-test.mjs",
     "run": "node scripts/run.mjs",

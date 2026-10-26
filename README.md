@@ -2,34 +2,69 @@
 
 **简体中文** | [English](README.en.md)
 
-DSH 插件适配与破坏性变更核查，兼从零造插件脚手架。查官方最新版本，获取该版本的官方指南，分析本机插件代码，报出踩中了哪些破坏性变更、官方给的修法是什么；一条命令生成五形态可冒烟的插件骨架；顺带巡检本机 DSH 环境、做升级后的性能与架构体检。
+[![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D22.13-blue.svg)](package.json) [![外部依赖](https://img.shields.io/badge/外部依赖-0-blue.svg)](#依赖与自检) [![自检](https://img.shields.io/badge/自检-129%20项零网络-brightgreen.svg)](#依赖与自检)
 
-> **出身**：本项目从 [oh-my-dsh/dsh-plugin-upgrade-skill](https://github.com/oh-my-dsh/dsh-plugin-upgrade-skill)（教 AI 升级 DSH 插件的 skill 集合，附 [arXiv 论文](https://arxiv.org/abs/2609.30120)）衍生而来，已用 git subtree 拆分为独立仓库、独立演进。原项目沉淀了 195 张人工维护的升级卡、11 个 skill 和 63 道自动判分的 benchmark；本项目只保留并强化「把插件适配到新版 DSH」这一目的，取代其中最重的人工卡片模式，转为自动更新适配。专门为 agent 而生。
+> **DSH 每次发新版，老插件就可能启动不了。** 这个技能直连 DeepSeek 官方升级指南，扫你的插件代码，报出踩了哪几条破坏性变更、官方给的修法是什么；还能一条命令从零造出可冒烟的插件骨架。
 
-## 为什么重新做一个
+## 速览
 
-原项目的核心资产是「升级卡片库」：每个版本区间手写几十张卡，写清什么坏了、怎么修。项目的实测结果暴露了这条路的三类难题：
+| | |
+| --- | --- |
+| 上游发新版 | 无需任何改动，直接可用（直连官方源，不维护知识卡片） |
+| 扫描误报 | 12 处 → 0（四层降噪） |
+| 验证一次改动 | 3600 秒真宿主冷启动 → 毫秒级内存冒烟 |
+| 自检 | 129 项断言，零网络，任何机器能跑 |
+| 外部依赖 | 0（只用 Node 内置模块 + `git`/`npm` 命令） |
+| 造插件 | 一条命令出五形态可冒烟骨架，写完再过体检门 |
 
-1. **卡片滞后是宿命**。DSH 上游一次跃迁可以改动数千个文件，卡片写完就已经过时，版本之间还有「走廊缺口」。
-2. **弱模型长上下文负迁移**。论文实测，弱模型（qwen3.8-27b）带全套卡片库答题，56 题等权差为 **-3.07 pp**（7 题改善、18 题退化、31 题持平）——大知识库对强模型是增益，对弱模型是挤占推理空间的负担。
-3. **验证太贵，环境会骗人**。改一次验一次要等真宿主冷启动（issue #171 记录过 3600 秒超时）；宿主升级后 profiles 覆盖层残留旧包，旧包优先解析导致插件装载冲突（issue #263 类事故），只换文件不重启还会复现。
+## 它解决什么
 
-本项目换了个思路：**不维护知识，只维护取知识的方法**。使得这个 Skill 可以无缝衔接并适配最新版本
+DSH（DeepSeek Harness）是一个「所有功能都以插件形式存在」的 AI 运行框架，麻烦在于每次发新版，老插件就可能启动不了。常见的应对是手写升级卡片：每个版本区间写几十张卡，记清什么坏了、怎么修。这条路有三个绕不过去的问题：
 
-破坏性变更的权威描述在 DeepSeek 官方仓库的 `docs/upgrade-guide/<版本>/<主题>/guide.md` 里，官方发版时同步更新，格式固定（`## Change` 讲什么变了，`## Migration` 讲怎么改）；版本信息在 npm registry 的 `dist-tags` 里。两处都是官方源，所以**上游发新版的那一刻，这个技能就自动跟上了**。
+1. **卡片写完就过时**。上游一次跃迁能改动数千个文件，卡片之间还有覆盖不到的「走廊缺口」。
+2. **大知识库挤占推理空间**。论文实测，弱模型（qwen3.8-27b）带全套卡片库答题，56 题等权差 -3.07 pp（7 题改善、18 题退化、31 题持平）。
+3. **验证太贵**。改一次验一次要等真宿主冷启动，实测有过 3600 秒超时；宿主升级后 profiles 覆盖层残留旧包，还会导致插件装载冲突。
 
-### 与原项目模式的对照
+本项目的取舍是：**不维护知识，只维护取知识的方法。** 破坏性变更的权威描述在 DeepSeek 官方仓库的 `docs/upgrade-guide/<版本>/<主题>/guide.md`，官方发版时同步更新，格式固定（`## Change` 讲什么变了，`## Migration` 讲怎么改）；版本信息在 npm registry 的 `dist-tags`。两处都是官方源，所以上游发新版的那一刻，这个技能就自动跟上了。
 
-| 环节 | 原项目（人工卡片走廊） | 本项目 |
-| --- | --- | --- |
-| 差异来源 | 人工维护的 195 张升级卡 | 官方 `docs/upgrade-guide/` + npm `dist-tags`，随上游自动更新 |
-| 新版本发布 | 等卡片补齐，存在走廊缺口 | 无需任何改动，直接可用 |
-| 验证一次改动 | 真宿主冷启动，实测可达 3600 秒 | 内存级 Cordis 冒烟，毫秒到秒级 |
-| 覆盖层旧包残留 | 靠人肉排障（issue #263 类事故） | `env-doctor` 巡检 + `env-heal` 自愈（默认 dry-run） |
-| 弱模型表现 | 全套卡片进上下文，-3.07 pp | 六个独立脚本，每步只产出一份小输出 |
-| 代码级扫描 | 无 | 锚点匹配 + 四层降噪（见下文实测） |
-| 依赖 | — | 零外部依赖：Node 内置模块 + `git`/`npm` 命令 |
-| 自检 | — | 129 项断言，零网络，任何机器能跑 |
+### 优势
+
+- **自动跟上新版**：直连官方 `docs/upgrade-guide/` 与 npm `dist-tags`，上游发版即生效，没有卡片滞后也没有走廊缺口
+- **误报清零**：四层降噪把真实插件的命中从 12 处误报降到 0，每条命中带 `severity`、`evidence` 和直达官方指南的出处锚点
+- **验证便宜**：内存级 Cordis 冒烟毫秒到秒级出结果，不用真宿主冷启动；需要真证据时 `--real-smoke` 再补干净 profile 真装真启档
+- **零外部依赖**：只用 Node 内置模块加 `git`/`npm` 命令，没有 TypeScript、没有 AST 库、没有网络请求库
+- **可复现**：129 项自检零网络，任何机器能跑；CI 在 push 和 PR 上自动跑
+- **不止适配**：`scaffold.mjs` 一条命令生成五形态可冒烟骨架，`write-gate.mjs` 写完出「出生证」
+- **边界诚实**：冒烟通过不等于宿主兼容，这句话写在工具输出里；体检的软指标只透传，不替用户说「合格」
+
+## 安装
+
+用 skills CLI（推荐，一条命令装到它支持的 agent）：
+
+```sh
+npx skills add taxueseek/plugin-fast-adapt
+```
+
+Claude Code marketplace：
+
+```sh
+/plugin marketplace add taxueseek/plugin-fast-adapt
+/plugin install plugin-fast-adapt
+```
+
+npm（带 `plugin-fast-adapt` 命令，转发到一键编排）：
+
+```sh
+npx plugin-fast-adapt <插件目录>
+```
+
+手动安装：
+
+```sh
+git clone https://github.com/taxueseek/plugin-fast-adapt.git
+# 把仓库根目录（SKILL.md 所在处）作为 skill 目录接入你的 agent
+# Cursor 用户：cp -r plugin-fast-adapt/* .cursor/skills/plugin-fast-adapt/
+```
 
 ## 流程
 
@@ -104,22 +139,6 @@ node scripts/sync-skill.mjs --dest <下游技能目录> --check
 
 命中带 `severity`（package=critical、member=high、code=medium，先修排前面的）、`evidence`（命中行原文，核对误报不用开文件）和出处锚点（`guideFile`/`guideLine`，直达官方指南原文位置）。规则与实测依据见 [references/heuristics.md](references/heuristics.md)。扫描根取源码根并集（`src` 与同级 `client`/`web`/`ui`），`lib`/`dist` 构建产物不重复扫。冒烟验证会披露 Mock 兜底：输出里的 `mockFallbacks` 列出插件摸到但 Mock 没提供的属性，这个列表越长，冒烟结果可信度越低——**冒烟通过 ≠ 宿主兼容**，这句话写在输出里，不只写在文档里。冒烟还按真 Cordis 契约拦未声明 `inject` 的宿主服务访问（`inject_contract` 阶段），不再让「装载即崩」的代码静默通过。要真宿主证据时用 `run.mjs --real-smoke`：桥接原仓库 plugin-upgrade 的 `verify-runtime.mjs`，干净 profile 安装→启动→四类归因（脚本不在本机时诚实跳过给补法）。
 
-## 安装
-
-用 [skills CLI](https://github.com/vercel-labs/skills)（推荐，一条命令装到它支持的 agent）：
-
-```sh
-npx skills add taxueseek/plugin-fast-adapt
-```
-
-手动安装：
-
-```sh
-git clone https://github.com/taxueseek/plugin-fast-adapt.git
-# 把仓库根目录（SKILL.md 所在处）作为 skill 目录接入你的 agent
-# Cursor 用户：cp -r plugin-fast-adapt/* .cursor/skills/plugin-fast-adapt/
-```
-
 ## 从零造一个插件
 
 ```sh
@@ -136,7 +155,7 @@ node scripts/write-gate.mjs <插件目录>   # 出生证：硬门禁自动判，
 
 硬门禁仅三条（入口产物存在、冒烟通过、对官方指南 critical 零命中），fail 即退出码 1；audit 分数、high/medium 命中、mockFallbacks、未挂载 profile 全部进 discretion 区标「人工裁量」，不替用户说「合格」。指南自动发现走 guide-sync 缓存（零网络），新插件核查面是全部历史走廊；刚 scaffold 完加 `--skip-smoke` 免重复冒烟。
 
-## 依赖
+## 依赖与自检
 
 零外部依赖。只用 Node 内置模块（`node:fs`、`node:path`、`node:os`、`node:child_process`），加 `git` 和 `npm` 命令。
 
@@ -158,6 +177,7 @@ npm test   # node scripts/self-test.mjs，129 项断言
 
 | 脚本 | 职责 |
 | --- | --- |
+| `scripts/cli.mjs` | npm 入口（`npx plugin-fast-adapt`），转发到 run.mjs |
 | `scripts/run.mjs` | 一键编排全流程（环境→定版→指南→扫描→体检→冒烟→typecheck），出统一报告并写本地运行日志；`--real-smoke` 桥接原仓库 verify-runtime 补真冷启动档 |
 | `scripts/run-log.mjs` | 运行日志查看（list/show）、交叉核对（doctor：运行日志×宿主启动日志）与脱敏导出（sanitize） |
 | `scripts/seams.mjs` | 接缝查询：一个包名/API 符号在官方指南锚点表与本机宿主里的双源结论 |
@@ -198,6 +218,20 @@ npm test   # node scripts/self-test.mjs，129 项断言
 - 同名符号仍可能撞车（插件里的 `path.resolve()` 和 guide 里的 `runtime.resolve()`），只能靠人看上下文判断
 - 只做静态匹配，不验证运行时行为；冒烟的 Mock 只覆盖常见宿主面
 
-## 与原项目的分工
+## 上游溯源与分工
 
-两个项目互补而非替代：原项目继续维护升级卡片库、统一工作流和 benchmark；本项目管「新版适配」主路径。宿主升级后的整批插件巡检走原项目的 [plugin-fleet-sweep](https://github.com/oh-my-dsh/dsh-plugin-upgrade-skill/tree/main/skills/plugin-fleet-sweep)（批量管广度），筛出的个体回到本项目六步流水线深查（本 skill 管深度）。官方指南覆盖不到的历史走廊（v0.1.7-rc.2 之前），本项目的 SOP 引用原项目的卡片和脚本——有 guide 的段用本项目的 `code-scan`，没 guide 的段用原项目的 `plan-migration.mjs` 和卡片，运行时验证用原项目的 `verify-runtime.mjs`（本项目 `run.mjs --real-smoke` 已可直接桥接它）。
+本项目从 [oh-my-dsh/dsh-plugin-upgrade-skill](https://github.com/oh-my-dsh/dsh-plugin-upgrade-skill)（教 AI 升级 DSH 插件的 skill 集合，附 [arXiv 论文](https://arxiv.org/abs/2609.30120)）用 git subtree 拆分为独立仓库、独立演进。原项目沉淀了 195 张人工维护的升级卡、11 个 skill 和 63 道自动判分的 benchmark。
+
+两个项目互补而非替代：
+
+| 环节 | 上游 | 本项目 |
+| --- | --- | --- |
+| 差异来源 | 人工维护的升级卡片库 | 官方 `docs/upgrade-guide/` + npm `dist-tags`，随上游自动更新 |
+| 新版本发布 | 等卡片补齐，存在走廊缺口 | 无需任何改动，直接可用 |
+| 验证一次改动 | 真宿主冷启动，实测可达 3600 秒 | 内存级 Cordis 冒烟，毫秒到秒级 |
+| 覆盖层旧包残留 | 靠人肉排障 | `env-doctor` 巡检 + `env-heal` 自愈（默认 dry-run） |
+| 弱模型表现 | 全套卡片进上下文，-3.07 pp | 六个独立脚本，每步只产出一份小输出 |
+| 代码级扫描 | 无 | 锚点匹配 + 四层降噪 |
+| 批量巡检 | `plugin-fleet-sweep` 管广度 | 六步流水线管深度 |
+
+宿主升级后的整批插件巡检走上游的 [plugin-fleet-sweep](https://github.com/oh-my-dsh/dsh-plugin-upgrade-skill/tree/main/skills/plugin-fleet-sweep)（批量管广度），筛出的个体回到本项目六步流水线深查（本 skill 管深度）。官方指南覆盖不到的历史走廊（v0.1.7-rc.2 之前），本项目的 SOP 引用原项目的卡片和脚本——有 guide 的段用本项目的 `code-scan`，没 guide 的段用原项目的 `plan-migration.mjs` 和卡片，运行时验证用原项目的 `verify-runtime.mjs`（本项目 `run.mjs --real-smoke` 已可直接桥接它）。
