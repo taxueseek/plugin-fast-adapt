@@ -2,7 +2,7 @@
 
 [简体中文](README.md) | English
 
-[![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D22.13-blue.svg)](package.json) [![Dependencies](https://img.shields.io/badge/dependencies-0-blue.svg)](#dependencies) [![Self-test](https://img.shields.io/badge/self--test-161%20passing-brightgreen.svg)](#dependencies)
+[![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D22.13-blue.svg)](package.json) [![Dependencies](https://img.shields.io/badge/dependencies-0-blue.svg)](#dependencies) [![Self-test](https://img.shields.io/badge/self--test-171%20passing-brightgreen.svg)](#dependencies)
 
 > **Every time DSH ships a new release, existing plugins can stop working.** This skill reads the vendor's official upgrade guide directly, scans your plugin code, and reports which breaking changes you hit together with the vendor's own fix instructions; it also scaffolds a runnable plugin from zero in one command and verifies it.
 
@@ -15,7 +15,7 @@
 | Verifying one change | 3,600 s real host cold start → millisecond-scale in-memory smoke test |
 | Ghost host | Warns when the disk has new code but the running process still executes the old one (compares process start time, not version strings) |
 | Fake-green check | Warns when `tsconfig` `paths` point at a missing checkout, where TypeScript silently falls back to published types |
-| Self-test | 161 assertions, runs offline |
+| Self-test | 171 assertions, runs offline |
 | External dependencies | 0 (Node built-ins + the `git`/`npm` commands only) |
 | Network | Only used to fetch vendor sources; the core steps are fully offline |
 | Scaffolding | One command emits a runnable plugin in five forms, verified on creation, then a write gate issues the birth certificate |
@@ -36,8 +36,8 @@ This project takes a different approach: **maintain the method of obtaining know
 - **Zero false positives**: four noise-reduction layers took a real plugin from 12 false positives to 0, and every finding carries `severity`, `evidence` and provenance anchors pointing straight at the official guide
 - **Cheap verification**: the in-memory Cordis smoke test returns in milliseconds to seconds, with no real host cold start; add `--real-smoke` when you need real-host evidence (clean profile, install and boot)
 - **Zero external dependencies**: Node built-ins plus the `git`/`npm` commands only — no TypeScript, no AST library, no HTTP client
-- **Very light network dependence**: only "fetching vendor sources" touches the network — version resolution reads npm `dist-tags`, guide fetching clones the official repo. `dist-tags` is cached for 1 hour and degrades to the stale cache with an explicit `stale` marker; guides reuse an existing local clone first, and `--no-clone` skips the fetch. Environment inspection, code scanning, smoke tests, audits, log diagnosis and seam queries are fully offline
-- **Reproducible**: 161 assertions, runs offline; CI runs on every push and pull request
+- **Very light network dependence**: only "fetching vendor sources" touches the network — version resolution reads npm `dist-tags`, guide fetching reads a managed snapshot of the official repo's default branch (1-hour TTL; release tags are an offline-only fallback marked `frozen`). `dist-tags` is cached for 1 hour and degrades to the stale cache with an explicit `stale` marker; guides reuse an existing local clone first, and `--no-clone` skips the fetch. Environment inspection, code scanning, smoke tests, audits, log diagnosis and seam queries are fully offline
+- **Reproducible**: 171 assertions, runs offline; CI runs on every push and pull request
 - **More than adaptation**: `scaffold.mjs` emits a runnable plugin in five forms in one command (verified against the real host base classes), and `write-gate.mjs` issues a birth certificate when you are done
 - **Silent failures have hard evidence**: `ghostHost` compares process start time against the disk change time to catch "new code on disk, old code in memory"; `falseGreen` catches TypeScript's silent fallback when `tsconfig` `paths` point at a missing checkout. Both report evidence and never pretend to decide for you
 - **Honest about its limits**: a passing smoke test is not host compatibility, and the tool says so in its output; soft audit metrics are passed through, never turned into a verdict on your behalf
@@ -102,6 +102,7 @@ node scripts/run.mjs <plugin-dir>        # env → version → guide → scan �
 node scripts/run.mjs <plugin-dir> --real-smoke   # plus one more tier: install & boot in a clean profile (bridges upstream verify-runtime)
 node scripts/run.mjs <plugin-dir> --offline      # skip fetching vendor sources (no npm read, no clone); local five steps only
 node scripts/run.mjs <plugin-dir> --no-clone     # resolve the version but do not fetch the guide (use an existing local clone)
+node scripts/run.mjs <plugin-dir> --strict       # exit 2 when the scan did not run or the guide does not cover the target version (CI)
 node scripts/run-log.mjs list           # review past runs (tool version@commit included)
 node scripts/run-log.mjs doctor         # cross-check run logs × host startup logs (first stop for "plugin erroring")
 node scripts/run-log.mjs sanitize --latest --out share.json   # sanitise before sharing
@@ -113,7 +114,7 @@ You can also run each step on its own (the six-step spine remains; run.mjs just 
 # 1. Inspect the local environment: installed version, stale overlay packages,
 #    installed plugins, activation readiness. Also two silent-failure judges:
 #    ghostHost (process still running old code) and falseGreen (tsconfig paths fake green)
-node scripts/env-doctor.mjs <plugin-dir>
+node scripts/env-doctor.mjs <plugin-dir> --brief   # omit raw patch lines, 80.5KB -> 4.5KB
 
 # 2. Resolve the target version: what is upstream's latest, should this machine follow it
 node scripts/guide-sync.mjs <local-version>
@@ -122,8 +123,9 @@ node scripts/guide-sync.mjs <local-version>
 #     0 = nothing to do, 2 = could not determine
 node scripts/guide-sync.mjs --check
 
-# 3. Fetch that version's official upgrade guide (reuses a local clone when present)
-node scripts/guide-sync.mjs <local-version> --clone
+# 3. Fetch the guide for the scan window target (managed branch snapshot first;
+#    never leave --target empty and follow upstream's newest)
+node scripts/guide-sync.mjs <local-version> --target <scan-target> --clone
 
 # 4. Find which changes the plugin hits
 node scripts/code-scan.mjs <plugin-dir> <upgrade-guide-dir> <local-version> <target-version>
@@ -201,7 +203,7 @@ No TypeScript, no AST library, no HTTP client. Runs on Node 22.13+ (`import.meta
 Self-test:
 
 ```sh
-npm test   # node scripts/self-test.mjs, 161 assertions
+npm test   # node scripts/self-test.mjs, 171 assertions
 ```
 
 Contributors should enable the pre-commit gate (one time): `git config core.hooksPath .githooks` — every commit runs the self-test, so a forgotten downstream sync is caught at commit time.

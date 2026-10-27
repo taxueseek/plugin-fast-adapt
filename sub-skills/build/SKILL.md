@@ -33,7 +33,7 @@ node scripts/scaffold.mjs <namespace>/<name> --form tool|hook|service|config|llm
 node scripts/quick-smoke.mjs <插件目录>
 ```
 
-纯内存模拟 Cordis 上下文，动态载入插件入口，毫秒到秒级验证：模块能加载、`apply` 契约能执行、工具能注册。改完代码先跑它，挂了立刻回改，不用等真宿主冷启动。
+纯内存模拟 Cordis 上下文，动态载入插件入口，毫秒到秒级验证：模块能加载、`apply` 契约能执行、工具能注册。改完代码先跑它，挂了立刻回改，不用等真宿主冷启动。入口按 Node 语义解析（`exports['.']` 优先于 `main`，两者都没有才退 `lib/index.js`），与 `env-doctor` 的产物判定共用同一份实现；只有 `exports` 的包不会再被误报「入口不存在」。
 
 **边界**：冒烟通过不等于宿主兼容。Mock 只覆盖 logger/tools/effect/on 等常见面；输出里的 `mockFallbacks` 列出了插件摸到但 Mock 没提供的属性（含内建 mixin 里 Mock 未全真实现的面），这个列表越长，本次结果可信度越低。
 

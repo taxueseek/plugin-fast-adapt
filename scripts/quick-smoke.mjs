@@ -20,7 +20,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { printJson } from './lib/scanner.mjs'
+import { printJson, resolveEntryFile, pickExistingEntry } from './lib/scanner.mjs'
 
 // Cordis 内建 mixin 属性（ReflectService 构造时混入 ctx，无需 inject）：
 // reflect.get/set/provide/accessor/mixin、fiber.runtime/effect、registry.inject/plugin、
@@ -170,7 +170,9 @@ export async function runQuickSmoke(pluginRoot) {
   }
 
   const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
-  const entryFile = pkg.main || 'lib/index.js'
+  // 入口按 Node 语义解析（exports['.'] 优先），与 env-doctor 的产物判定共用一份实现。
+  // 旧实现只看 pkg.main，exports-only 的包会被误报「入口不存在」。
+  const entryFile = pickExistingEntry(root, pkg, resolveEntryFile(pkg))
   const entryPath = path.join(root, entryFile)
 
   if (!fs.existsSync(entryPath)) {

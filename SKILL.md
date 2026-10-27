@@ -15,15 +15,15 @@ DSH 插件升级适配的主入口。三条车道各管一件事，先判意图�
 
 **不要一次把三份都读进来。** 按上表判断走哪条，只读那一份；跨车道时（比如升级完顺手补个出生证）再补第二份。以下命令都在技能根目录执行。
 
-**权威来源只有两处**：npm registry 的版本信息，和 deepseek-harness 仓库的 `docs/upgrade-guide/`。不依赖人工维护的升级卡片，也不镜像官方全量文档。那类知识快照必滞后（上游预发布节奏 1.7 到 2.8 天一个），而「某个包还在不在」用宿主 node_modules 实测更硬。
+**权威来源只有两处**：npm registry 的版本信息，和 deepseek-harness 仓库的 `docs/upgrade-guide/`。不依赖人工维护的升级卡片，也不镜像官方全量文档。指南取仓库默认分支的受管快照（发版后官方还会补全同版本条目），发版 tag 只是冻结切片，仅在拿不到分支快照时兜底并标 `frozen`。那类知识快照必滞后（上游预发布节奏 1.7 到 2.8 天一个），而「某个包还在不在」用宿主 node_modules 实测更硬。
 
 ## 一键编排（推荐入口）
 
 ```sh
-node scripts/run.mjs <插件目录> [--target <版本>] [--from <版本>] [--no-clone] [--no-smoke] [--no-typecheck] [--no-log] [--real-smoke]
+node scripts/run.mjs <插件目录> [--target <版本>] [--from <版本>] [--no-clone] [--no-smoke] [--no-typecheck] [--no-log] [--real-smoke] [--strict]
 ```
 
-环境→定版→指南→扫描→体检→冒烟→typecheck 一条命令跑完，出一份统一 JSON 报告并写本地运行日志。退出码：0 干净，2 有 critical/high 命中、typecheck 红或真冷启动失败。扫描窗口、`--real-smoke`、运行日志（`run-log.mjs list/show/sanitize/doctor`）的细节见 `sub-skills/adapt/SKILL.md`。「插件报错 / 装了没生效」的第一站是 `node scripts/run-log.mjs doctor`，它把运行日志和宿主启动日志并排核对。
+环境→定版→指南→扫描→体检→冒烟→typecheck 一条命令跑完，出一份统一 JSON 报告并写本地运行日志。退出码：0 干净，2 有 critical/high 命中、typecheck 红或真冷启动失败；加 `--strict` 时「扫描没跑」和「指南没覆盖到目标版本」也按 2 退出。报告里的 `scan.coverage` 写明本轮指南覆盖到哪一版：没扫或覆盖不全时屏幕会明说「不能当查干净」，不再用「命中 0 处」冒充干净。扫描窗口、`--real-smoke`、运行日志（`run-log.mjs list/show/sanitize/doctor`）的细节见 `sub-skills/adapt/SKILL.md`。「插件报错 / 装了没生效」的第一站是 `node scripts/run-log.mjs doctor`，它把运行日志和宿主启动日志并排核对。
 
 ## 技能面同步（可选）
 
@@ -38,7 +38,7 @@ node scripts/sync-skill.mjs --dest <下游技能目录>            # 同步
 
 ## 跨车道纪律
 
-- **命中为零不代表没问题**，只代表「在官方指南覆盖的范围内没踩到」。指南只记官方认为需要通知的破坏性变更，不覆盖所有可能性。
+- **命中为零不代表没问题**，只代表「在官方指南覆盖的范围内没踩到」。指南只记官方认为需要通知的破坏性变更，不覆盖所有可能性。先看 `scan.coverage.complete`：没扫或没覆盖到目标版本时，零命中是未知，不是干净。
 - **命中先看是不是误报**。锚点匹配做了几层降噪（规则与实测依据见 `references/heuristics.md`），但同名符号仍会撞车，比如插件里的 `path.resolve()` 和指南里的 `runtime.resolve()`。判断方法：看命中位置的代码上下文，确认符号是不是真来自宿主 API。
 - **`member` 命中里，若符号是指南的「迁移目标」就不会出现**。插件已用新 API 说明适配过，报了是噪音。
 - **一次只深查一个插件**。宿主刚升级、要把整批插件过一遍时，先用上游 [plugin-fleet-sweep](https://github.com/oh-my-dsh/dsh-plugin-upgrade-skill/tree/main/skills/plugin-fleet-sweep) 做广度筛查，筛出有问题的再逐个回到适配车道深查。批量管广度，本技能管深度。
@@ -68,7 +68,7 @@ node scripts/sync-skill.mjs --dest <下游技能目录>            # 同步
 npm test
 ```
 
-161 项断言，覆盖扫描器不误报（注释和字符串里的同名词不算命中）、不漏报、版本窗口与 real semver 判定、目标形态判定、指南出处锚点、接缝查询双源结论、运行日志与宿主日志交叉核对、一键编排各档位、冒烟验证（含未声明 inject 契约拦截）、四维审计（含 peer 修补）、启用诊断（宿主半与客户端半）、幽灵宿主四态与磁盘时间来源、tsconfig paths 假绿（含 extends 与 JSONC）、环境层三处盲区、创作脚手架与体检门、日志诊断、下游同步、跨平台模拟、文档断言数与技能面 description 长度门禁、扫描性能回归。自检零网络、零外部依赖，任何机器上都能跑。
+171 项断言，覆盖扫描器不误报（注释和字符串里的同名词不算命中）、不漏报、版本窗口与 real semver 判定、目标形态判定、指南出处锚点、指南分支快照与覆盖度未知态、接缝查询双源结论、运行日志与宿主日志交叉核对、一键编排各档位（含 --strict）、冒烟验证（含未声明 inject 契约拦截与 exports-only 入口）、四维审计（含 peer 修补）、启用诊断（宿主半与客户端半）、幽灵宿主四态与磁盘时间来源、tsconfig paths 假绿（含 extends 与 JSONC）、环境层三处盲区、创作脚手架与体检门、日志诊断、下游同步、跨平台模拟、诊断输出瘦身、CLI 帮助与未知参数、文档断言数与技能面 description 长度门禁、扫描性能回归。自检零网络、零外部依赖，任何机器上都能跑。
 
 提交前门禁：`git config core.hooksPath .githooks`（一次性）启用 pre-commit 钩子，commit 时自动跑本自检，改完真源忘了同步在这一刻被拦。
 
@@ -80,9 +80,9 @@ npm test
 | --- | --- |
 | `run.mjs` | 一键编排全流程 + 写本地运行日志 |
 | `run-log.mjs` | 运行日志查看（list/show）与脱敏导出（sanitize）、日志交叉核对（doctor） |
-| `env-doctor.mjs` | 探测本机 DSH 环境：版本、覆盖层、共享农场悬空软链、两层 patch、插件、进程、幽灵宿主（进程代际）、tsconfig paths 假绿、宿主半与客户端半启用就绪度 |
+| `env-doctor.mjs` | 探测本机 DSH 环境：版本、覆盖层、共享农场悬空软链、两层 patch、插件、进程、幽灵宿主（进程代际）、tsconfig paths 假绿、宿主半与客户端半启用就绪度；`--brief` 省略 patch 行原文（约降 94% 体积） |
 | `env-heal.mjs` | 覆盖层旧包自愈（默认 dry-run） |
-| `guide-sync.mjs` | 定目标版本 + 取官方升级指南（dist-tags 与缺失 tag 各带 1 小时缓存） |
+| `guide-sync.mjs` | 定目标版本 + 取官方升级指南：默认分支受管快照按 1 小时 TTL 刷新，tag 快照仅在离线兜底并标 frozen |
 | `code-scan.mjs` | 扫描插件代码，匹配官方变更锚点（带指南文件与行号出处） |
 | `seams.mjs` | 接缝查询：包名或 API 符号在指南锚点表与本机宿主里的双源结论 |
 | `quick-smoke.mjs` | 内存级 Cordis 冒烟，含 Mock 兜底披露 |

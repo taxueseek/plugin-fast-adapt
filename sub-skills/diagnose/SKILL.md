@@ -26,10 +26,10 @@ node scripts/log-doctor.mjs [--logs <目录>] [--limit 5] [--pattern '^startup-'
 ## 第二步：巡检本机环境
 
 ```sh
-node scripts/env-doctor.mjs <插件目录>
+node scripts/env-doctor.mjs <插件目录> --brief
 ```
 
-输出 JSON，本车道重点看八段：
+`--brief` 把 `installedPlugins` 的 patch 行原文换成计数、进程命令截断到 120 字符，本机实测 80.5KB → 4.5KB（约省 2.1 万 token）。日常诊断八段结论都在；要逐条看挂载行或完整进程命令时去掉 `--brief`。输出 JSON，本车道重点看八段：
 
 - `globalDsh`：全局安装的 DSH 版本和位置
 - `desktopApp`：桌面 APP 自己捆的宿主版本（从 `app.asar` 只读取出）。APP 不用 npm 全局那份宿主，两者错开时带 `mismatch`：desktop profile 的结论以 APP 版本为准

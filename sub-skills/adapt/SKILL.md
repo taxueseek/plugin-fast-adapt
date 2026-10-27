@@ -12,8 +12,10 @@ description: plugin-fast-adapt 的升级适配车道。查 DeepSeek 官方最新
 ## 第一步：看清本机环境
 
 ```sh
-node scripts/env-doctor.mjs <插件目录>
+node scripts/env-doctor.mjs <插件目录> --brief
 ```
+
+`--brief` 只影响输出体积（本机实测 80.5KB → 4.5KB，约省 2.1 万 token）：`installedPlugins` 的 patch 行原文换成计数、进程命令截断到 120 字符。要查具体挂载行时去掉 `--brief` 拿全量。
 
 本车道只取四段：
 
@@ -43,15 +45,19 @@ node scripts/guide-sync.mjs <本机版本>
 
 **上游盯哨（--check）**：`node scripts/guide-sync.mjs --check` 零参数可直接接 cron、launchd 或 agent 轮询，自动探测本机宿主版本，退出码语义化（1=上游有新版，0=无需动作，2=判定失败），有新版时顺手把该版官方指南预取进缓存，下次 `run.mjs` 零等待。工具不自带定时器。
 
-有 `target` 时取该版本的官方升级指南：
+有 `target` 时取目标版本的官方升级指南：
 
 ```sh
-node scripts/guide-sync.mjs <本机版本> --clone
+node scripts/guide-sync.mjs <本机版本> --target <扫描目标> --clone
 ```
 
-优先复用本机已有的 harness clone（自动发现 `~/Documents/*/deepseek-harness`，或用 `DSH_HARNESS_CLONE` 指定），没有才 sparse clone 到 `~/.cache/dsh-plugin-fast-adapt/`。
+指南来源按优先级：本机已有 harness clone（只读，自动发现 `~/Documents/*/deepseek-harness` 或 `DSH_HARNESS_CLONE`）→ 默认分支的受管快照（`~/.cache/dsh-plugin-fast-adapt/harness-guides-branch/`，按 1 小时 TTL 刷新；冷拉约 4.8 秒，刷新约 1 秒）→ 发版 tag 缓存/clone（标 `frozen`）。tag 是冻结切片，官方会在发版后把同版本指南补全到默认分支，实测 `dsh-v0.2.1-rc.3` tag 里 `v0.2.1-rc.2` 只有 1 条变更，默认分支同一目录 23 条。
 
-**取版锚点（2026-10-25 实测复盘）**：本机已是官方通道最新版时 `resolution.target` 为 `null`，旧实现因此拿不到指南语料、`run.mjs` 的 scan 阶段静默跳过（扫描走廊 `(peerFloor, hostVersion]` 明明有内容却报「无指南根或无窗口」）。现在取版锚点退回本机版本（`target || localVersion || dist-tags.latest`），走廊照常扫。
+`--target` 必须传扫描窗口终点，不要留空跟官方最新：npm 发版常早于上游打 tag（实测 rc.4 上 npm 23 小时仍无 tag），跟着最新会去拉一个不存在的 tag，整段扫描跳过，而本机明明有覆盖到目标版本的指南。
+
+**覆盖度（`scan.coverage`）**：`coveredUpTo` 是本轮指南实际覆盖到的最高版本，`complete=false` 表示目标版本的变更还没有官方文档。`run.mjs` 会在屏幕上明说「只覆盖到 X，不能当查干净」；`--strict` 把它当失败（退出码 2）。指南来自 tag 冻结快照时另标 `guides.frozen`，提示命中数可能偏低。
+
+**取版锚点（2026-10-25 实测复盘）**：本机已是官方通道最新版时 `resolution.target` 为 `null`，旧实现因此拿不到指南语料、`run.mjs` 的 scan 阶段静默跳过（扫描走廊 `(peerFloor, hostVersion]` 明明有内容却报「无指南根或无窗口」）。现在取版锚点按 `--target || resolution.target || localVersion || dist-tags.latest` 依次回退，走廊照常扫。
 
 **窗口起点只认宿主包（2026-10-25 dsh-image-gen 实录）**：起点取插件在宿主包（`@deepseek-ai/dsh` 及 `dsh-*` 套件子包）上声明的 peer 下限；同 scope 的 `@deepseek-ai/cordis`（4.x）、`@deepseek-ai/schemastery`（3.x）是独立版本线的库，不算宿主包。混入会把起点顶到 3.18.4 一类高位，窗口倒挂后扫描静默跳过。现在倒挂（起点大于终点）会回退宿主版本并在 `window.fallback` 留痕、`window.source` 记起点来源（flag/peer/host），stderr 同步告警。
 
@@ -83,15 +89,19 @@ node scripts/seams.mjs <包名或符号> [--guide <guide-root>] [--host <版本>
 
 回答「这个接缝在我的目标宿主还在不在」，双源合成：指南源（锚点表全走廊，哪个版本声称移除或改名了它、原文在哪一行、官方修法）乘宿主源（包看 node_modules 实测，符号看宿主套件源码文本命中，弱证据如实标注）。裸 `dsh-*` 名自动归一到 `@deepseek-ai/` scope 再查。诚实三态：双源都说没有才下「已移除」；指南说没有但宿主里有，报分歧不替人拍板；双源都无记录时明说「指南未提及不代表 API 不存在」。不走网络，指南根走缓存。
 
+宿主实测的路径解析（`lib/host-scope.mjs`，与 `code-scan` 的宿主核查共用）：套件子包的真实位置是宿主主包内部的 `node_modules/@deepseek-ai/dsh-*`，不是全局 `node_modules` 的下一级。两个候选作用域都探（主包内部优先，全局 `@deepseek-ai` 兜住平铺安装形态），`checkedWhere` 记实际解析到的位置——结论可回溯到磁盘。包名收裸名与 `@scope/name` 全写两种写法，全写会先剥掉 scope 前缀再拼路径。
+
 ## 一键编排与运行日志
 
 ```sh
-node scripts/run.mjs <插件目录> [--target <版本>] [--from <版本>] [--no-clone] [--no-smoke] [--no-typecheck] [--no-log] [--real-smoke]
+node scripts/run.mjs <插件目录> [--target <版本>] [--from <版本>] [--no-clone] [--no-smoke] [--no-typecheck] [--no-log] [--real-smoke] [--strict]
 ```
 
-按上面四步依次跑环境、定版、指南、扫描、体检、冒烟、typecheck（执行插件自有的 typecheck script，与冒烟同信任级），输出一份统一 JSON 报告；扫描窗口自动取「插件在宿主包上声明的 peer 下限 → 宿主版本」的走廊（`--from`/`--target` 可覆盖，倒挂自动回退并留痕）。
+按上面四步依次跑环境、定版、指南、扫描、体检、冒烟、typecheck（执行插件自有的 typecheck script，与冒烟同信任级），输出一份统一 JSON 报告；扫描窗口自动取「插件在宿主包上声明的 peer 下限 → 宿主版本」的走廊（`--from`/`--target` 可覆盖，倒挂自动回退并留痕）。指南步骤会把窗口终点作为 `--target` 传给 `guide-sync`，按分支快照取语料，不再跟官方最新版本走。
 
-`--real-smoke` 默认关，显式启用后桥接原仓库 plugin-upgrade 的 `verify-runtime.mjs`：干净 profile 安装→启动→四类归因（插件代码、依赖解析、profile 配置、宿主运行时），fail 计入退出码 2。脚本不在本机（探测兄弟仓 `dsh-plugin-upgrade-skill`，或 `PFA_VERIFY_RUNTIME` 指路径）时诚实跳过给补法，Windows 按 POSIX-only 声明跳过。退出码：0 干净，2 有 critical/high 命中、typecheck 红或真冷启动失败。
+`scan.coverage` 记本轮指南实际覆盖到哪一版（`coveredUpTo` / `complete`）。没扫或覆盖不全时屏幕明说「不能当查干净」，不再只打「命中 0 处」；`--strict` 让这两种未知态退出 2，供 CI 用，默认退出码语义不变。未知开关会直接报错（`--no-smoek` 这类拼写错误不再静默照跑）。
+
+`--real-smoke` 默认关，显式启用后桥接原仓库 plugin-upgrade 的 `verify-runtime.mjs`：干净 profile 安装→启动→四类归因（插件代码、依赖解析、profile 配置、宿主运行时），fail 计入退出码 2。脚本不在本机（探测兄弟仓 `dsh-plugin-upgrade-skill`，或 `PFA_VERIFY_RUNTIME` 指路径）时诚实跳过给补法，Windows 按 POSIX-only 声明跳过。退出码：0 干净，2 有 critical/high 命中、typecheck 红、真冷启动失败，或 `--strict` 下扫描未知。
 
 每次运行写本地日志（`~/.local/state/dsh-plugin-fast-adapt/runs/`，一次一个自包含 JSON 加 index.jsonl 一行摘要；旧 `~/.cache/dsh-plugin-fast-adapt/runs/` 有数据时首次运行自动整体搬迁，台账是要留存的运行史，放 `~/.cache` 会被本机清理工具整目录扫掉，可再生的 dist-tags 缓存与指南快照仍走 `~/.cache`）。记录工具版本与 commit：2026-10-25 实测教训是跑了一份滞后拷贝产出 4 个本已修复的误报，没有日志这类「跑的是哪版工具」完全不可观测。索引摘要带 `phases` 三态（scan/smoke/typecheck/realSmoke 各 ok|skipped|fail|error）与 `toolDirty` 星标（工具仓当时有未提交改动，版本号与 commit 可能拆对），扫描没跑不再与「体检满分」在同一行里混淆。
 

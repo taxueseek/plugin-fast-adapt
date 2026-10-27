@@ -12,7 +12,7 @@ const here = path.dirname(fileURLToPath(import.meta.url))
 const pkg = JSON.parse(fs.readFileSync(path.join(here, '..', 'package.json'), 'utf8'))
 const args = process.argv.slice(2)
 
-if (args.length === 0) {
+if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
   console.log(`plugin-fast-adapt v${pkg.version}
 
 用法：

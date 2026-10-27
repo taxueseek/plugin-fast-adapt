@@ -21,7 +21,7 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { printJson, computeWindow } from './lib/scanner.mjs'
+import { printJson, computeWindow, compareVersions } from './lib/scanner.mjs'
 import { probeEnvironment } from './env-doctor.mjs'
 import { auditPlugin } from './plugin-audit.mjs'
 import { writeRunLog } from './lib/runlog.mjs'
@@ -33,6 +33,8 @@ const SPAWN_SHELL = process.platform === 'win32'
 // 只有 --target/--from 带值，其余都是布尔开关。旧实现按「前一个参数不以 -- 开头」
 // 认插件目录，`run.mjs --offline <目录>` 会把目录当成 --offline 的值而报用法错误。
 const VALUE_FLAGS = new Set(['target', 'from'])
+const BOOLEAN_FLAGS = new Set(['offline', 'no-clone', 'no-smoke', 'no-typecheck', 'no-log', 'real-smoke', 'strict', 'help'])
+const USAGE = '用法: node scripts/run.mjs <插件目录> [--target <版本>] [--from <版本>] [--no-clone] [--no-smoke] [--no-typecheck] [--no-log] [--real-smoke] [--offline] [--strict]'
 
 function parseArgv(argv) {
   const positional = []
@@ -46,12 +48,23 @@ function parseArgv(argv) {
     const name = arg.slice(2)
     flags[name] = VALUE_FLAGS.has(name) ? argv[++i] ?? null : true
   }
-  return { positional, flags }
+  // 未知开关一律报错：旧实现静默接受，`--no-smoek` 会照常跑冒烟，
+  // 用户以为关掉了，实际白付一次执行成本。
+  const unknown = Object.keys(flags).filter((name) => !VALUE_FLAGS.has(name) && !BOOLEAN_FLAGS.has(name))
+  return { positional, flags, unknown }
 }
 
-const { positional, flags: parsedFlags } = parseArgv(process.argv.slice(2))
+const { positional, flags: parsedFlags, unknown } = parseArgv(process.argv.slice(2))
+if (unknown.length) {
+  process.stderr.write(`未知参数: ${unknown.map((n) => `--${n}`).join('、')}\n${USAGE}\n`)
+  process.exit(1)
+}
 const flag = (name) => parsedFlags[name] === true
 const valueOf = (name) => (VALUE_FLAGS.has(name) ? parsedFlags[name] ?? null : null)
+if (flag('help')) {
+  process.stdout.write(`${USAGE}\n`)
+  process.exit(0)
+}
 const pluginDir = path.resolve(positional[0] || process.cwd())
 
 function runStep(script, scriptArgs, label, stages) {
@@ -179,6 +192,19 @@ function runRealSmoke(pluginRoot) {
   }
 }
 
+// ── 覆盖度：本轮到底用官方指南覆盖到哪一版 ──────────────────────────────────
+// 「扫描跑了」不等于「目标版本查过了」：官方指南可能只补到上一版（tag 缺页、
+// 分支快照落后）。把覆盖上限写进报告，让「没查到」与「查干净」在数据上可分。
+function buildCoverage(scanResult, from, to, reason = null) {
+  if (!scanResult) {
+    return { from, to, coveredUpTo: null, complete: false, ...(reason ? { reason } : {}) }
+  }
+  const versions = scanResult.guideVersionsAvailable ?? []
+  const upto = versions.filter((v) => compareVersions(v, to) <= 0).sort(compareVersions).pop() ?? null
+  const coveredUpTo = upto ? String(upto).replace(/^v/, '') : null
+  return { from, to, coveredUpTo, complete: Boolean(upto && compareVersions(upto, to) >= 0) }
+}
+
 // ── 编排 ────────────────────────────────────────────────────────────────────
 const startedAt = Date.now()
 const stages = {}
@@ -244,12 +270,14 @@ const windowInfo = computeWindow({
 const windowLocal = windowInfo.local
 const windowTarget = windowInfo.target
 
-// 3. 指南（优先本机缓存；upgrade-available 时拉目标版本）
+// 3. 指南（分支快照优先；显式把扫描窗口终点传过去，别拿官方最新版本顶替）
+// 旧实现只传本机版本：guide-sync 会优先取官方 target（可能是个还没打 tag 的版本），
+// npm 发版早于上游打 tag 时整段扫描跳过，而本机其实已有可用的指南快照。
 let guideRoot = null
 if (offline) {
   stages.guides = { status: 'skipped', reason: '--offline' }
 } else if (windowLocal && windowTarget && !flag('no-clone')) {
-  const cloned = runStep('guide-sync.mjs', [windowLocal, '--clone'], 'guides', stages)
+  const cloned = runStep('guide-sync.mjs', [windowLocal, '--clone', '--target', windowTarget], 'guides', stages)
   guideRoot = cloned?.guides?.root ?? null
 }
 
@@ -286,6 +314,14 @@ const realSmoke = flag('real-smoke') ? runRealSmoke(pluginDir) : null
 
 const durationMs = Date.now() - startedAt
 const guideError = stages.guides?.error || stages.guides?.output?.guides?.error || null
+// guide-sync 拉取失败时仍以退出码 0 返回，错误在 output.guides.error 里；
+// 只看 stages.guides.error（进程级失败）会把「tag 不存在」报成「无指南根或无窗口」
+const skipReason = guideError
+  ? `指南拉取失败: ${String(guideError).slice(0, 200)}`
+  : stages.scan?.error
+    ? `扫描执行失败: ${String(stages.scan.error).slice(0, 200)}`
+    : '无指南根或无窗口'
+const coverage = buildCoverage(scanResult, windowLocal, windowTarget, scanResult ? null : skipReason)
 const report = {
   time: new Date().toISOString(),
   plugin: { name: pluginPkg.name, version: pluginPkg.version, dir: pluginDir },
@@ -302,18 +338,14 @@ const report = {
         criticalOrHigh: scanResult.criticalOrHigh,
         hostVerification: scanResult.hostVerification,
         guidesConsidered: scanResult.guidesConsidered,
+        coverage,
         findings: scanResult.findings,
       }
     : {
         findingCount: null,
         skipped: true,
-        // guide-sync 拉取失败时仍以退出码 0 返回，错误在 output.guides.error 里；
-        // 只看 stages.guides.error（进程级失败）会把「tag 不存在」报成「无指南根或无窗口」
-        reason: guideError
-          ? `指南拉取失败: ${String(guideError).slice(0, 200)}`
-          : stages.scan?.error
-            ? `扫描执行失败: ${String(stages.scan.error).slice(0, 200)}`
-            : '无指南根或无窗口',
+        reason: skipReason,
+        coverage,
         // error 只认进程级失败：上游 tag 未打属于预期内的跳过，phases 仍记 skipped
         error: Boolean(stages.guides?.error || stages.scan?.error),
       },
@@ -342,6 +374,21 @@ if (report.window.fallback) {
   verdictLines.push(`⚠ 扫描窗口倒挂（起点 ${report.window.fallback.rejectedFrom} > 终点 ${windowTarget}），已回退起点为宿主版本 ${report.window.fallback.to ?? '未知'}——peer 声明或 --from 有误，倒挂会让扫描静默跳过`)
 }
 if (report.host.versionVerdict === 'upgrade-available') verdictLines.push(`宿主可升级: 官方 ${officialTarget}（当前 ${hostVersion}）；本轮按在跑宿主适配，要跟新版重跑 --target ${officialTarget}`)
+// 「没扫」与「扫了但指南没覆盖到目标版本」都是未知，不能落成「命中 0 处」的干净结论
+const scanCoverage = report.scan?.coverage
+if (report.guides?.frozen) {
+  verdictLines.push('⚠ 本轮指南来自发版 tag 的冻结快照——官方会在发版后补全同版本条目，命中数偏低不等于干净；有网时重跑走分支快照')
+}
+// 空走廊（peer 下限 = 宿主版本）本来就没有要扫的变更，零命中是正常；
+// 只有走廊非空却一条指南都没有时，零命中才是未知。
+const emptyCorridor = windowLocal && windowTarget && compareVersions(windowLocal, windowTarget) === 0
+if (report.scan?.skipped) {
+  verdictLines.push(`⚠ 本轮没有扫描代码（${String(report.scan.reason).slice(0, 160)}）——退出码 0 不代表干净`)
+} else if (scanCoverage && !scanCoverage.complete) {
+  verdictLines.push(`⚠ 官方指南只覆盖到 ${scanCoverage.coveredUpTo || '无'}，${windowTarget} 的变更未见文档——本轮结论只覆盖到该版本，不能当查干净`)
+} else if (report.scan?.guidesConsidered === 0 && !emptyCorridor) {
+  verdictLines.push('⚠ 本轮指南覆盖 0 条变更——这一段没有官方指南，不等于查干净')
+}
 if (criticalOrHigh > 0) verdictLines.push(`⚠ critical/high 命中 ${criticalOrHigh} 处——先清零再做优化`)
 else if (report.scan?.findingCount != null) verdictLines.push(`扫描命中 ${report.scan.findingCount} 处（无 critical/high）`)
 if (report.audit) verdictLines.push(`体检 ${report.audit.overallScore}/100（性能 ${report.audit.scores.performance}/弹性 ${report.audit.scores.resilience}/预算 ${report.audit.scores.contextBudget}/生命周期 ${report.audit.scores.lifecycle}）`)
@@ -365,13 +412,22 @@ if (!flag('no-log')) {
 printJson(report)
 process.stderr.write(`\n${verdictLines.join('\n')}\n`)
 
-// 失败即指路：退出码 2 的三类原因各给一句「下一步」，排障路径从读文档变成读输出
-const exitFail = criticalOrHigh > 0 || report.typecheck?.status === 'fail' || realSmoke?.status === 'fail'
+// 失败即指路：退出码 2 的原因各给一句「下一步」，排障路径从读文档变成读输出
+// --strict 额外把「扫描没跑 / 指南没覆盖到目标版本」当失败；默认不加，
+// 保持既有退出码语义（0 干净、2 命中或构建/真冷启动失败）。
+const scanUnknown = Boolean(report.scan?.skipped) || report.scan?.coverage?.complete === false
+const strictFail = flag('strict') && scanUnknown
+const exitFail = criticalOrHigh > 0 || report.typecheck?.status === 'fail' || realSmoke?.status === 'fail' || strictFail
 if (exitFail) {
   const next = []
   if (criticalOrHigh > 0) next.push('按 scan.findings 的 migration 逐条清命中（evidence 行原文可核对是否误报）')
   if (report.typecheck?.status === 'fail') next.push('typecheck 红——先修构建（尾部输出在 report.typecheck.tail）')
   if (realSmoke?.status === 'fail') next.push('真冷启动失败——realSmoke.tail 有四类归因')
+  if (strictFail) {
+    next.push(report.scan?.skipped
+      ? '扫描没跑（--strict）——按 scan.reason 修指南来源或网络后重跑'
+      : `指南没覆盖到 ${windowTarget}（--strict）——刷新指南或核对 --target`)
+  }
   process.stderr.write(`\n下一步: ${next.join('；')}。修完重跑本命令；装了没生效跑 run-log doctor，宿主起不来跑 log-doctor\n`)
 }
 process.exit(exitFail ? 2 : 0)

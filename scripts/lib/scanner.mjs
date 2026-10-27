@@ -6,6 +6,8 @@
 // 这里用状态机先给每个字符打上 code/comment/string 标记，
 // 再只在 code 区做匹配，string 区单独收集供错误码一类锚点使用。
 
+import fs from 'node:fs'
+import path from 'node:path'
 import { stripTypeScriptTypes } from 'node:module'
 
 // Node 22.13+ 的类型剥离会打 ExperimentalWarning，扫描器不需要它
@@ -481,6 +483,38 @@ export function peerFloor(range) {
   if (!range || typeof range !== 'string') return null
   const match = range.match(/(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)/)
   return match ? match[1] : null
+}
+
+// ── 入口解析 ────────────────────────────────────────────────────────────────
+// Node 的解析顺序是 exports['.'] 优先于 main，两者都没有才退 lib/index.js。
+// 这份语义只留一处：env-doctor 判产物、quick-smoke 载入入口都调它，
+// 否则一处修了 exports、另一处还在看 main，同一插件会得到相反结论
+// （2026-10-27 实测：exports-only 夹具冒烟报「入口不存在」，env-doctor 却判 OK）。
+
+const stripDotSlash = (p) => String(p).replace(/^\.\//, '')
+
+export function resolveEntryFile(pkg) {
+  const exportsField = pkg?.exports
+  if (typeof exportsField === 'string' && exportsField) return stripDotSlash(exportsField)
+  if (exportsField && typeof exportsField === 'object') {
+    const root = exportsField['.']
+    if (typeof root === 'string' && root) return stripDotSlash(root)
+    if (root && typeof root === 'object') {
+      const picked = root.default ?? root.import ?? root.require ?? root.node
+      if (typeof picked === 'string' && picked) return stripDotSlash(picked)
+    }
+  }
+  if (typeof pkg?.main === 'string' && pkg.main) return stripDotSlash(pkg.main)
+  return 'lib/index.js'
+}
+
+// 声明入口存在就用它；不存在则退回 main 再退 lib/index.js（exports 只写了
+// types 子路径时，真实文件可能仍挂在 main 上）。
+export function pickExistingEntry(root, pkg, declaredEntry = resolveEntryFile(pkg)) {
+  const candidates = [declaredEntry, typeof pkg?.main === 'string' ? pkg.main : null, 'lib/index.js']
+    .filter(Boolean)
+    .map(stripDotSlash)
+  return candidates.find((f) => fs.existsSync(path.join(root, f))) ?? candidates[0]
 }
 
 // ── 输出 ────────────────────────────────────────────────────────────────────

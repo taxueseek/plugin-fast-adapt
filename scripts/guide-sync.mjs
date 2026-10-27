@@ -22,6 +22,12 @@ import { findGlobalDsh } from './env-doctor.mjs'
 const DIST_TAGS_URL = 'https://registry.npmjs.org/-/package/@deepseek-ai/dsh/dist-tags'
 const HARNESS_REPO = 'https://github.com/deepseek-ai/deepseek-harness.git'
 const CACHE_ROOT = path.join(os.homedir(), '.cache', 'dsh-plugin-fast-adapt')
+// tag 是冻结快照，官方在发版后还会把同版本的指南补全到默认分支
+// （2026-10-27 实测：dsh-v0.2.1-rc.3 tag 里 v0.2.1-rc.2 只有 1 条变更，
+// 默认分支同一目录 23 条；tag 之后新增的 rc.3 指南只存在于分支上）。
+// 默认克隆远端 HEAD 指向的分支（上游是 master，不写死）；需要固定分支时用
+// DSH_HARNESS_BRANCH 指定。
+const GUIDES_BRANCH = process.env.DSH_HARNESS_BRANCH || null
 
 // ── A. 版本解析 ────────────────────────────────────────────────────────────
 
@@ -172,11 +178,156 @@ export function syncGuides(targetVersion, { localClone = null, cacheRoot = CACHE
   return { source: 'unavailable', root: null, versions: [] }
 }
 
-// 取版锚点：优先官方目标版本；本机已在官方通道最新版（resolution.target=null）时
-// 退回本机版本——否则扫描走廊 (peerFloor, hostVersion] 拿不到指南语料，run.mjs
-// 的 scan 阶段会以「无指南根或无窗口」静默跳过（2026-10-25 实测复盘）。
-export function guideVersionFor(resolution, localVersion, distTags) {
-  return resolution?.target || localVersion || distTags?.latest || null
+// 分支快照：默认分支的 docs/upgrade-guide 是持续生长的权威树，tag 只是冻结切片。
+// 受管 clone 按 TTL 刷新（git fetch + reset，实测约 1 秒；冷拉约 4.8 秒），
+// 刷新失败时明确标 stale 继续用旧快照，不静默假装新鲜，也不退回 tag 的缺页版本。
+const SNAPSHOT_DIR = 'harness-guides-branch'
+const SNAPSHOT_META = '.pfa-snapshot.json'
+const SNAPSHOT_TTL_MS = METADATA_TTL_MS
+
+function snapshotDirFor(cacheRoot) {
+  return path.join(cacheRoot, SNAPSHOT_DIR)
+}
+
+function snapshotMetaPath(dir) {
+  return path.join(dir, SNAPSHOT_META)
+}
+
+export function readSnapshotMeta(dir) {
+  try {
+    const meta = JSON.parse(fs.readFileSync(snapshotMetaPath(dir), 'utf8'))
+    return typeof meta?.fetchedAt === 'number' ? meta : null
+  } catch {
+    return null
+  }
+}
+
+function writeSnapshotMeta(dir, meta) {
+  fs.writeFileSync(snapshotMetaPath(dir), JSON.stringify(meta))
+}
+
+function headCommit(dir) {
+  return execFileSync('git', ['-C', dir, 'rev-parse', 'HEAD'], { encoding: 'utf8', stdio: 'pipe', timeout: 20000 }).trim()
+}
+
+function headBranch(dir) {
+  try {
+    return execFileSync('git', ['-C', dir, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8', stdio: 'pipe', timeout: 20000 }).trim()
+  } catch {
+    return null
+  }
+}
+
+function snapshotResult(dir, source, meta = readSnapshotMeta(dir)) {
+  const root = path.join(dir, 'docs', 'upgrade-guide')
+  return {
+    source,
+    root,
+    versions: listGuideVersions(root),
+    commit: meta?.commit ?? null,
+    fetchedAt: meta?.fetchedAt ?? null,
+    branch: meta?.branch ?? GUIDES_BRANCH,
+    stale: source === 'branch-snapshot-stale',
+  }
+}
+
+// 返回的 source 四态：
+//   branch-snapshot        命中 TTL 内的快照
+//   branch-snapshot-refresh 刷新成功
+//   branch-snapshot-stale   刷新失败，用旧快照并标 stale
+//   unavailable            没有快照且拉取失败（error 带原文）
+export function syncBranchSnapshot({
+  cacheRoot = CACHE_ROOT,
+  branch = GUIDES_BRANCH,
+  maxAgeMs = SNAPSHOT_TTL_MS,
+  now = Date.now(),
+  allowRefresh = true,
+} = {}) {
+  const dir = snapshotDirFor(cacheRoot)
+  const root = path.join(dir, 'docs', 'upgrade-guide')
+  const meta = readSnapshotMeta(dir)
+  // branch=null 表示跟远端 HEAD 的默认分支；只在显式指定时才校验分支名
+  const fresh = meta && (!branch || meta.branch === branch) && now - meta.fetchedAt < maxAgeMs
+
+  if (fs.existsSync(root) && fresh) return snapshotResult(dir, 'branch-snapshot', meta)
+
+  if (fs.existsSync(root)) {
+    if (!allowRefresh) {
+      return { ...snapshotResult(dir, 'branch-snapshot-stale', meta), error: '快照已过期且本轮不允许刷新' }
+    }
+    try {
+      const fetchArgs = ['-C', dir, 'fetch', '--depth', '1', 'origin']
+      if (branch) fetchArgs.push(branch)
+      execFileSync('git', fetchArgs, { stdio: 'pipe', timeout: 120000 })
+      execFileSync('git', ['-C', dir, 'reset', '--hard', 'FETCH_HEAD'], { stdio: 'pipe', timeout: 60000 })
+      const refreshed = { commit: headCommit(dir), fetchedAt: now, branch: headBranch(dir) }
+      writeSnapshotMeta(dir, refreshed)
+      return snapshotResult(dir, 'branch-snapshot-refresh', refreshed)
+    } catch (err) {
+      return {
+        ...snapshotResult(dir, 'branch-snapshot-stale', meta),
+        error: `分支快照刷新失败，继续用 ${meta?.commit ?? '未知提交'}：${err.message}`,
+      }
+    }
+  }
+
+  if (!allowRefresh) {
+    return { source: 'unavailable', root: null, versions: [], error: '无本地分支快照且本轮不允许联网' }
+  }
+
+  // 上次中断可能留下没有 docs/upgrade-guide 的半成品目录，rename 还会撞名；
+  // 受管缓存可再生，先清掉再拉，避免一次失败把后续分支快照永久卡死。
+  if (fs.existsSync(dir) && !fs.existsSync(root)) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true })
+    } catch {}
+  }
+
+  fs.mkdirSync(path.dirname(dir), { recursive: true })
+  const tmp = `${dir}.tmp-${process.pid}`
+  try {
+    fs.rmSync(tmp, { recursive: true, force: true })
+    const cloneArgs = ['clone', '--depth', '1', '--filter=blob:none', '--sparse']
+    if (branch) cloneArgs.push('--branch', branch)
+    cloneArgs.push(HARNESS_REPO, tmp)
+    execFileSync('git', cloneArgs, { stdio: 'pipe', timeout: 120000 })
+    // HEAD 被稀疏克隆后是 detached；记实际分支名只用于排查
+    const created = { commit: headCommit(tmp), fetchedAt: now, branch: headBranch(tmp) }
+    execFileSync('git', ['sparse-checkout', 'set', 'docs/upgrade-guide'], { cwd: tmp, stdio: 'pipe', timeout: 120000 })
+    writeSnapshotMeta(tmp, created)
+    try {
+      fs.renameSync(tmp, dir)
+    } catch (err) {
+      // 并发进程先一步建好了同名快照：删掉自己的临时目录，直接用现成的
+      if (!fs.existsSync(root)) throw err
+      fs.rmSync(tmp, { recursive: true, force: true })
+      return snapshotResult(dir, 'branch-snapshot')
+    }
+    return snapshotResult(dir, 'branch-snapshot', created)
+  } catch (err) {
+    try {
+      fs.rmSync(tmp, { recursive: true, force: true })
+    } catch {}
+    return { source: 'unavailable', root: null, versions: [], error: `拉取分支指南失败（${branch || '默认分支'}）：${err.message}` }
+  }
+}
+
+// 取版锚点：显式窗口目标优先（run.mjs 扫的是「窗口终点」不是「官方最新」），
+// 其次官方目标版本；本机已在官方通道最新版时退回本机版本。
+// 旧实现只按官方目标取指南：npm 刚发版、上游 tag 还没打时，明明本机宿主有可用的
+// 指南快照，也会去拉一个不存在的 tag，整段扫描静默跳过（2026-10-27 rc.4 实录）。
+export function guideVersionFor(resolution, localVersion, distTags, targetVersion = null) {
+  return targetVersion || resolution?.target || localVersion || distTags?.latest || null
+}
+
+// 本机 clone 只要有 docs/upgrade-guide 就当语料（只读，不 fetch）。
+// 它可能落后于目标版本，但覆盖度由上层按版本算，落后会显式报 incomplete；
+// 这里不再用「覆盖到目标」当准入门槛——那会把用户手里最新的一份 clone 浪费掉。
+function localCloneGuides(localClone) {
+  if (!localClone) return null
+  const root = path.join(localClone, 'docs', 'upgrade-guide')
+  if (!fs.existsSync(root)) return null
+  return { source: 'local-clone', root, versions: listGuideVersions(root) }
 }
 
 // 真正拉取（需要网络）。用 sparse clone 只取 docs/upgrade-guide。
@@ -254,14 +405,33 @@ export function upstreamCheckExit(resolution) {
 // cacheRoot 可注入（默认真实缓存根）：与 runlog 的 DSH_PFA_RUNS_DIR 同一条纪律——
 // 自检直调本函数时不许碰真实用户缓存（2026-10-26 实录：合成 dist-tags 落进真实
 // 缓存，真实 run.mjs 在 1h TTL 内读到的是自检刷进去的版本数据）。
-export async function runGuideSync(localVersion, { clone = false, fetcher = null, localClone = null, cacheRoot = CACHE_ROOT } = {}) {
+export async function runGuideSync(localVersion, { clone = false, fetcher = null, localClone = null, cacheRoot = CACHE_ROOT, targetVersion = null, branchSnapshot = false } = {}) {
   const metadata = await fetchNpmMetadata({ fetcher, cachePath: path.join(cacheRoot, 'npm-metadata.json') })
   const resolution = resolveTargetVersion(localVersion, metadata['dist-tags'], Object.keys(metadata.versions || {}))
-  const guideVersion = guideVersionFor(resolution, localVersion, metadata['dist-tags'])
+  const guideVersion = guideVersionFor(resolution, localVersion, metadata['dist-tags'], targetVersion)
 
   let guides = { source: 'unavailable', root: null, versions: [] }
+  let snapshotError = null
   if (guideVersion) {
-    guides = syncGuides(guideVersion, { localClone: localClone ?? findLocalClone(), cacheRoot })
+    // 1. 本机 clone（只读，不 fetch）
+    guides = localCloneGuides(localClone ?? findLocalClone()) ?? { source: 'unavailable', root: null, versions: [] }
+
+    // 2. 受管分支快照：官方在发版后才补全同版本指南，tag 快照会缺页。
+    // 这是网络动作，默认关；CLI 与 run.mjs 显式开启，自检直调时不会打网络。
+    // clone=false 时仍可读 TTL 内的本地快照，只是不刷新。
+    if (guides.source === 'unavailable' && branchSnapshot) {
+      const snapshot = syncBranchSnapshot({ cacheRoot, allowRefresh: clone })
+      if (snapshot.root) guides = snapshot
+      else snapshotError = snapshot.error
+    }
+
+    // 3. tag 缓存兜底：标 frozen，让上层知道这是冻结快照（可能缺新补的条目）
+    if (guides.source === 'unavailable') {
+      const cached = syncGuides(guideVersion, { cacheRoot })
+      if (cached.root) guides = { ...cached, frozen: true, warning: snapshotError }
+    }
+
+    // 4. tag clone（网络）：只在上面的路径都不可用时才走，受否定缓存保护
     if (guides.source === 'unavailable' && clone) {
       const tag = `dsh-v${guideVersion}`
       const distTags = metadata['dist-tags']
@@ -270,12 +440,16 @@ export async function runGuideSync(localVersion, { clone = false, fetcher = null
         guides = { source: 'error', root: null, versions: [], error: known.error, negativeCache: true }
       } else {
         try {
-          guides = cloneGuides(guideVersion, { cacheRoot })
+          guides = { ...cloneGuides(guideVersion, { cacheRoot }), frozen: true }
         } catch (err) {
           recordMissingTag(tag, distTags, err.message, { cacheRoot })
           guides = { source: 'error', root: null, versions: [], error: err.message }
         }
       }
+    }
+
+    if (guides.source === 'unavailable' && snapshotError) {
+      guides = { source: 'error', root: null, versions: [], error: snapshotError }
     }
   }
 
@@ -286,12 +460,33 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.met
   // --check：盯梢模式。退出码给 cron/agent 轮询用（1=有新版，0=无需动作，2=判定失败），
   // 有新版时顺手预取该版指南进缓存（clone=true），下次 run.mjs 零等待。
   // 版本参数缺省时自动探测本机宿主版本，零参数可直接接定时器。
-  const checkMode = process.argv.includes('--check')
-  const positional = process.argv.slice(2).find((a) => !a.startsWith('--')) || null
+  // 参数：<本机版本> [--target <扫描目标>] [--clone] [--check]
+  // --target 让调用方指定「本轮实际要扫到的版本」；不传才跟官方最新。
+  const argv = process.argv.slice(2)
+  const checkMode = argv.includes('--check')
+  let targetVersion = null
+  let positional = null
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]
+    if (arg === '--check' || arg === '--clone') continue
+    if (arg === '--target') {
+      targetVersion = argv[++i] ?? null
+      continue
+    }
+    if (arg === '--help' || arg === '-h') {
+      process.stderr.write('用法: node scripts/guide-sync.mjs [<本机版本>] [--target <扫描目标>] [--clone] [--check]\n')
+      process.exit(0)
+    }
+    if (arg.startsWith('--')) {
+      process.stderr.write(`未知参数「${arg}」\n用法: node scripts/guide-sync.mjs [<本机版本>] [--target <扫描目标>] [--clone] [--check]\n`)
+      process.exit(2)
+    }
+    if (!positional) positional = arg
+  }
   const local = positional || (checkMode ? findGlobalDsh()?.version ?? null : null)
-  const allowClone = process.argv.includes('--clone') || checkMode
+  const allowClone = argv.includes('--clone') || checkMode
 
-  runGuideSync(local, { clone: allowClone })
+  runGuideSync(local, { clone: allowClone, targetVersion, branchSnapshot: true })
     .then((result) => {
       printJson(result)
       const r = result.resolution
@@ -301,7 +496,10 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.met
       process.stderr.write(`版本数据来源: ${result.metadataSource}${result.metadataSource === 'stale-cache' ? '（网络失败，降级用过期缓存）' : ''}\n`)
       process.stderr.write(`取版锚点: ${result.guideVersion || '无'}\n`)
       if (result.guides.root) {
-        process.stderr.write(`指南来源: ${result.guides.source} (${result.guides.versions.length} 个版本)\n`)
+        const flags = [result.guides.stale ? 'stale' : null, result.guides.frozen ? 'frozen' : null].filter(Boolean)
+        const commit = result.guides.commit ? ` @${String(result.guides.commit).slice(0, 7)}` : ''
+        process.stderr.write(`指南来源: ${result.guides.source}${flags.length ? `（${flags.join(',')}）` : ''}${commit} (${result.guides.versions.length} 个版本)\n`)
+        if (result.guides.warning) process.stderr.write(`提示: ${result.guides.warning}\n`)
       } else if (result.guides.error) {
         process.stderr.write(`指南获取失败${result.guides.negativeCache ? '（否定缓存命中，1 小时内或 dist-tags 变化前不重试）' : ''}: ${result.guides.error}\n`)
       } else {
@@ -310,7 +508,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.met
       if (checkMode) {
         const code = upstreamCheckExit(result.resolution)
         if (code === 1) {
-          const prefetched = result.guides.source === 'clone' ? '已预取进缓存' : result.guides.root ? '缓存已就绪' : '预取失败（下次 run.mjs --clone 会补）'
+          const prefetched = result.guides.root ? '目录已就绪' : '预取失败（下次 run.mjs --clone 会补）'
           process.stderr.write(`盯梢: 上游有新版 ${result.resolution.target}（${prefetched}）——逐插件跑 run.mjs 适配\n`)
         } else {
           process.stderr.write('盯梢: 无需动作\n')

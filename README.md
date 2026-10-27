@@ -2,7 +2,7 @@
 
 **简体中文** | [English](README.en.md)
 
-[![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D22.13-blue.svg)](package.json) [![外部依赖](https://img.shields.io/badge/外部依赖-0-blue.svg)](#依赖与自检) [![自检](https://img.shields.io/badge/自检-161项断言-brightgreen.svg)](#依赖与自检)
+[![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D22.13-blue.svg)](package.json) [![外部依赖](https://img.shields.io/badge/外部依赖-0-blue.svg)](#依赖与自检) [![自检](https://img.shields.io/badge/自检-171项断言-brightgreen.svg)](#依赖与自检)
 
 > **DSH 每次发新版，老插件就可能启动不了。** 这个技能直连 DeepSeek 官方升级指南，扫你的插件代码，报出踩了哪几条破坏性变更、官方给的修法是什么；还能一条命令从零造出可运行的插件。
 
@@ -15,7 +15,7 @@
 | 验证一次改动 | 3600 秒真宿主冷启动 → 毫秒级内存冒烟 |
 | 幽灵宿主 | 磁盘已换新、进程还在跑旧代码时报警（比进程启动时间，不读版本号） |
 | 假绿检测 | `tsconfig` 的 `paths` 指向不存在的 checkout 时报警（本地门禁可能全绿而实际已坏） |
-| 自检 | 161 项断言，离线可跑 |
+| 自检 | 171 项断言，离线可跑 |
 | 外部依赖 | 0（只用 Node 内置模块 + `git`/`npm` 命令） |
 | 网络 | 只取官方源时用，核心步骤全离线 |
 | 造插件 | 一条命令出五形态可运行插件，生成即验证 |
@@ -36,8 +36,8 @@ DSH（DeepSeek Harness）是一个「所有功能都以插件形式存在」的 
 - **误报清零**：四层降噪把真实插件的命中从 12 处误报降到 0，每条命中带 `severity`、`evidence` 和直达官方指南的出处锚点
 - **验证便宜**：内存级 Cordis 冒烟毫秒到秒级出结果，不用真宿主冷启动；需要真证据时 `--real-smoke` 再补干净 profile 真装真启档
 - **零外部依赖**：只用 Node 内置模块加 `git`/`npm` 命令，没有 TypeScript、没有 AST 库、没有网络请求库
-- **网络依赖很轻**：只有「取官方源」走网络——定版本读 npm 的 dist-tags、取指南 clone 官方仓库。dist-tags 缓存 1 小时，失败降级旧缓存并明确标 stale；指南优先复用本机已有 clone，`--no-clone` 可跳过。环境巡检、代码扫描、冒烟、体检、日志诊断、接缝查询全离线
-- **可复现**：161 项自检离线可跑；CI 在 push 和 PR 上自动跑
+- **网络依赖很轻**：只有「取官方源」走网络——定版本读 npm 的 dist-tags、取指南读官方仓库默认分支的受管快照（1 小时 TTL，tag 仅离线兜底并标 `frozen`）。dist-tags 缓存 1 小时，失败降级旧缓存并明确标 stale；指南优先复用本机已有 clone，`--no-clone` 可跳过。环境巡检、代码扫描、冒烟、体检、日志诊断、接缝查询全离线
+- **可复现**：171 项自检离线可跑；CI 在 push 和 PR 上自动跑
 - **不止适配**：`scaffold.mjs` 一条命令生成五形态可运行插件（真基类装载验证），`write-gate.mjs` 写完出「出生证」
 - **静默失败有判据**：`ghostHost` 比对进程启动时间与磁盘变更时间，抓「磁盘新版、内存旧版」；`falseGreen` 抓 `tsconfig` 的 `paths` 指向不存在 checkout 时 TypeScript 的静默回落。两条都只报不判，证据写在输出里
 - **边界诚实**：冒烟通过不等于宿主兼容，这句话写在工具输出里；体检的软指标只透传，不替用户说「合格」
@@ -102,6 +102,7 @@ node scripts/run.mjs <插件目录>          # 环境→定版→指南→扫描
 node scripts/run.mjs <插件目录> --real-smoke   # 再补一档：干净 profile 真装真启（桥接原仓库 verify-runtime）
 node scripts/run.mjs <插件目录> --offline      # 跳过取官方源（不读 npm、不 clone），只跑本地五步
 node scripts/run.mjs <插件目录> --no-clone     # 取版本但不拉指南（本机已有 clone 时用）
+node scripts/run.mjs <插件目录> --strict       # 扫描没跑或指南没覆盖到目标版本时退出 2（CI 用）
 node scripts/run-log.mjs list           # 回看历史运行（含工具版本@commit）
 node scripts/run-log.mjs doctor         # 运行日志 × 宿主启动日志交叉核对（插件报错先跑它）
 node scripts/run-log.mjs sanitize --latest --out share.json   # 脱敏后才可外发
@@ -112,7 +113,8 @@ node scripts/run-log.mjs sanitize --latest --out share.json   # 脱敏后才可�
 ```sh
 # 1. 看清本机环境：装的哪个版本、覆盖层有没有旧包、装了哪些插件、启用就绪度
 #    另含两项静默失败判据：ghostHost（进程是不是在跑旧代码）、falseGreen（tsconfig paths 假绿）
-node scripts/env-doctor.mjs <插件目录>
+#    --brief 省略 patch 行原文（80.5KB → 4.5KB），要逐条看挂载行时去掉
+node scripts/env-doctor.mjs <插件目录> --brief
 
 # 2. 定目标版本：官方最新是什么、本机该不该跟
 node scripts/guide-sync.mjs <本机版本>
@@ -120,8 +122,8 @@ node scripts/guide-sync.mjs <本机版本>
 # 2b. 上游盯梢（可直接接 cron/agent 轮询）：1=有新版（顺手预取指南），0=无需动作
 node scripts/guide-sync.mjs --check
 
-# 3. 取该版本的官方升级指南（优先复用本机 clone，没有才拉取）
-node scripts/guide-sync.mjs <本机版本> --clone
+# 3. 取窗口终点的官方升级指南（分支快照优先，--target 别留空跟官方最新）
+node scripts/guide-sync.mjs <本机版本> --target <扫描目标> --clone
 
 # 4. 查插件踩了哪些变更
 node scripts/code-scan.mjs <插件目录> <upgrade-guide 目录> <本机版本> <目标版本>
@@ -196,12 +198,12 @@ node scripts/write-gate.mjs <插件目录>   # 出生证：硬门禁自动判，
 自检：
 
 ```sh
-npm test   # node scripts/self-test.mjs，161 项断言
+npm test   # node scripts/self-test.mjs，171 项断言
 ```
 
 开发者建议启用提交前门禁（一次性）：`git config core.hooksPath .githooks`——commit 时自动跑自检，改完真源忘了 sync-skill 在这一刻被拦。
 
-覆盖扫描器不误报（注释和字符串里的同义词不算命中）、不漏报、版本启发式、替换对识别、端到端命中（含官方指南文件＋行号出处锚点）、接缝查询双源结论（一致已移除/宿主仍在报分歧/无记录如实说）、运行日志×宿主日志交叉核对、--real-smoke 桥接档位（fail→退出码 2、失败指路）、上游盯梢退出码、同步提交命令建议（只 add 同步路径防夹带）、SOP 引用完整性、dist-tags 缓存三态、冒烟验证（含未声明 inject 契约拦截）、四维审计（含 peer 修补）、启用诊断、幽灵宿主四态（stale/ok/unknown/no-running-host）与磁盘时间来源、tsconfig paths 假绿（含 extends 继承、JSONC 注释、通配符前缀、非宿主 alias 降级）、创作脚手架（五形态生成、命名投影语法、冒烟闭环、挂载层可识别、非法输入与非空目录拒绝）、创作体检门（硬门禁拦截、软指标不越权判红、跳过语义、scaffold 衔接）、日志诊断、下游同步漂移检查＋真机零漂移拦截、缓存根注入（自检不写真实用户缓存）、runlog 台账根一次性搬迁（旧 `~/.cache` 根迁 `~/.local/state`）、self-test 体积门禁、扫描性能回归门。自检本身零网络、零外部依赖，任何机器上都能跑。
+覆盖扫描器不误报（注释和字符串里的同义词不算命中）、不漏报、版本启发式、替换对识别、端到端命中（含官方指南文件＋行号出处锚点）、指南分支快照与覆盖度未知态、入口解析单一真源（exports 优先）、诊断输出瘦身、CLI 帮助与未知参数、接缝查询双源结论（一致已移除/宿主仍在报分歧/无记录如实说）、运行日志×宿主日志交叉核对、--real-smoke 桥接档位（fail→退出码 2、失败指路）、上游盯梢退出码、同步提交命令建议（只 add 同步路径防夹带）、SOP 引用完整性、dist-tags 缓存三态、冒烟验证（含未声明 inject 契约拦截）、四维审计（含 peer 修补）、启用诊断、幽灵宿主四态（stale/ok/unknown/no-running-host）与磁盘时间来源、tsconfig paths 假绿（含 extends 继承、JSONC 注释、通配符前缀、非宿主 alias 降级）、创作脚手架（五形态生成、命名投影语法、冒烟闭环、挂载层可识别、非法输入与非空目录拒绝）、创作体检门（硬门禁拦截、软指标不越权判红、跳过语义、scaffold 衔接）、日志诊断、下游同步漂移检查＋真机零漂移拦截、缓存根注入（自检不写真实用户缓存）、runlog 台账根一次性搬迁（旧 `~/.cache` 根迁 `~/.local/state`）、self-test 体积门禁、扫描性能回归门。自检本身零网络、零外部依赖，任何机器上都能跑。
 
 给插件自己的仓库加提交时门禁（冒烟/typecheck 硬门＋体检软门），见 [references/ci-snippet.md](references/ci-snippet.md)。
 
@@ -210,7 +212,7 @@ npm test   # node scripts/self-test.mjs，161 项断言
 | 脚本 | 职责 |
 | --- | --- |
 | `scripts/cli.mjs` | npm 入口（`npx plugin-fast-adapt`），转发到 run.mjs |
-| `scripts/run.mjs` | 一键编排全流程（环境→定版→指南→扫描→体检→冒烟→typecheck），出统一报告并写本地运行日志；`--real-smoke` 桥接原仓库 verify-runtime 补真冷启动档 |
+| `scripts/run.mjs` | 一键编排全流程（环境→定版→指南→扫描→体检→冒烟→typecheck），出统一报告并写本地运行日志；`scan.coverage` 记录指南覆盖到哪一版，`--strict` 把扫描未知当失败；`--real-smoke` 桥接原仓库 verify-runtime 补真冷启动档 |
 | `scripts/run-log.mjs` | 运行日志查看（list/show）、交叉核对（doctor：运行日志×宿主启动日志）与脱敏导出（sanitize） |
 | `scripts/seams.mjs` | 接缝查询：一个包名/API 符号在官方指南锚点表与本机宿主里的双源结论 |
 | `scripts/scaffold.mjs` | 从零造插件：一条命令生成五形态可运行插件（package.json 不变量＋完整形态入口＋挂载层＋命名投影），生成即验证 |

@@ -17,7 +17,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
-import { printJson, isDshPackage, isPluginForm, packageBase, parseVersion, compareVersions, peerFloor, maskSource, CODE } from './lib/scanner.mjs'
+import { printJson, isDshPackage, isPluginForm, packageBase, parseVersion, compareVersions, peerFloor, maskSource, CODE, resolveEntryFile, pickExistingEntry } from './lib/scanner.mjs'
+export { resolveEntryFile, pickExistingEntry }
 import { diagnoseClientHalf, isDeliberateRosterInsert } from './lib/client-graph.mjs'
 import { probeDesktopApp } from './lib/desktop-app.mjs'
 
@@ -372,35 +373,8 @@ const SERVICE_SIGNATURES = [
   { name: 'webServer', pattern: /web|server/ },
 ]
 
-const stripDotSlash = (p) => String(p).replace(/^\.\//, '')
-
-// 入口解析：Node 的解析顺序是 exports['.'] 优先于 main，两者都没有才退 lib/index.js。
-// 旧实现只看 main，遇到「无 main、入口写在 exports」的包会误报 ERROR——
-// 实测 @local/dsh-env-sweeper（exports['.'] = './index.js'，日志每天在写）
-// 被报成「入口产物不存在」，把人引导去修没坏的东西。
-export function resolveEntryFile(pkg) {
-  const exportsField = pkg.exports
-  if (typeof exportsField === 'string' && exportsField) return stripDotSlash(exportsField)
-  if (exportsField && typeof exportsField === 'object') {
-    const root = exportsField['.']
-    if (typeof root === 'string' && root) return stripDotSlash(root)
-    if (root && typeof root === 'object') {
-      const picked = root.default ?? root.import ?? root.require ?? root.node
-      if (typeof picked === 'string' && picked) return stripDotSlash(picked)
-    }
-  }
-  if (typeof pkg.main === 'string' && pkg.main) return stripDotSlash(pkg.main)
-  return 'lib/index.js'
-}
-
-// 声明入口存在就用它；不存在则退回 main 再退 lib/index.js（exports 只写了
-// types 子路径时，真实文件可能仍挂在 main 上）。
-function pickExistingEntry(root, pkg, declaredEntry) {
-  const candidates = [declaredEntry, typeof pkg.main === 'string' ? pkg.main : null, 'lib/index.js']
-    .filter(Boolean)
-    .map(stripDotSlash)
-  return candidates.find((f) => fs.existsSync(path.join(root, f))) ?? candidates[0]
-}
+// 入口解析已收口到 lib/scanner.mjs（env-doctor 与 quick-smoke 共用一份语义），
+// 这里保留 re-export 供既有调用方与自检 import 不变。
 
 // disabled 判定限定在同一个条目块内：按列表项「- 」为界切块，
 // 防止本插件条目被后面其他插件条目的 disabled: true 跨条目误伤
@@ -821,10 +795,42 @@ export function probeEnvironment(targetDir = process.cwd()) {
   }
 }
 
+// 日常诊断只要结论，不需要每个 profile 的 patch 行原文：完整报告里
+// installedPlugins 的 6 个 profile 会把 200+ 行模型/插件条目原样吐出来
+// （本机实测 58KB / 全量 80KB，约 2.3 万 token）。--brief 只留计数与截断后的
+// 进程命令，体积降到 4.5KB 左右；默认输出不变，排障需要原文时仍拿全量。
+export function summarizeEnvironment(report) {
+  return {
+    ...report,
+    installedPlugins: (report.installedPlugins ?? []).map(({ patchEntries, globalPatchEntries, ...rest }) => ({
+      ...rest,
+      patchEntryCount: patchEntries?.length ?? 0,
+      globalPatchEntryCount: globalPatchEntries?.length ?? 0,
+    })),
+    runningProcesses: (report.runningProcesses ?? []).map((p) => ({
+      ...p,
+      command: p.command.length > 120 ? `${p.command.slice(0, 120)}…` : p.command,
+    })),
+  }
+}
+
+const ENV_USAGE = '用法: node scripts/env-doctor.mjs [<插件目录>] [--brief|--full]'
+
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename)) {
-  const target = process.argv[2] || process.cwd()
+  const argv = process.argv.slice(2)
+  if (argv.includes('--help') || argv.includes('-h')) {
+    process.stderr.write(`${ENV_USAGE}\n  --brief  省略 patch 行原文、截断进程命令（日常诊断用，体积约降 94%）\n  --full   默认，输出完整报告\n`)
+    process.exit(0)
+  }
+  const unknown = argv.find((a) => a.startsWith('--') && !['--brief', '--full'].includes(a))
+  if (unknown) {
+    process.stderr.write(`未知参数「${unknown}」\n${ENV_USAGE}\n`)
+    process.exit(2)
+  }
+  const brief = argv.includes('--brief')
+  const target = argv.find((a) => !a.startsWith('-')) || process.cwd()
   const report = probeEnvironment(target)
-  printJson(report)
+  printJson(brief ? summarizeEnvironment(report) : report)
 
   const overlayCount = report.overlayFindings.length
   const farm = report.sharedFarmFindings
