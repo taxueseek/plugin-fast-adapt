@@ -653,6 +653,24 @@ test('车道文档里的命令脚本都在工具根存在，且声明了工具�
   assert.ok(checked >= 10, `应至少核对 10 处命令，实际 ${checked} 处`)
 })
 
+test('主技能脚本清单双向对齐：正文引用的脚本存在，清单不漏脚本', () => {
+  // 上一条只锁三条车道；cli.mjs 曾只存在于 scripts/ 而不在主技能清单里
+  const root = path.resolve(import.meta.dirname, '..')
+  const main = fs.readFileSync(path.join(root, 'SKILL.md'), 'utf8')
+  let referenced = 0
+  for (const m of main.matchAll(/node (scripts\/[\w./-]+\.mjs)/g)) {
+    assert.ok(fs.existsSync(path.join(root, m[1])), `SKILL.md 引用的 ${m[1]} 不存在`)
+    referenced++
+  }
+  assert.ok(referenced >= 3, `主技能应至少引用 3 处命令，实际 ${referenced} 处`)
+  const listed = new Set([...main.matchAll(/^\| `([\w-]+\.mjs)` \|/gm)].map((m) => m[1]))
+  assert.ok(listed.size >= 15, `脚本清单表应至少 15 行，实际 ${listed.size}`)
+  for (const f of fs.readdirSync(path.join(root, 'scripts'))) {
+    if (!f.endsWith('.mjs')) continue
+    assert.ok(listed.has(f), `scripts/${f} 未进 SKILL.md 脚本清单表`)
+  }
+})
+
 test('文档宣称的断言数与实际一致（防手工漂移）', () => {
   // 这个数字已漂过两次（49→50→54 都是事后手补）；现在让自检拦住它
   const root = path.resolve(import.meta.dirname, '..')
