@@ -15,12 +15,14 @@ description: plugin-fast-adapt 的升级适配车道。查 DeepSeek 官方最新
 node scripts/env-doctor.mjs <插件目录>
 ```
 
-本车道只取两段：
+本车道只取四段：
 
 - `globalDsh`：全局安装的 DSH 版本和位置，后面定目标版本要用
 - `target.peerWindows`：待查插件自己声明的 peer 版本窗口，决定扫描走廊起点
+- `ghostHost`：磁盘代码已换新、宿主进程还在跑旧代码时判 `stale`（进程启动时间早于磁盘变更超过 120 秒）。先重启宿主再做适配判断，否则改完也验不到；`ok` / `no-running-host` / `unknown` 看 `reason`，不猜
+- `falseGreen`：`tsconfig` 的 `paths` 指向不存在的 checkout（M1）。此时 TypeScript 静默回落到 `node_modules` 的已发布类型，本地 `typecheck` 可能全绿而实际类型是旧的；`findings` 非空先修路径或删 alias，再信 typecheck 结果
 
-`overlayFindings`、`sharedFarmFindings`、`activation` 非空说明环境本身要修，转 `../diagnose/SKILL.md`。
+`overlayFindings`、`sharedFarmFindings`、`activation` 非空，或 `ghostHost.verdict` 为 `stale`，说明环境本身要修，转 `../diagnose/SKILL.md`。
 
 ## 第二步：定目标版本
 

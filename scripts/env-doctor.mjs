@@ -484,6 +484,258 @@ export function diagnoseActivation(targetDir, installedPlugins) {
   }
 }
 
+// ── 幽灵宿主体检 ────────────────────────────────────────────────────────────
+// 源码或安装已换新，跑着的进程还在执行内存里的旧代码：磁盘上的版本号会骗人。
+// 判据只问进程启动时间与磁盘变更时间的先后，不读版本号。
+
+// ps -o etime 的格式：[[dd-]hh:]mm:ss，例如 02-14:12:54 / 01:36:09 / 11:52。
+// 用 etime 而不是 lstart：lstart 受 locale 影响（本机实测输出「日 10月/25 …」）。
+export function parseEtimeSeconds(etime) {
+  const m = /^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$/.exec(String(etime || '').trim())
+  if (!m) return null
+  const [, d, h, mi, s] = m
+  return Number(d || 0) * 86400 + Number(h || 0) * 3600 + Number(mi) * 60 + Number(s)
+}
+
+// 纯判定：进程启动早于磁盘变更（超过容差）就是 stale。
+// 单独抽出来是为了自检能注入时间，不依赖本机真的跑着老进程。
+export function judgeGhostHost({ processes = [], diskTimeMs = null, toleranceSeconds = 120 } = {}) {
+  const result = (verdict, reason, extra = {}) => ({ verdict, reason, toleranceSeconds, ...extra })
+  if (!processes.length) return result('no-running-host', '没有检测到运行中的 DSH CLI 宿主进程')
+  if (!Number.isFinite(diskTimeMs)) return result('unknown', '磁盘侧没有可用的变更时间，无法判断进程代际')
+  const stale = processes.filter((p) => Number.isFinite(p.startedAtMs) && p.startedAtMs < diskTimeMs - toleranceSeconds * 1000)
+  const unresolved = processes.filter((p) => !Number.isFinite(p.startedAtMs))
+  if (stale.length) {
+    return result(
+      'stale',
+      `磁盘在进程启动后变更过：${stale.map((p) => `pid ${p.pid}`).join('、')} 仍在跑旧代码，重启宿主才生效`,
+      { stale },
+    )
+  }
+  if (unresolved.length === processes.length) return result('unknown', '进程启动时间无法解析（ps etime 格式不符）', { unresolved })
+  return result('ok', '运行中进程的启动时间都晚于磁盘变更时间')
+}
+
+function statTimeMs(file) {
+  try {
+    const st = fs.statSync(file)
+    // npm 解包会更新 ctime；birthtime 在部分 Linux 文件系统是 0，按序回退
+    return st.birthtimeMs || st.ctimeMs || st.mtimeMs
+  } catch {
+    return null
+  }
+}
+
+// 只认 DSH 源码检出。npm 全局安装目录往上也可能撞到一个 dotfiles/项目仓，
+// 把外层仓的最后提交当成宿主版本来源会直接制造假 stale。
+export function isHarnessCheckout(root) {
+  if (!root) return false
+  if (path.resolve(root) === path.resolve(os.homedir())) return false
+  return fs.existsSync(path.join(root, 'packages')) && fs.existsSync(path.join(root, 'pnpm-workspace.yaml'))
+}
+
+function gitCheckoutInfo(dir) {
+  try {
+    const opts = { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }
+    const root = execFileSync('git', ['-C', dir, 'rev-parse', '--show-toplevel'], opts).trim()
+    if (!isHarnessCheckout(root)) return null
+    const commit = execFileSync('git', ['-C', root, 'log', '-1', '--format=%cI'], opts).trim()
+    const dirty = execFileSync('git', ['-C', root, 'status', '--porcelain'], opts).trim() !== ''
+    return { root, commitTimeMs: Date.parse(commit), dirty }
+  } catch {
+    return null
+  }
+}
+
+export function probeDiskChangeTime(hostInfo = findGlobalDsh()) {
+  if (!hostInfo?.location) return { diskTimeMs: null, source: null, location: null, git: null }
+  const candidates = []
+  const dirTime = statTimeMs(hostInfo.location)
+  if (Number.isFinite(dirTime)) candidates.push({ ms: dirTime, source: '安装目录时间' })
+  const pkgTime = statTimeMs(path.join(hostInfo.location, 'package.json'))
+  if (Number.isFinite(pkgTime)) candidates.push({ ms: pkgTime, source: 'package.json 时间' })
+  const git = gitCheckoutInfo(hostInfo.location)
+  if (git && Number.isFinite(git.commitTimeMs)) {
+    candidates.push({ ms: git.commitTimeMs, source: `git 最后提交${git.dirty ? '（工作树有未提交改动）' : ''}` })
+    // 未提交改动没有 commit 时间可依，目录 mtime 是磁盘侧最晚的可用证据
+    if (git.dirty && Number.isFinite(dirTime)) candidates.push({ ms: dirTime, source: 'git 工作树目录 mtime' })
+  }
+  const best = candidates.sort((a, b) => b.ms - a.ms)[0] || null
+  return { diskTimeMs: best?.ms ?? null, source: best?.source ?? null, location: hostInfo.location, git }
+}
+
+// 只认 CLI 宿主主进程：Electron 的 renderer/helper（--type=…）启动时间不代表宿主事件循环的代际。
+export function pickHostProcesses(processes = [], now = Date.now()) {
+  return processes
+    .filter((p) => !/--type=/.test(p.command || ''))
+    .filter((p) => /\bdsh\s+(?:web|serve|desktop)\b/.test(p.command || '') || /@deepseek-ai\/dsh\/bin\//.test(p.command || ''))
+    .map((p) => {
+      const seconds = parseEtimeSeconds(p.elapsed)
+      return { ...p, startedAtMs: Number.isFinite(seconds) ? now - seconds * 1000 : null }
+    })
+}
+
+export function checkGhostHost(hostInfo, runningProcesses = [], { platform = process.platform, now = Date.now() } = {}) {
+  const disk = probeDiskChangeTime(hostInfo)
+  const base = {
+    checked: true,
+    platform,
+    disk,
+    host: hostInfo ? { version: hostInfo.version, location: hostInfo.location, source: hostInfo.source } : null,
+  }
+  if (platform === 'win32') {
+    return {
+      ...base,
+      verdict: 'unknown',
+      reason: 'Windows 没有 ps etime，进程代际无法判定；升级后重启宿主再验证',
+      toleranceSeconds: 120,
+    }
+  }
+  const processes = pickHostProcesses(runningProcesses, now)
+  return { ...base, ...judgeGhostHost({ processes, diskTimeMs: disk.diskTimeMs }) }
+}
+
+// ── tsconfig paths 假绿 ─────────────────────────────────────────────────────
+// paths 指向不存在的 checkout 时，TypeScript 静默回落到 node_modules 的已发布类型：
+// typecheck 全绿，实际类型是旧版的。这不是升级错误，是本地门禁在骗人。
+
+const TSCONFIG_SKIP = new Set(['node_modules', 'dist', 'lib', 'coverage', '.git', '.trash', 'tmp'])
+
+export function parseJsonc(text) {
+  let out = ''
+  let inString = false
+  let quote = ''
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]
+    const n = text[i + 1]
+    if (inString) {
+      out += c
+      if (c === '\\') {
+        out += n ?? ''
+        i++
+        continue
+      }
+      if (c === quote) inString = false
+      continue
+    }
+    if (c === '"' || c === "'") {
+      inString = true
+      quote = c
+      out += c
+      continue
+    }
+    if (c === '/' && n === '/') {
+      while (i < text.length && text[i] !== '\n') i++
+      out += '\n'
+      continue
+    }
+    if (c === '/' && n === '*') {
+      i += 2
+      while (i < text.length && !(text[i] === '*' && text[i + 1] === '/')) i++
+      i++
+      continue
+    }
+    out += c
+  }
+  return JSON.parse(out.replace(/,\s*([}\]])/g, '$1'))
+}
+
+function collectTsconfigs(root) {
+  const found = []
+  const walk = (dir, depth) => {
+    if (depth > 3) return
+    let entries
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        if (!TSCONFIG_SKIP.has(entry.name) && !entry.name.startsWith('.')) walk(path.join(dir, entry.name), depth + 1)
+      } else if (/^tsconfig(?:\.[\w-]+)?\.json$/.test(entry.name)) {
+        found.push(path.join(dir, entry.name))
+      }
+    }
+  }
+  walk(root, 0)
+  return found
+}
+
+function loadTsconfig(file, depth = 0, seen = new Set()) {
+  const abs = path.resolve(file)
+  if (depth > 5 || seen.has(abs)) return null
+  seen.add(abs)
+  let raw
+  try {
+    raw = parseJsonc(fs.readFileSync(abs, 'utf8'))
+  } catch {
+    return null
+  }
+  let options = { ...(raw.compilerOptions || {}) }
+  // 只跟随相对路径的 extends；包名形式的 base（@tsconfig/*）不在本机仓里，跳过不猜
+  if (typeof raw.extends === 'string' && raw.extends.startsWith('.')) {
+    const target = path.resolve(path.dirname(abs), raw.extends)
+    const candidates = fs.existsSync(target) && fs.statSync(target).isFile() ? [target] : [`${target}.json`, path.join(target, 'tsconfig.json')]
+    const parent = candidates.filter((c) => fs.existsSync(c)).map((c) => loadTsconfig(c, depth + 1, seen)).find(Boolean)
+    if (parent) options = { ...parent.options, ...options }
+  }
+  return { file: abs, options, extends: raw.extends ?? null }
+}
+
+function tsconfigTargetExists(abs, wildcard) {
+  if (fs.existsSync(abs)) return true
+  if (wildcard) return false
+  return ['.ts', '.tsx', '.d.ts', '.js', '.jsx', '.json'].some((ext) => fs.existsSync(abs + ext))
+}
+
+export function checkTsconfigFalseGreen(pluginDir) {
+  const root = path.resolve(pluginDir)
+  const tsconfigs = collectTsconfigs(root)
+  const findings = []
+  for (const file of tsconfigs) {
+    const loaded = loadTsconfig(file)
+    if (!loaded || !loaded.options.paths || typeof loaded.options.paths !== 'object') continue
+    const baseDir = loaded.options.baseUrl
+      ? path.resolve(path.dirname(file), loaded.options.baseUrl)
+      : path.dirname(file)
+    for (const [alias, values] of Object.entries(loaded.options.paths)) {
+      for (const value of Array.isArray(values) ? values : [values]) {
+        if (typeof value !== 'string') continue
+        const wildcardAt = value.indexOf('*')
+        const probe = wildcardAt >= 0 ? value.slice(0, wildcardAt) : value
+        const abs = path.resolve(baseDir, probe)
+        if (tsconfigTargetExists(abs, wildcardAt >= 0)) continue
+        const hostRelated = /deepseek|@deepseek-ai|\bdsh\b/i.test(`${alias} ${value}`)
+        findings.push({
+          kind: 'tsconfig-paths-missing',
+          severity: hostRelated ? 'high' : 'medium',
+          file: path.relative(root, file),
+          alias,
+          target: value,
+          resolved: abs,
+          message: 'paths 目标不存在：TypeScript 会静默回落到 node_modules 里的已发布类型，本地 typecheck 可能全绿而实际类型是旧的',
+          hint: '把指向的 checkout 拉回来，或删掉这条 alias 改用目标版本的 node_modules 类型',
+        })
+      }
+    }
+  }
+  const deduped = dedupeFalseGreen(findings)
+  return { checked: true, tsconfigs: tsconfigs.map((f) => path.relative(root, f)), findings: deduped, count: deduped.length }
+}
+
+// 同一个 paths 目标可能同时出现在 tsconfig.json 与被它 extends 的 base 里，
+// 按 alias + 解析后的绝对路径去重，避免同一处问题报两遍。
+function dedupeFalseGreen(findings) {
+  const seen = new Set()
+  return findings.filter((f) => {
+    const key = `${f.alias}\0${f.resolved}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
 // ── 主流程 ──────────────────────────────────────────────────────────────────
 
 export function probeEnvironment(targetDir = process.cwd()) {
@@ -550,6 +802,8 @@ export function probeEnvironment(targetDir = process.cwd()) {
     timestamp: new Date().toISOString(),
     globalDsh,
     desktopApp,
+    ghostHost: checkGhostHost(globalDsh, running),
+    falseGreen: checkTsconfigFalseGreen(targetDir),
     profiles,
     overlayFindings: overlay,
     sharedFarmFindings: sharedFarm,
@@ -585,6 +839,9 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.met
       ? `｜共享农场悬空软链: ${farm.brokenCount} 处（指向宿主 ${farm.hostBackedBroken}）`
       : '') + '\n' +
     `运行中宿主进程: ${report.runningProcesses.length} 个\n` +
+    `幽灵宿主判定: ${report.ghostHost.verdict}（${report.ghostHost.reason}）\n` +
+    `tsconfig 假绿: ${report.falseGreen.count} 处` +
+    (report.falseGreen.count ? `（${report.falseGreen.findings.map((f) => f.alias).join('、')}）` : '') + '\n' +
     (report.activation?.checked
       ? `目标插件启用就绪: ${report.activation.verdict}${report.activation.pendingRisks.length ? `（Silent Pending 风险 ${report.activation.pendingRisks.length} 处）` : ''}${report.activation.client ? `｜客户端半: ${report.activation.client.verdict}${report.activation.clientRisks.length ? `（死链 ${report.activation.clientRisks.length} 处）` : ''}` : ''}\n`
       : report.activation?.verdict === 'N/A'

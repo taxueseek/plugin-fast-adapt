@@ -1,6 +1,6 @@
 {
   "name": "plugin-fast-adapt",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "DSH 插件升级适配：主入口加三条车道子技能，直连官方指南，零外部依赖",
   "type": "module",
   "bin": {

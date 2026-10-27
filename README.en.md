@@ -2,7 +2,7 @@
 
 [简体中文](README.md) | English
 
-[![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D22.13-blue.svg)](package.json) [![Dependencies](https://img.shields.io/badge/dependencies-0-blue.svg)](#dependencies) [![Self-test](https://img.shields.io/badge/self--test-145%20passing-brightgreen.svg)](#dependencies)
+[![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D22.13-blue.svg)](package.json) [![Dependencies](https://img.shields.io/badge/dependencies-0-blue.svg)](#dependencies) [![Self-test](https://img.shields.io/badge/self--test-161%20passing-brightgreen.svg)](#dependencies)
 
 > **Every time DSH ships a new release, existing plugins can stop working.** This skill reads the vendor's official upgrade guide directly, scans your plugin code, and reports which breaking changes you hit together with the vendor's own fix instructions; it also scaffolds a runnable plugin from zero in one command and verifies it.
 
@@ -13,7 +13,9 @@
 | Upstream ships a new release | Works immediately, zero changes (reads vendor sources, no hand-curated cards) |
 | Scan false positives | 12 → 0 (four noise-reduction layers) |
 | Verifying one change | 3,600 s real host cold start → millisecond-scale in-memory smoke test |
-| Self-test | 145 assertions, runs offline |
+| Ghost host | Warns when the disk has new code but the running process still executes the old one (compares process start time, not version strings) |
+| Fake-green check | Warns when `tsconfig` `paths` point at a missing checkout, where TypeScript silently falls back to published types |
+| Self-test | 161 assertions, runs offline |
 | External dependencies | 0 (Node built-ins + the `git`/`npm` commands only) |
 | Network | Only used to fetch vendor sources; the core steps are fully offline |
 | Scaffolding | One command emits a runnable plugin in five forms, verified on creation, then a write gate issues the birth certificate |
@@ -35,8 +37,9 @@ This project takes a different approach: **maintain the method of obtaining know
 - **Cheap verification**: the in-memory Cordis smoke test returns in milliseconds to seconds, with no real host cold start; add `--real-smoke` when you need real-host evidence (clean profile, install and boot)
 - **Zero external dependencies**: Node built-ins plus the `git`/`npm` commands only — no TypeScript, no AST library, no HTTP client
 - **Very light network dependence**: only "fetching vendor sources" touches the network — version resolution reads npm `dist-tags`, guide fetching clones the official repo. `dist-tags` is cached for 1 hour and degrades to the stale cache with an explicit `stale` marker; guides reuse an existing local clone first, and `--no-clone` skips the fetch. Environment inspection, code scanning, smoke tests, audits, log diagnosis and seam queries are fully offline
-- **Reproducible**: 145 assertions, runs offline; CI runs on every push and pull request
+- **Reproducible**: 161 assertions, runs offline; CI runs on every push and pull request
 - **More than adaptation**: `scaffold.mjs` emits a runnable plugin in five forms in one command (verified against the real host base classes), and `write-gate.mjs` issues a birth certificate when you are done
+- **Silent failures have hard evidence**: `ghostHost` compares process start time against the disk change time to catch "new code on disk, old code in memory"; `falseGreen` catches TypeScript's silent fallback when `tsconfig` `paths` point at a missing checkout. Both report evidence and never pretend to decide for you
 - **Honest about its limits**: a passing smoke test is not host compatibility, and the tool says so in its output; soft audit metrics are passed through, never turned into a verdict on your behalf
 
 ## Three lanes
@@ -108,7 +111,8 @@ You can also run each step on its own (the six-step spine remains; run.mjs just 
 
 ```sh
 # 1. Inspect the local environment: installed version, stale overlay packages,
-#    installed plugins, activation readiness
+#    installed plugins, activation readiness. Also two silent-failure judges:
+#    ghostHost (process still running old code) and falseGreen (tsconfig paths fake green)
 node scripts/env-doctor.mjs <plugin-dir>
 
 # 2. Resolve the target version: what is upstream's latest, should this machine follow it
@@ -197,12 +201,12 @@ No TypeScript, no AST library, no HTTP client. Runs on Node 22.13+ (`import.meta
 Self-test:
 
 ```sh
-npm test   # node scripts/self-test.mjs, 145 assertions
+npm test   # node scripts/self-test.mjs, 161 assertions
 ```
 
 Contributors should enable the pre-commit gate (one time): `git config core.hooksPath .githooks` — every commit runs the self-test, so a forgotten downstream sync is caught at commit time.
 
-Covers scanner false positives (names in comments and strings are not hits), false negatives, version heuristics, replacement-pair recognition, end-to-end findings (with guide file + line provenance anchors), dual-source seam-query verdicts (agree-removed / host-still-present disagreement / honest no-record), run-log × host-log cross-checks, the --real-smoke bridge tier (fail → exit 2 with a next-step pointer), the upstream-watch exit codes, the sync commit-command suggestion (adds only the synced path), SOP reference integrity, dist-tags cache states, smoke verification (including the undeclared-inject contract rejection), the four-dimension audit (including peer patches), activation diagnostics, the plugin scaffolder (all five forms, naming-projection grammar, smoke closure, patch-layer recognizability, invalid-input and non-empty-target rejection), the write gate (hard-gate interception, soft metrics never overrule, skip semantics, scaffold handoff), log diagnosis, downstream-sync drift checks plus a real-machine zero-drift gate, cache-root injection (the self-test never writes the real user cache), one-time run-log ledger migration (legacy `~/.cache` root moves to `~/.local/state`), a self-test size gate and a scanner performance gate. The self-test itself is zero-network and zero-dependency, and runs on any machine.
+Covers scanner false positives (names in comments and strings are not hits), false negatives, version heuristics, replacement-pair recognition, end-to-end findings (with guide file + line provenance anchors), dual-source seam-query verdicts (agree-removed / host-still-present disagreement / honest no-record), run-log × host-log cross-checks, the --real-smoke bridge tier (fail → exit 2 with a next-step pointer), the upstream-watch exit codes, the sync commit-command suggestion (adds only the synced path), SOP reference integrity, dist-tags cache states, smoke verification (including the undeclared-inject contract rejection), the four-dimension audit (including peer patches), activation diagnostics, ghost-host four states (stale/ok/unknown/no-running-host) with disk-time provenance, tsconfig paths fake green (extends chains, JSONC comments, wildcard prefixes, non-host aliases downgraded), the plugin scaffolder (all five forms, naming-projection grammar, smoke closure, patch-layer recognizability, invalid-input and non-empty-target rejection), the write gate (hard-gate interception, soft metrics never overrule, skip semantics, scaffold handoff), log diagnosis, downstream-sync drift checks plus a real-machine zero-drift gate, cache-root injection (the self-test never writes the real user cache), one-time run-log ledger migration (legacy `~/.cache` root moves to `~/.local/state`), a self-test size gate and a scanner performance gate. The self-test itself is zero-network and zero-dependency, and runs on any machine.
 
 To gate your own plugin's repository at commit time (smoke/typecheck as hard gates, audit as a soft report), see [references/ci-snippet.md](references/ci-snippet.md).
 
@@ -216,7 +220,7 @@ To gate your own plugin's repository at commit time (smoke/typecheck as hard gat
 | `scripts/seams.mjs` | Seam query: dual-source verdict for one package/API symbol across official guide anchors and the local host install |
 | `scripts/scaffold.mjs` | Scaffold a plugin from zero: one command emits a runnable plugin in any of the five forms (package.json invariants + complete form entry + patch layer + naming projections), verified on creation |
 | `scripts/write-gate.mjs` | Gate a finished plugin: orchestrates smoke + activation readiness + four-dimension audit + official-guide scan into a birth certificate; only three hard gates auto-judge, soft metrics pass through untouched |
-| `scripts/env-doctor.mjs` | Probe the local DSH environment (version, overlay, plugins, processes, activation readiness) |
+| `scripts/env-doctor.mjs` | Probe the local DSH environment (version, overlay, plugins, processes, activation readiness, ghost host, tsconfig fake green) |
 | `scripts/env-heal.mjs` | Heal stale overlay packages (dry-run by default) |
 | `scripts/guide-sync.mjs` | Resolve the target version and fetch the official guide (dist-tags cached 1 h, degrades to stale cache) |
 | `scripts/code-scan.mjs` | Scan plugin code against official change anchors |
@@ -250,10 +254,11 @@ The official upgrade guide only goes back to dsh-v0.1.7-rc.2. For older plugins,
 - The official upgrade guide does not cover every breaking change (package retirement is one class that is not documented there); the `env-doctor` overlay inspection covers that case
 - Same-named symbols can still collide (a plugin's `path.resolve()` versus the guide's `runtime.resolve()`) and require human judgment of the surrounding code
 - Static matching only, no runtime-behaviour verification; the smoke mock covers the common host surface only
+- The ghost-host check covers CLI host processes only: Windows has no `ps etime`, and desktop Electron renderers are excluded; both cases report `unknown` with the reason instead of guessing
 
 ## Provenance and division of work
 
-This project was split out of [oh-my-dsh/dsh-plugin-upgrade-skill](https://github.com/oh-my-dsh/dsh-plugin-upgrade-skill) (a skill collection that teaches AI agents to upgrade DSH plugins, with an [arXiv paper](https://arxiv.org/abs/2609.30120)) via git subtree and has evolved independently since. The upstream project carries 195 hand-maintained upgrade cards, 11 skills and a 63-case auto-graded benchmark.
+This project was split out of [oh-my-dsh/dsh-plugin-upgrade-skill](https://github.com/oh-my-dsh/dsh-plugin-upgrade-skill) (a skill collection that teaches AI agents to upgrade DSH plugins, with an [arXiv paper](https://arxiv.org/abs/2609.30120)) via git subtree and has evolved independently since. As of 2026-10-26, the upstream project carries 198 upgrade cards, 12 skills and a 65-case auto-graded benchmark.
 
 The two projects complement each other:
 

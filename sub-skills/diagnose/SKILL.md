@@ -29,10 +29,12 @@ node scripts/log-doctor.mjs [--logs <目录>] [--limit 5] [--pattern '^startup-'
 node scripts/env-doctor.mjs <插件目录>
 ```
 
-输出 JSON，本车道重点看六段：
+输出 JSON，本车道重点看八段：
 
 - `globalDsh`：全局安装的 DSH 版本和位置
 - `desktopApp`：桌面 APP 自己捆的宿主版本（从 `app.asar` 只读取出）。APP 不用 npm 全局那份宿主，两者错开时带 `mismatch`：desktop profile 的结论以 APP 版本为准
+- `ghostHost`：运行中的宿主进程是不是在跑旧代码。比进程启动时间与磁盘变更时间（安装目录/`package.json`/git 最后提交），超过 120 秒容差判 `stale`；`no-running-host` 只是没开宿主，`unknown`（Windows 无 `ps etime`、桌面 renderer）写明原因不猜。改完 Host 侧代码不重启就属于这一类
+- `falseGreen`：插件 `tsconfig` 的 `paths` 指向不存在的 checkout（M1）。TypeScript 静默回落到 `node_modules` 的已发布类型，`typecheck` 全绿而实际类型是旧的；带 `findings`（alias、目标、解析后的绝对路径）与修复建议
 - `overlayFindings`：profiles 覆盖层里与主安装脱节的包，带 severity 和原因
 - `sharedFarmFindings`：共享 node_modules 农场（`~/.dsh/profiles/node_modules`）的悬空软链，带 `brokenCount` 与 `hostBackedBroken`（指向宿主安装树的是「宿主升级后包被移除」那一类，标 critical）
 - `runningProcesses`：正在跑的 DSH 宿主进程（改 Host 侧代码后必须重启它）

@@ -209,6 +209,8 @@ stages.env = {
   sharedFarmHostBacked: env.sharedFarmFindings?.hostBackedBroken ?? 0,
   runningProcesses: env.runningProcesses?.length ?? 0,
   activation: env.activation?.verdict ?? null,
+  ghostHost: env.ghostHost ?? null,
+  falseGreen: env.falseGreen ?? null,
 }
 const hostVersion = env.globalDsh?.version ?? null
 if (env.desktopApp?.mismatch) {
@@ -331,6 +333,11 @@ const criticalOrHigh = report.scan?.criticalOrHigh ?? 0
 const verdictLines = []
 verdictLines.push(`插件 ${pluginPkg.name}@${pluginPkg.version} × 宿主 ${hostVersion ?? '未知'}（窗口 ${windowLocal} → ${windowTarget}）`)
 if (report.env?.desktopMismatch) verdictLines.push(`⚠ ${report.env.desktopMismatch}`)
+if (report.env?.ghostHost?.verdict === 'stale') verdictLines.push(`⚠ 幽灵宿主：${report.env.ghostHost.reason}——先重启宿主，否则改完也验不到`)
+if ((report.env?.falseGreen?.count ?? 0) > 0) {
+  const aliases = report.env.falseGreen.findings.map((f) => f.alias).join('、')
+  verdictLines.push(`⚠ tsconfig 假绿 ${report.env.falseGreen.count} 处（${aliases}）：paths 指向不存在的目录，typecheck 可能全绿——先修路径再信构建结果`)
+}
 if (report.window.fallback) {
   verdictLines.push(`⚠ 扫描窗口倒挂（起点 ${report.window.fallback.rejectedFrom} > 终点 ${windowTarget}），已回退起点为宿主版本 ${report.window.fallback.to ?? '未知'}——peer 声明或 --from 有误，倒挂会让扫描静默跳过`)
 }
