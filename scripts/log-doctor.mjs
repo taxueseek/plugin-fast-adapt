@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// log-doctor.mjs —— 一键解析 ~/.dsh/logs/ 的宿主故障。
+// log-doctor.mjs —— 一键解析 ~/.dsh/logs/ 的宿主故障与桌面 APP 崩溃报告。
 //
 // 为什么需要它：宿主启动失败（StartupError / 端口占用 / 未声明 inject / 客户端
 // 入口死链）目前要人工逐个 grep startup-*.log，再从 300 多行的 JS 字面量里
@@ -15,6 +15,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { printJson } from './lib/scanner.mjs'
+import { DEFAULT_CRASH_DIR, CRASH_REPORT_NAME, listCrashReports, parseCrashReport } from './lib/desktop-app.mjs'
 
 export const DEFAULT_LOGS_DIR = path.join(os.homedir(), '.dsh', 'logs')
 
@@ -24,7 +25,9 @@ const SIGNALS = [
   { id: 'undeclared-inject', re: /without inject/, action: '插件访问了未声明 inject 的宿主服务：在该插件入口补 inject 声明，或改用 ctx.get("<服务>") 弱依赖降级。' },
   { id: 'inactive-required-service', re: /cannot get required service .* in inactive context/, action: '强注入的服务在宿主里没有提供方：确认宿主版本确实提供该服务，或改弱依赖。' },
   { id: 'patch-entry-not-found', re: /patch: entry .* not found/, action: 'cordis.patch.yml 挂了不存在的插件条目：从 patch 层移除或修正包名/挂载 id。' },
-  { id: 'entry-not-activate', re: /entry did not activate/, action: '客户端入口未激活（常见于 dsh.client.inject 指向已移除/名册外）：核查客户端名册与产物。' },
+  { id: 'entry-not-activate', re: /entry did not activate|entries did not activate/, action: '有可选条目未激活：看 inactiveEntries 里每条的错误原文定位插件；客户端半卡 loading 时再核 dsh.client.inject 名册与产物。' },
+  // 必须排在 entry-not-activate 后面：同一段警告先报未激活，再细分出抢锁这一类
+  { id: 'resource-locked', re: /already owned by process|already locked|EBUSY|lock(?:ed)? by (?:another )?process/i, action: '多个宿主进程在抢同一份资源（web 与桌面 APP 同时开最常见）：ps 看占用进程是否还活着，只留一个宿主，或把该插件在其中一个 profile 禁用。不是插件代码缺陷。' },
   { id: 'hmr-disposed', re: /HMR is disposed/, action: '热重载上下文已销毁：重启宿主进程即可，不是插件缺陷。' },
   { id: 'config-reload-failed', re: /config reload .* failed/, action: '配置重载失败：检查对应 cordis.yml 的语法与引用路径。' },
   { id: 'startup-error', re: /StartupError/, action: '宿主启动失败：看本条的 failedPlugins / waitingForServices 段。' },
@@ -42,6 +45,8 @@ export function listLogFiles(logsDir = DEFAULT_LOGS_DIR, { limit = 10, pattern =
   }
   const files = entries
     .filter((e) => e.isFile() && e.name.endsWith('.log'))
+    // 崩溃报告由下面的 crashReports 段专门解析，混进来会同一份文件计两次信号
+    .filter((e) => !CRASH_REPORT_NAME.test(e.name))
     .filter((e) => (pattern ? new RegExp(pattern).test(e.name) : true))
     .map((e) => {
       const full = path.join(logsDir, e.name)
@@ -51,6 +56,33 @@ export function listLogFiles(logsDir = DEFAULT_LOGS_DIR, { limit = 10, pattern =
     })
     .sort((a, b) => b.mtimeMs - a.mtimeMs)
   return limit ? files.slice(0, limit) : files
+}
+
+// ── 未激活条目 ──────────────────────────────────────────────────────────────
+
+// 宿主的可选条目警告（dsh-app-boot activationDiagnostic）：
+//   `<bin>: warning: N entr(y|ies) did not activate` 后每条一行
+//   `<id> (<包名>): <错误首行>`，失败条目随后跟堆栈（以 `at ` 开头的缩进行）。
+// 旧实现只匹配首行，给出的动作固定指向客户端名册；2026-10-27 实录的真因是
+// task-board 账本锁被另一宿主进程占住，名册建议完全跑偏。
+export function parseInactiveEntries(text) {
+  const out = []
+  const lines = text.split('\n')
+  for (let i = 0; i < lines.length; i++) {
+    const head = lines[i].match(/:\s*warning:\s*(\d+)\s+entr(?:y|ies) did not activate/)
+    if (!head) continue
+    const want = Number(head[1])
+    let taken = 0
+    for (let j = i + 1; j < lines.length && taken < want; j++) {
+      const line = lines[j]
+      if (/^\s+at\s/.test(line)) continue
+      const m = line.match(/^(\S+) \(([^)]+)\): (.*)$/)
+      if (!m) break
+      out.push({ id: m[1], package: m[2], error: m[3].trim() })
+      taken++
+    }
+  }
+  return out
 }
 
 // ── startup 日志解析 ────────────────────────────────────────────────────────
@@ -191,11 +223,19 @@ export function parseStartupLog(text) {
 
 // ── 汇总诊断 ────────────────────────────────────────────────────────────────
 
-export function diagnoseLogs({ logsDir = DEFAULT_LOGS_DIR, limit = 5, pattern = null } = {}) {
+export function diagnoseLogs({ logsDir = DEFAULT_LOGS_DIR, limit = 5, pattern = null, crashDir = DEFAULT_CRASH_DIR } = {}) {
   const files = listLogFiles(logsDir, { limit, pattern })
   const runs = []
   const signalCounts = new Map()
   const signalLogs = new Map()
+  const countSignals = (signals, file) => {
+    for (const sig of signals) {
+      signalCounts.set(sig.id, (signalCounts.get(sig.id) || 0) + 1)
+      if (!signalLogs.has(sig.id)) signalLogs.set(sig.id, [])
+      signalLogs.get(sig.id).push(file)
+    }
+  }
+  const signalsIn = (text) => SIGNALS.filter((s) => s.re.test(text)).map((s) => ({ id: s.id, action: s.action }))
 
   for (const file of files) {
     let text = ''
@@ -204,19 +244,30 @@ export function diagnoseLogs({ logsDir = DEFAULT_LOGS_DIR, limit = 5, pattern = 
     const parsed = isStartup
       ? parseStartupLog(text)
       : { meta: null, errorSummary: null, errorBlock: null, failedPlugins: [], waitingForServices: [], messages: [], signals: [] }
-    // 非 startup 日志（maintain/env-sweeper/web-restart）：只按全文扫信号
-    if (!isStartup) {
-      for (const s of SIGNALS) {
-        if (s.re.test(text)) parsed.signals.push({ id: s.id, action: s.action })
-      }
-    }
+    // 非 startup 日志（dsh-web/maintain/env-sweeper/web-restart）：全文扫信号，并抽出未激活条目
+    if (!isStartup) parsed.signals.push(...signalsIn(text))
+    parsed.inactiveEntries = parseInactiveEntries(text)
     runs.push({ file: file.file, mtimeMs: file.mtimeMs, size: file.size, isStartup, ...parsed })
+    countSignals(parsed.signals, file.file)
+  }
 
-    for (const sig of parsed.signals) {
-      signalCounts.set(sig.id, (signalCounts.get(sig.id) || 0) + 1)
-      if (!signalLogs.has(sig.id)) signalLogs.set(sig.id, [])
-      signalLogs.get(sig.id).push(file.file)
-    }
+  // 桌面 APP 崩溃报告：APP 宿主的启动失败不写 ~/.dsh/logs/startup-*，只落这里
+  const crashReports = []
+  for (const report of listCrashReports(crashDir, { limit })) {
+    let text = ''
+    try { text = fs.readFileSync(report.path, 'utf8') } catch { continue }
+    const parsed = parseCrashReport(text, report.file)
+    // 宿主诊断段与 StartupError 同形，复用 startup 解析抽失败插件与等待服务
+    const hostBlock = parseStartupLog(`  error: ${parsed.hostDiagnostic ?? parsed.errorText}`)
+    const signals = signalsIn([parsed.errorText, parsed.hostDiagnostic, parsed.rendererConsole].filter(Boolean).join('\n'))
+    crashReports.push({
+      ...parsed,
+      failedPlugins: hostBlock.failedPlugins,
+      waitingForServices: hostBlock.waitingForServices,
+      inactiveEntries: parseInactiveEntries(parsed.hostDiagnostic ?? parsed.errorText),
+      signals,
+    })
+    countSignals(signals, report.file)
   }
 
   const ranked = [...signalCounts.entries()]
@@ -230,21 +281,29 @@ export function diagnoseLogs({ logsDir = DEFAULT_LOGS_DIR, limit = 5, pattern = 
     logsDir,
     scanned: files.length,
     runs,
+    crashDir,
+    crashReports,
     signalSummary: ranked,
-    verdict: ranked.length === 0 ? 'clean' : (ranked.some((r) => ['port-in-use', 'undeclared-inject', 'inactive-required-service', 'entry-not-activate'].includes(r.id)) ? 'host-failure' : 'warnings'),
+    // 崩溃报告本身就是致命错误的证据：有一份就是 host-failure
+    verdict: ranked.length === 0 && crashReports.length === 0
+      ? 'clean'
+      : crashReports.length > 0 || ranked.some((r) => ['port-in-use', 'undeclared-inject', 'inactive-required-service', 'entry-not-activate'].includes(r.id))
+        ? 'host-failure'
+        : 'warnings',
   }
 }
 
 // ── CLI ─────────────────────────────────────────────────────────────────────
 
 function parseArgv(argv) {
-  const flags = { limit: 5, pattern: null, logs: DEFAULT_LOGS_DIR }
+  const flags = { limit: 5, pattern: null, logs: DEFAULT_LOGS_DIR, crashDir: DEFAULT_CRASH_DIR }
   const positional = []
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--logs') flags.logs = argv[++i]
     else if (a === '--limit') flags.limit = Number(argv[++i]) || 5
     else if (a === '--pattern') flags.pattern = argv[++i]
+    else if (a === '--crash-dir') flags.crashDir = argv[++i]
     else if (a.startsWith('--')) throw new Error(`未知参数「${a}」`)
     else positional.push(a)
   }
@@ -253,7 +312,7 @@ function parseArgv(argv) {
 
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename)) {
   const flags = parseArgv(process.argv.slice(2))
-  const report = diagnoseLogs(flags)
+  const report = diagnoseLogs({ logsDir: flags.logs, limit: flags.limit, pattern: flags.pattern, crashDir: flags.crashDir })
   printJson(report)
 
   process.stderr.write(`\n日志目录: ${report.logsDir}（扫 ${report.scanned} 份）\n`)
@@ -270,6 +329,19 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.met
     for (const w of run.waitingForServices) {
       process.stderr.write(`  等待服务: ${w.plugin}${w.required ? ' (required)' : ''} → ${w.missing}\n`)
     }
+  }
+  for (const run of report.runs) {
+    if (!run.inactiveEntries?.length) continue
+    process.stderr.write(`\n[${run.file}] 未激活条目 ${run.inactiveEntries.length} 个\n`)
+    for (const e of run.inactiveEntries) process.stderr.write(`  ${e.id} ← ${e.package}\n    ${e.error}\n`)
+  }
+  process.stderr.write(`\n桌面 APP 崩溃报告: ${report.crashReports.length} 份（${report.crashDir}）\n`)
+  for (const c of report.crashReports) {
+    process.stderr.write(`\n[${c.file}] ${c.time ?? '?'} 来源 ${c.source ?? '?'} 阶段 ${c.phase ?? '?'}（${c.app ?? '?'}）\n`)
+    process.stderr.write(`  ${(c.hostDiagnostic ?? c.errorText).split('\n')[0]}\n`)
+    for (const fp of c.failedPlugins) process.stderr.write(`  失败插件: ${fp.plugin}${fp.package ? ` ← ${fp.package}` : ''}${fp.error ? `：${fp.error}` : ''}\n`)
+    for (const e of c.inactiveEntries) process.stderr.write(`  未激活: ${e.id} ← ${e.package}：${e.error}\n`)
+    if (c.rendererConsole) process.stderr.write(`  渲染进程报错 ${c.rendererConsole.split('\n').length} 行（见 rendererConsole）\n`)
   }
   if (report.signalSummary.length) {
     process.stderr.write('\n信号汇总（按出现次数）:\n')

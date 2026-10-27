@@ -19,6 +19,7 @@ import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { printJson, isDshPackage, isPluginForm, packageBase, parseVersion, compareVersions, peerFloor, maskSource, CODE } from './lib/scanner.mjs'
 import { diagnoseClientHalf, isDeliberateRosterInsert } from './lib/client-graph.mjs'
+import { probeDesktopApp } from './lib/desktop-app.mjs'
 
 const HOME = os.homedir()
 // DSH 目录：默认 ~/.dsh。DSH_PFA_DSH_HOME 可覆盖（自检与容器场景用；
@@ -487,6 +488,12 @@ export function diagnoseActivation(targetDir, installedPlugins) {
 
 export function probeEnvironment(targetDir = process.cwd()) {
   const globalDsh = findGlobalDsh()
+  // 桌面 APP 跑自己 asar 里捆的宿主，不是 npm 全局那份；两份版本错开时，
+  // desktop profile 的名册与扫描窗口按 globalDsh 算就是错的，这里如实报出来
+  const desktopApp = probeDesktopApp()
+  if (desktopApp?.hostVersion && globalDsh?.version && desktopApp.hostVersion !== globalDsh.version) {
+    desktopApp.mismatch = `APP 捆绑宿主 ${desktopApp.hostVersion} ≠ npm 全局宿主 ${globalDsh.version}：desktop profile 的结论以 APP 版本为准，web 等其余 profile 以 npm 版本为准`
+  }
   const profiles = listProfiles()
   const overlay = []
   for (const profile of profiles) {
@@ -542,6 +549,7 @@ export function probeEnvironment(targetDir = process.cwd()) {
   return {
     timestamp: new Date().toISOString(),
     globalDsh,
+    desktopApp,
     profiles,
     overlayFindings: overlay,
     sharedFarmFindings: sharedFarm,
@@ -568,6 +576,9 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.met
   const farm = report.sharedFarmFindings
   process.stderr.write(
     `\n全局 DSH: ${report.globalDsh?.version || '未检测到'} (${report.globalDsh?.source || 'n/a'})\n` +
+    (report.desktopApp
+      ? `桌面 APP 捆绑宿主: ${report.desktopApp.hostVersion || '读取失败'}${report.desktopApp.mismatch ? `（⚠ ${report.desktopApp.mismatch}）` : ''}\n`
+      : '') +
     `profiles: ${report.profiles.join(', ') || '无'}\n` +
     `覆盖层问题: ${overlayCount} 处` +
     (farm && farm.brokenCount

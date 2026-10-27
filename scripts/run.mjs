@@ -202,6 +202,7 @@ const env = probeEnvironment(pluginDir)
 stages.env = {
   status: 'ok',
   globalDsh: env.globalDsh,
+  desktopApp: env.desktopApp,
   profiles: env.profiles,
   overlayFindings: env.overlayFindings?.length ?? 0,
   sharedFarmBroken: env.sharedFarmFindings?.brokenCount ?? 0,
@@ -210,6 +211,9 @@ stages.env = {
   activation: env.activation?.verdict ?? null,
 }
 const hostVersion = env.globalDsh?.version ?? null
+if (env.desktopApp?.mismatch) {
+  stages.env.desktopMismatch = env.desktopApp.mismatch
+}
 if ((env.overlayFindings?.length ?? 0) > 0) {
   stages.env.warning = '覆盖层有旧包残留，先跑 env-heal 再谈适配（issue #263 类事故）。'
 } else if ((env.sharedFarmFindings?.brokenCount ?? 0) > 0) {
@@ -326,6 +330,7 @@ const report = {
 const criticalOrHigh = report.scan?.criticalOrHigh ?? 0
 const verdictLines = []
 verdictLines.push(`插件 ${pluginPkg.name}@${pluginPkg.version} × 宿主 ${hostVersion ?? '未知'}（窗口 ${windowLocal} → ${windowTarget}）`)
+if (report.env?.desktopMismatch) verdictLines.push(`⚠ ${report.env.desktopMismatch}`)
 if (report.window.fallback) {
   verdictLines.push(`⚠ 扫描窗口倒挂（起点 ${report.window.fallback.rejectedFrom} > 终点 ${windowTarget}），已回退起点为宿主版本 ${report.window.fallback.to ?? '未知'}——peer 声明或 --from 有误，倒挂会让扫描静默跳过`)
 }

@@ -35,6 +35,7 @@ const SCRIPTS = path.dirname(fileURLToPath(import.meta.url))
 // *.test.mjs，本文件只 import 各节并执行（2200 行体积门禁，见文件末）。
 import { test, tmpPluginDir, runTests, tests } from './self-test/harness.mjs'
 import './self-test/scaffold.test.mjs'
+import './self-test/desktop.test.mjs'
 
 process.stderr.write('plugin-fast-adapt 自检\n\n')
 

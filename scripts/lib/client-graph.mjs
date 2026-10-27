@@ -143,10 +143,41 @@ export function isDeliberateRosterInsert(text, pkgName) {
   return false
 }
 
+// 宿主 bundle 里按 profile 名开关的行：`disabled: !!js "ctx.get('profileContext')?.name !== 'desktop'"`
+// 表示只在 desktop 激活（dsh-web-app 0.2.1-rc.3 实测 3 行：ui-sidebar-browser、
+// product-analytics、desktop-product-telemetry）。只认这一种写法：任意 !!js 要宿主
+// 上下文才能求值，判不了的不猜，按「两端都有」处理，与改动前一致。
+const PROFILE_ONLY_RE = /profileContext'\)\?\.name\s*!==\s*'([\w-]+)'/
+
+// 返回 Map<包名, 唯一激活的 profile 名>。bundleDirs 是宿主 bundle 包目录。
+export function profileOnlyPackages(bundleDirs) {
+  const out = new Map()
+  for (const dir of bundleDirs) {
+    let text = ''
+    try {
+      text = fs.readFileSync(path.join(dir, 'cordis.patch.yml'), 'utf8')
+    } catch {
+      continue
+    }
+    const lines = text.split('\n')
+    for (let i = 0; i < lines.length; i++) {
+      const name = lines[i].match(/^\s*name:\s*['"]?(@[\w.-]+\/[\w.-]+)['"]?/)
+      if (!name) continue
+      // 同一条目的字段：从 name 行往下，直到下一个「- id:」列表项
+      for (let j = i + 1; j < lines.length && !/^\s*-\s/.test(lines[j]); j++) {
+        const only = lines[j].match(PROFILE_ONLY_RE)
+        if (/^\s*disabled:/.test(lines[j]) && only) out.set(name[1], only[1])
+      }
+    }
+  }
+  return out
+}
+
 // 收集一个 profile 的客户端名册：Map<包名, { source: 强证据类型 }>。
 // hostRoots 给全局宿主 node_modules 根（内置面）；profileDir 给 profile 目录。
 export function collectRoster({ hostRoots = [], profileDir }) {
   const roster = new Map()
+  const profileName = profileDir ? path.basename(profileDir) : null
 
   // 宿主内置包有两层布局：全局根下的 @deepseek-ai/*（独立安装），以及
   // dsh 主包自带的 @deepseek-ai/dsh/node_modules/@deepseek-ai/*（官方套件
@@ -157,6 +188,7 @@ export function collectRoster({ hostRoots = [], profileDir }) {
     builtinDirs.push(path.join(root, '@deepseek-ai'))
     builtinDirs.push(path.join(root, '@deepseek-ai', 'dsh', 'node_modules', '@deepseek-ai'))
   }
+  const onlyOn = profileOnlyPackages(builtinDirs.map((d) => path.join(d, 'dsh-web-app')))
   for (const scoped of builtinDirs) {
     let subs = []
     try {
@@ -169,6 +201,9 @@ export function collectRoster({ hostRoots = [], profileDir }) {
       const pkg = readJson(path.join(scoped, sub, 'package.json'))
       const decl = readClientDecl(`@deepseek-ai/${sub}`, pkg)
       if (decl && !decl.invalid && decl.platform === 'web') {
+        const only = onlyOn.get(`@deepseek-ai/${sub}`)
+        // 只在别的 profile 激活的宿主包，不算本 profile 的提供方
+        if (only && profileName && only !== profileName) continue
         roster.set(`@deepseek-ai/${sub}`, { source: 'host-builtin' })
       }
     }

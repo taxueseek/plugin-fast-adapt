@@ -15,7 +15,9 @@ node scripts/log-doctor.mjs [--logs <目录>] [--limit 5] [--pattern '^startup-'
 
 宿主启动失败（`StartupError`、端口占用、未声明 inject、客户端入口死链）此前要人工逐个 grep `~/.dsh/logs/startup-*.log`，再从 300 多行的 JS 字面量里抠 `failedPlugins` 与 `waitingForServices`。本脚本把这条排障路径固化：解析每份 startup 日志的头部元信息与多行 error 块、消息数组（容忍宿主的 `[length]: N` 伪数组标记），抽取预置信号，汇总成按根因分组的诊断并给可执行动作。
 
-输出：`runs`（每份日志的 meta、failedPlugins、waitingForServices、signals）、`signalSummary`（按出现次数排序的信号加动作）、`verdict`（`clean`/`warnings`/`host-failure`）。非 startup 日志（maintain、env-sweeper、web-restart）只按全文扫信号。
+输出：`runs`（每份日志的 meta、failedPlugins、waitingForServices、inactiveEntries、signals）、`crashReports`（桌面 APP 崩溃报告）、`signalSummary`（按出现次数排序的信号加动作）、`verdict`（`clean`/`warnings`/`host-failure`）。非 startup 日志（dsh-web、maintain、env-sweeper、web-restart）全文扫信号，并抽出 `inactiveEntries`：宿主「N entries did not activate」警告下的每一条，带条目 id、包名和错误原文。错误是「already owned by process」一类时另报 `resource-locked`，那是 web 与 APP 同时开在抢同一份资源，不是插件代码缺陷。
+
+**桌面 APP 的日志不在 `~/.dsh/logs/`。** APP 主进程的 stdout/stderr 接 `/dev/null`，宿主 stderr 只在内存留 64KB，唯一落盘的是致命错误时写的崩溃报告 `~/Library/Logs/DeepSeek Harness/crash-<时间>-<host|web-boot|renderer|main>.log`（只留最近 10 份）。log-doctor 默认一并读取（`--crash-dir` 可改），解析出来源、阶段、宿主诊断里的失败插件，以及渲染进程的报错尾巴。客户端半卡 loading 的证据主要在渲染进程那一段。APP 没崩就不会有报告，也就没有要追溯的故障。
 
 **边界**：日志是宿主写的 JS 字面量而非 JSON，只做行级启发式解析，解析不到的字段留 `null` 不猜；信号是文本命中，动作是「怎么确认、怎么修」的第一步，不替用户拍板。
 
@@ -30,11 +32,12 @@ node scripts/env-doctor.mjs <插件目录>
 输出 JSON，本车道重点看六段：
 
 - `globalDsh`：全局安装的 DSH 版本和位置
+- `desktopApp`：桌面 APP 自己捆的宿主版本（从 `app.asar` 只读取出）。APP 不用 npm 全局那份宿主，两者错开时带 `mismatch`：desktop profile 的结论以 APP 版本为准
 - `overlayFindings`：profiles 覆盖层里与主安装脱节的包，带 severity 和原因
 - `sharedFarmFindings`：共享 node_modules 农场（`~/.dsh/profiles/node_modules`）的悬空软链，带 `brokenCount` 与 `hostBackedBroken`（指向宿主安装树的是「宿主升级后包被移除」那一类，标 critical）
 - `runningProcesses`：正在跑的 DSH 宿主进程（改 Host 侧代码后必须重启它）
 - `activation`：插件启用就绪度。构建产物在不在、各 profile 挂没挂载、声明的 inject 服务在该 profile 有没有提供方特征（Cordis 静默 pending 风险）。目标不是插件形态（package.json 无 `dsh` 命名空间、无 `@deepseek-ai/*` 依赖）时记 `N/A` 不检查，否则按插件规则跑纯工具仓会把「无 main 入口」误报成 ERROR（2026-10-25 自审实录）。入口解析按 Node 语义，`exports['.']` 优先于 `main`，无 `main` 但入口写在 `exports` 的包不会再被误报
-- `activation.client`：客户端半（dsh.client）三层判定，声明形状（合成器 boot 即 throw）、`./client` 产物（报 client bundles not found）、inject 目标名册死链（entry 卡 loading，整次 web boot 失败）。web profile 与桌面 APP 共用同一套 platform:web 前端，两端一视同仁。名册证据分强弱：宿主内置、bundles 列名、overlay 挂载行为属强证据直过；包在依赖里但无行证据报 info 弱档让人确认（宿主是否自动挂载，静态分析判不了）。2026-10-25 实录：宿主半冒烟全绿、桌面 APP 起不来，真凶就是客户端半死注入
+- `activation.client`：客户端半（dsh.client）三层判定，声明形状（合成器 boot 即 throw）、`./client` 产物（报 client bundles not found）、inject 目标名册死链（entry 卡 loading，整次 web boot 失败）。web profile 与桌面 APP 共用同一套 platform:web 前端，两端一视同仁。宿主 bundle 里按 profile 名开关的行（`disabled: !!js "ctx.get('profileContext')?.name !== 'desktop'"`，如 `ui-sidebar-browser`）只算进对应 profile 的名册，web 上 inject 它会如实报死链；其他判不了的 `!!js` 表达式按两端都有处理。名册证据分强弱：宿主内置、bundles 列名、overlay 挂载行为属强证据直过；包在依赖里但无行证据报 info 弱档让人确认（宿主是否自动挂载，静态分析判不了）。2026-10-25 实录：宿主半冒烟全绿、桌面 APP 起不来，真凶就是客户端半死注入
 
 ## 三类高频环境故障
 
