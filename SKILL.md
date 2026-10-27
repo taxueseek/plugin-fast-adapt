@@ -23,18 +23,7 @@ DSH 插件升级适配的主入口。三条车道各管一件事，先判意图�
 node scripts/run.mjs <插件目录> [--target <版本>] [--from <版本>] [--no-clone] [--no-smoke] [--no-typecheck] [--no-log] [--real-smoke]
 ```
 
-环境→定版→指南→扫描→体检→冒烟→typecheck 一条命令跑完，出一份统一 JSON 报告并写本地运行日志。扫描窗口自动取「插件在宿主包上声明的 peer 下限 → 宿主版本」的走廊，`--from`/`--target` 可覆盖，倒挂自动回退并留痕。`--real-smoke` 默认关，显式启用后桥接原仓库 `verify-runtime.mjs`，补一档干净 profile 的真装真启。退出码：0 干净，2 有 critical/high 命中、typecheck 红或真冷启动失败。
-
-每次运行写本地日志（`~/.local/state/dsh-plugin-fast-adapt/runs/`，一次一个自包含 JSON 加 index.jsonl 一行摘要）：
-
-```sh
-node scripts/run-log.mjs list [--limit 20]                    # 最近运行一览（含工具版本@commit）
-node scripts/run-log.mjs show <id|--latest>                   # 单次全文
-node scripts/run-log.mjs sanitize <id|--latest> [--out 文件]  # 脱敏后才可外发
-node scripts/run-log.mjs doctor [--logs <目录>]               # 运行日志 × 宿主启动日志交叉核对
-```
-
-`doctor` 是「插件报错 / 装了没生效」的第一站：运行日志给代码侧状态（phases 三态、命中、体检分），宿主 startup 日志给装载侧状态（failedPlugins、waitingForServices），一条命令两边证据并排。三态判定：宿主日志干净则状态一致；宿主报了它而最近一次扫描干净，嫌疑在装载/挂载/环境侧，转环境车道；两边都有问题先按运行日志的命中清代码。
+环境→定版→指南→扫描→体检→冒烟→typecheck 一条命令跑完，出一份统一 JSON 报告并写本地运行日志。退出码：0 干净，2 有 critical/high 命中、typecheck 红或真冷启动失败。扫描窗口、`--real-smoke`、运行日志（`run-log.mjs list/show/sanitize/doctor`）的细节见 `sub-skills/adapt/SKILL.md`。「插件报错 / 装了没生效」的第一站是 `node scripts/run-log.mjs doctor`，它把运行日志和宿主启动日志并排核对。
 
 ## 技能面同步（可选）
 
@@ -62,16 +51,13 @@ node scripts/sync-skill.mjs --dest <下游技能目录>            # 同步
 - **自愈默认 dry-run**：`env-heal` 不加 `--apply` 只报告，加了也是移动不删除（进 `~/.dsh/.trash/<日期>/`）。
 - **不改 DSH 本体**，不动 `~/.dsh` 下的配置和 profile 声明。
 - **不自动改插件代码**：只报命中和官方修法；`plugin-audit --peer-patch` 也只打印建议，不写 `package.json`。
-- **网络只用在「取官方源」这一步**：定版本读 npm 的 dist-tags，取指南 clone 官方仓库。两处都有超时，失败明确报错而非静默跳过；dist-tags 有 1 小时缓存，网络失败降级用旧缓存并标 stale；指南优先复用本机已有 clone，`--no-clone` 可跳过。
+- **网络只用在「取官方源」这一步**：定版本读 npm 的 dist-tags，取指南 clone 官方仓库。两处都有超时，失败明确报错而非静默跳过；dist-tags 有 1 小时缓存，网络失败降级用旧缓存并标 stale；上游 tag 未打导致的 clone 失败记 1 小时否定缓存（dist-tags 一变即作废），期间不重复拉取；指南优先复用本机已有 clone，`--no-clone` 可跳过。
 - **日志只落本机**，含本地路径与用户名，外发前必须 `sanitize`。
 
-## 按需读取
+## 按需读取（车道之外）
 
 | 场景 | 读什么 |
 | --- | --- |
-| 适配六步细节、扫描窗口、接缝查询、性能体检 | `sub-skills/adapt/SKILL.md` |
-| 造插件、五形态契约、秒验与体检门分层 | `sub-skills/build/SKILL.md` |
-| 环境巡检、覆盖层残留、宿主半与客户端半、启动日志诊断 | `sub-skills/diagnose/SKILL.md` |
 | 官方指南覆盖不到的老插件 | `references/legacy-migration-sop.md` |
 | 扫描降噪规则与实测依据 | `references/heuristics.md` |
 | 给插件自己的仓库加提交时门禁 | `references/ci-snippet.md` |
@@ -82,7 +68,7 @@ node scripts/sync-skill.mjs --dest <下游技能目录>            # 同步
 npm test
 ```
 
-136 项断言，覆盖扫描器不误报（注释和字符串里的同名词不算命中）、不漏报、版本窗口与 real semver 判定、目标形态判定、指南出处锚点、接缝查询双源结论、运行日志与宿主日志交叉核对、一键编排各档位、冒烟验证（含未声明 inject 契约拦截）、四维审计（含 peer 修补）、启用诊断（宿主半与客户端半）、环境层三处盲区、创作脚手架与体检门、日志诊断、下游同步、跨平台模拟、文档断言数与技能面 description 长度门禁、扫描性能回归。自检零网络、零外部依赖，任何机器上都能跑。
+140 项断言，覆盖扫描器不误报（注释和字符串里的同名词不算命中）、不漏报、版本窗口与 real semver 判定、目标形态判定、指南出处锚点、接缝查询双源结论、运行日志与宿主日志交叉核对、一键编排各档位、冒烟验证（含未声明 inject 契约拦截）、四维审计（含 peer 修补）、启用诊断（宿主半与客户端半）、环境层三处盲区、创作脚手架与体检门、日志诊断、下游同步、跨平台模拟、文档断言数与技能面 description 长度门禁、扫描性能回归。自检零网络、零外部依赖，任何机器上都能跑。
 
 提交前门禁：`git config core.hooksPath .githooks`（一次性）启用 pre-commit 钩子，commit 时自动跑本自检，改完真源忘了同步在这一刻被拦。
 
@@ -96,7 +82,7 @@ npm test
 | `run-log.mjs` | 运行日志查看（list/show）与脱敏导出（sanitize）、日志交叉核对（doctor） |
 | `env-doctor.mjs` | 探测本机 DSH 环境：版本、覆盖层、共享农场悬空软链、两层 patch、插件、进程、宿主半与客户端半启用就绪度 |
 | `env-heal.mjs` | 覆盖层旧包自愈（默认 dry-run） |
-| `guide-sync.mjs` | 定目标版本 + 取官方升级指南（dist-tags 带 1 小时缓存） |
+| `guide-sync.mjs` | 定目标版本 + 取官方升级指南（dist-tags 与缺失 tag 各带 1 小时缓存） |
 | `code-scan.mjs` | 扫描插件代码，匹配官方变更锚点（带指南文件与行号出处） |
 | `seams.mjs` | 接缝查询：包名或 API 符号在指南锚点表与本机宿主里的双源结论 |
 | `quick-smoke.mjs` | 内存级 Cordis 冒烟，含 Mock 兜底披露 |

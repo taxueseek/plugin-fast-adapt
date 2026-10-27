@@ -65,8 +65,10 @@ export function correlateRuns({ limit = 20, logsDir = DEFAULT_LOGS_DIR } = {}) {
       }
     }
     const codeSideClean = run.phases?.scan === 'ok' && !(run.criticalOrHigh > 0)
+    // 扫描没跑（skipped/error/旧条目无 phases）时代码侧是未知，不能与宿主日志干净合成「一致」
+    const codeSideUnknown = run.phases?.scan !== 'ok'
     const verdict = hits.length === 0
-      ? 'host-log-clean'
+      ? codeSideUnknown ? 'host-log-clean-scan-unknown' : 'host-log-clean'
       : codeSideClean
         ? 'log-hit-scan-clean'
         : 'log-hit-scan-hit'
@@ -85,7 +87,9 @@ export function correlateRuns({ limit = 20, logsDir = DEFAULT_LOGS_DIR } = {}) {
       advice:
         verdict === 'host-log-clean'
           ? '宿主日志无该插件的失败记录——状态一致，无事可做'
-          : verdict === 'log-hit-scan-clean'
+          : verdict === 'host-log-clean-scan-unknown'
+            ? '宿主日志无该插件的失败记录，但最近一次 run 没跑扫描（看 scan.reason）——代码侧未核查，不算一致'
+            : verdict === 'log-hit-scan-clean'
             ? '宿主日志报了它、但最近一次 run 的扫描干净——嫌疑在装载/挂载/环境侧（env-doctor 看 activation 双半），不在代码踩雷'
             : '宿主日志与最近一次 run 都有问题——先按 run 的命中清代码，再回来看宿主日志是否消停',
     }

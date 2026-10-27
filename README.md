@@ -2,7 +2,7 @@
 
 **简体中文** | [English](README.en.md)
 
-[![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D22.13-blue.svg)](package.json) [![外部依赖](https://img.shields.io/badge/外部依赖-0-blue.svg)](#依赖与自检) [![自检](https://img.shields.io/badge/自检-136项断言-brightgreen.svg)](#依赖与自检)
+[![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D22.13-blue.svg)](package.json) [![外部依赖](https://img.shields.io/badge/外部依赖-0-blue.svg)](#依赖与自检) [![自检](https://img.shields.io/badge/自检-140项断言-brightgreen.svg)](#依赖与自检)
 
 > **DSH 每次发新版，老插件就可能启动不了。** 这个技能直连 DeepSeek 官方升级指南，扫你的插件代码，报出踩了哪几条破坏性变更、官方给的修法是什么；还能一条命令从零造出可运行的插件。
 
@@ -13,7 +13,7 @@
 | 上游发新版 | 无需任何改动，直接可用（直连官方源，不维护知识卡片） |
 | 扫描误报 | 12 处 → 0（四层降噪） |
 | 验证一次改动 | 3600 秒真宿主冷启动 → 毫秒级内存冒烟 |
-| 自检 | 136 项断言，离线可跑 |
+| 自检 | 140 项断言，离线可跑 |
 | 外部依赖 | 0（只用 Node 内置模块 + `git`/`npm` 命令） |
 | 网络 | 只取官方源时用，核心步骤全离线 |
 | 造插件 | 一条命令出五形态可运行插件，生成即验证 |
@@ -35,7 +35,7 @@ DSH（DeepSeek Harness）是一个「所有功能都以插件形式存在」的 
 - **验证便宜**：内存级 Cordis 冒烟毫秒到秒级出结果，不用真宿主冷启动；需要真证据时 `--real-smoke` 再补干净 profile 真装真启档
 - **零外部依赖**：只用 Node 内置模块加 `git`/`npm` 命令，没有 TypeScript、没有 AST 库、没有网络请求库
 - **网络依赖很轻**：只有「取官方源」走网络——定版本读 npm 的 dist-tags、取指南 clone 官方仓库。dist-tags 缓存 1 小时，失败降级旧缓存并明确标 stale；指南优先复用本机已有 clone，`--no-clone` 可跳过。环境巡检、代码扫描、冒烟、体检、日志诊断、接缝查询全离线
-- **可复现**：136 项自检离线可跑；CI 在 push 和 PR 上自动跑
+- **可复现**：140 项自检离线可跑；CI 在 push 和 PR 上自动跑
 - **不止适配**：`scaffold.mjs` 一条命令生成五形态可运行插件（真基类装载验证），`write-gate.mjs` 写完出「出生证」
 - **边界诚实**：冒烟通过不等于宿主兼容，这句话写在工具输出里；体检的软指标只透传，不替用户说「合格」
 
@@ -192,7 +192,7 @@ node scripts/write-gate.mjs <插件目录>   # 出生证：硬门禁自动判，
 自检：
 
 ```sh
-npm test   # node scripts/self-test.mjs，136 项断言
+npm test   # node scripts/self-test.mjs，140 项断言
 ```
 
 开发者建议启用提交前门禁（一次性）：`git config core.hooksPath .githooks`——commit 时自动跑自检，改完真源忘了 sync-skill 在这一刻被拦。

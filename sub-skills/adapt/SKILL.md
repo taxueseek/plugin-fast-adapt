@@ -5,7 +5,7 @@ description: plugin-fast-adapt 的升级适配车道。查 DeepSeek 官方最新
 
 # 适配升级车道
 
-把「插件适配到新版 DSH」拆成四步，每步一个脚本，每步都能单独跑；另有两个可选步骤补全「修完即验、升级顺带优化」。以下命令都在技能根目录执行，`<插件目录>` 指被查插件的仓库根。
+把「插件适配到新版 DSH」拆成四步，每步一个脚本，每步都能单独跑；另有两个可选步骤补全「修完即验、升级顺带优化」。以下命令都在工具根目录执行，即本文件真实路径往上两级、含 `scripts/` 的那一层。本目录常以软链别名加载，shell 的 `cd ../..` 会按软链走错地方，用 `cd "$(realpath <本文件所在目录>)/../.."` 进入。`<插件目录>` 指被查插件的仓库根。
 
 环境本身有问题（覆盖层旧包、悬空软链、客户端半死链）先转 `../diagnose/SKILL.md`，别在坏环境上做适配判断。
 
@@ -100,7 +100,7 @@ node scripts/run-log.mjs sanitize <id|--latest> [--out 文件]  # 脱敏后才�
 node scripts/run-log.mjs doctor [--logs <目录>]               # 运行日志 × 宿主启动日志交叉核对
 ```
 
-`doctor` 的三态判定：宿主日志干净则状态一致；宿主报了它而最近一次扫描干净，嫌疑在装载/挂载/环境侧，转 `../diagnose/SKILL.md` 看 activation 双半；两边都有问题先按运行日志的命中清代码。日志不出本机，对外反馈前必须先 `sanitize`（home 前缀转 `~`、用户名转 `<user>`、机器名转 `<host>`、邮箱转 `<email>`，目录结构保留）。`--offline` 跳过 guide-sync 供自检零网络用。
+`doctor` 的判定：宿主日志干净且最近一次 run 扫描跑过，则状态一致；宿主日志干净但扫描没跑（`host-log-clean-scan-unknown`），代码侧未核查，看 `scan.reason`；宿主报了它而最近一次扫描干净，嫌疑在装载/挂载/环境侧，转 `../diagnose/SKILL.md` 看 activation 双半；两边都有问题先按运行日志的命中清代码。日志不出本机，对外反馈前必须先 `sanitize`（home 前缀转 `~`、用户名转 `<user>`、机器名转 `<host>`、邮箱转 `<email>`，目录结构保留）。`--offline` 跳过 guide-sync 供自检零网络用。
 
 ## 第五步（可选）：修完秒验
 

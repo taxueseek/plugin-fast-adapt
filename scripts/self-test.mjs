@@ -14,7 +14,7 @@ import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { scanSource, compareVersions, parseVersion, satisfiesRange, computeWindow, isPluginForm } from './lib/scanner.mjs'
 import { parseGuideMarkdown, extractAnchors, listGuideVersions, loadGuides } from './lib/guide-parser.mjs'
-import { resolveTargetVersion, fetchNpmMetadata, runGuideSync, guideVersionFor, upstreamCheckExit } from './guide-sync.mjs'
+import { resolveTargetVersion, fetchNpmMetadata, runGuideSync, guideVersionFor, upstreamCheckExit, readMissingTag, recordMissingTag } from './guide-sync.mjs'
 import { anchorMatches, verifyPackagesAgainstHost, pickScanRoots, scanPluginFromGuideRoot } from './code-scan.mjs'
 import { runQuickSmoke } from './quick-smoke.mjs'
 import { auditPlugin, peerPatchFor } from './plugin-audit.mjs'
@@ -633,6 +633,22 @@ test('三条车道结构完整，主技能有路由表', () => {
   }
 })
 
+test('车道文档里的命令脚本都在工具根存在，且声明了工具根工作目录', () => {
+  // 车道目录以软链别名单独加载时没有 scripts/，旧文档写「在技能根执行」会指向不存在的路径
+  const root = path.resolve(import.meta.dirname, '..')
+  let checked = 0
+  for (const lane of ['adapt', 'build', 'diagnose']) {
+    const text = fs.readFileSync(path.join(root, 'sub-skills', lane, 'SKILL.md'), 'utf8')
+    assert.ok(text.includes('工具根目录执行'), `sub-skills/${lane} 应声明命令在工具根目录执行`)
+    assert.ok(!text.includes('技能根目录执行'), `sub-skills/${lane} 仍写「技能根目录执行」，单独加载时找不到 scripts/`)
+    for (const m of text.matchAll(/node (scripts\/[\w./-]+\.mjs)/g)) {
+      assert.ok(fs.existsSync(path.join(root, m[1])), `sub-skills/${lane} 引用的 ${m[1]} 不存在`)
+      checked++
+    }
+  }
+  assert.ok(checked >= 10, `应至少核对 10 处命令，实际 ${checked} 处`)
+})
+
 test('文档宣称的断言数与实际一致（防手工漂移）', () => {
   // 这个数字已漂过两次（49→50→54 都是事后手补）；现在让自检拦住它
   const root = path.resolve(import.meta.dirname, '..')
@@ -717,6 +733,30 @@ test('runGuideSync 缓存根可注入：合成元数据只落指定根，真实�
   assert.strictEqual(onDisk.data['dist-tags'].latest, '0.2.1-rc.2', '元数据应写进注入的缓存根')
   const realAfter = fs.existsSync(realCache) ? fs.readFileSync(realCache, 'utf8') : null
   assert.strictEqual(realAfter, realBefore, '自检不得写真实用户缓存（实录：合成 dist-tags 毒化真实 1h TTL 读数）')
+})
+
+test('否定缓存：只记 tag 不存在，dist-tags 变化或过期即作废，网络类失败不记', () => {
+  const cacheRoot = tmpPluginDir('missing-tags')
+  const tags = { latest: '0.2.1-rc.2', next: '0.2.1-rc.4' }
+  const missing = "fatal: Remote branch dsh-v0.2.1-rc.4 not found in upstream origin"
+  assert.strictEqual(recordMissingTag('dsh-v0.2.1-rc.5', tags, 'fatal: unable to access: Could not resolve host', { cacheRoot }), false, '网络失败不该进否定缓存')
+  assert.strictEqual(readMissingTag('dsh-v0.2.1-rc.5', tags, { cacheRoot }), null)
+  assert.strictEqual(recordMissingTag('dsh-v0.2.1-rc.4', tags, missing, { cacheRoot }), true)
+  assert.ok(readMissingTag('dsh-v0.2.1-rc.4', tags, { cacheRoot }), 'TTL 内同一 dist-tags 应命中')
+  assert.strictEqual(readMissingTag('dsh-v0.2.1-rc.4', { ...tags, next: '0.2.1-rc.5' }, { cacheRoot }), null, 'dist-tags 变了应作废')
+  assert.strictEqual(readMissingTag('dsh-v0.2.1-rc.4', tags, { cacheRoot, maxAgeMs: 0 }), null, '过期应作废')
+})
+
+test('runGuideSync：否定缓存命中时不再 clone，报 negativeCache', async () => {
+  const cacheRoot = tmpPluginDir('missing-tags-sync')
+  const distTags = { latest: '0.2.1-rc.2', next: '0.2.1-rc.4' }
+  const fetcher = async () => ({ ok: true, json: async () => distTags })
+  recordMissingTag('dsh-v0.2.1-rc.4', distTags, 'fatal: Remote branch dsh-v0.2.1-rc.4 not found in upstream origin', { cacheRoot })
+  const emptyClone = tmpPluginDir('missing-tags-noclone')
+  const result = await runGuideSync('0.2.1-rc.3', { clone: true, fetcher, localClone: emptyClone, cacheRoot })
+  assert.strictEqual(result.guides.source, 'error')
+  assert.strictEqual(result.guides.negativeCache, true, '命中否定缓存应跳过 clone（否则自检会打网络）')
+  assert.ok(result.guides.error.includes('not found'), '错误原文应透传')
 })
 
 // ── quick-smoke：修完秒验 ────────────────────────────────────────────────────
@@ -1088,6 +1128,15 @@ test('code-scan：宿主实测核查——包还在降级 info，包没了维持
 
 // ── run.mjs 一键编排 + 运行日志 ──────────────────────────────────────────────
 
+test('run：插件目录写在布尔开关之后也能识别（旧实现报用法错误）', () => {
+  const dir = tmpPluginDir('run-argv')
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 't-argv', version: '1.0.0' }))
+  const out = execFileSync(process.execPath, [path.join(SCRIPTS, 'run.mjs'), '--offline', '--no-smoke', '--no-typecheck', '--no-log', dir, '--target', '0.2.1-rc.3'], { encoding: 'utf8' })
+  const report = JSON.parse(out.slice(0, out.lastIndexOf('}') + 1))
+  assert.strictEqual(report.plugin.name, 't-argv')
+  assert.strictEqual(report.window.target, '0.2.1-rc.3', '--target 的值不应被当成插件目录')
+})
+
 test('run：离线全链编排产出统一报告并写日志；sanitize 脱敏身份信息', async () => {
   const dir = tmpPluginDir('run-e2e')
   fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
@@ -1269,6 +1318,7 @@ test('run-log doctor：运行日志 × 宿主启动日志交叉核对', () => {
     const cleanRun = { time: new Date().toISOString(), durationMs: 10, scan: { findingCount: 0, criticalOrHigh: 0 }, smoke: { success: true }, typecheck: { status: 'ok' }, audit: { overallScore: 100 } }
     writeRunLog({ ...cleanRun, plugin: { name: 't-doc', version: '1.0.0' } }, { toolDir: null })
     writeRunLog({ ...cleanRun, plugin: { name: 't-clean', version: '1.0.0' } }, { toolDir: null })
+    writeRunLog({ ...cleanRun, scan: { findingCount: null, skipped: true }, plugin: { name: 't-noscan', version: '1.0.0' } }, { toolDir: null })
 
     const report = correlateRuns({ logsDir })
     const hit = report.plugins.find((p) => p.plugin === 't-doc')
@@ -1280,6 +1330,10 @@ test('run-log doctor：运行日志 × 宿主启动日志交叉核对', () => {
     assert.strictEqual(hit.verdict, 'log-hit-scan-clean', '扫描干净但宿主报它 → 嫌疑在装载侧')
     assert.ok(hit.advice.includes('env-doctor'), '建议应指向 env-doctor 的 activation')
     assert.strictEqual(clean.verdict, 'host-log-clean')
+    // 扫描没跑时宿主日志干净不等于一致（实录：5 次 scan=skipped 全被判「无事可做」）
+    const noscan = report.plugins.find((p) => p.plugin === 't-noscan')
+    assert.strictEqual(noscan.verdict, 'host-log-clean-scan-unknown')
+    assert.ok(noscan.advice.includes('scan.reason'), '建议应指向 scan.reason')
     assert.strictEqual(report.host.verdict, 'host-failure', 'undeclared-inject 信号应让宿主总判为 host-failure')
   } finally {
     delete process.env.DSH_PFA_RUNS_DIR

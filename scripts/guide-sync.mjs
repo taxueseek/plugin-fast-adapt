@@ -204,6 +204,44 @@ export function cloneGuides(targetVersion, { cacheRoot = CACHE_ROOT } = {}) {
   return { source: 'clone', root: path.join(dest, 'docs', 'upgrade-guide'), versions: listGuideVersions(path.join(dest, 'docs', 'upgrade-guide')) }
 }
 
+// 否定缓存：npm 发版先于 harness 打 tag（2026-10-27 实测 rc.4 已上 npm 20 多小时，
+// tag 仍不存在），这期间每次 run 都重试一次注定失败的 clone，白花约 0.9s。
+// 只记「远端没有这个 tag」，网络类失败不记；TTL 与 dist-tags 缓存相同，
+// dist-tags 变了也立即作废（上游可能刚补了 tag 又发了新版）。
+const MISSING_TAG_RE = /Remote branch \S+ not found/
+
+function missingTagCachePath(cacheRoot) {
+  return path.join(cacheRoot, 'missing-tags.json')
+}
+
+export function readMissingTag(tag, distTags, { cacheRoot = CACHE_ROOT, maxAgeMs = METADATA_TTL_MS } = {}) {
+  try {
+    const entry = JSON.parse(fs.readFileSync(missingTagCachePath(cacheRoot), 'utf8'))[tag]
+    if (!entry || Date.now() - entry.at >= maxAgeMs) return null
+    if (JSON.stringify(entry.distTags) !== JSON.stringify(distTags ?? null)) return null
+    return entry
+  } catch {
+    return null
+  }
+}
+
+export function recordMissingTag(tag, distTags, error, { cacheRoot = CACHE_ROOT } = {}) {
+  if (!MISSING_TAG_RE.test(error)) return false
+  const file = missingTagCachePath(cacheRoot)
+  let all = {}
+  try {
+    all = JSON.parse(fs.readFileSync(file, 'utf8'))
+  } catch {}
+  all[tag] = { at: Date.now(), distTags: distTags ?? null, error }
+  try {
+    fs.mkdirSync(cacheRoot, { recursive: true })
+    fs.writeFileSync(file, JSON.stringify(all))
+    return true
+  } catch {
+    return false
+  }
+}
+
 // ── 主流程 ──────────────────────────────────────────────────────────────────
 
 // 盯梢退出码（--check 模式）：1=上游有新版（cron/launchd/agent 轮询的非零信号，
@@ -225,10 +263,18 @@ export async function runGuideSync(localVersion, { clone = false, fetcher = null
   if (guideVersion) {
     guides = syncGuides(guideVersion, { localClone: localClone ?? findLocalClone(), cacheRoot })
     if (guides.source === 'unavailable' && clone) {
-      try {
-        guides = cloneGuides(guideVersion, { cacheRoot })
-      } catch (err) {
-        guides = { source: 'error', root: null, versions: [], error: err.message }
+      const tag = `dsh-v${guideVersion}`
+      const distTags = metadata['dist-tags']
+      const known = readMissingTag(tag, distTags, { cacheRoot })
+      if (known) {
+        guides = { source: 'error', root: null, versions: [], error: known.error, negativeCache: true }
+      } else {
+        try {
+          guides = cloneGuides(guideVersion, { cacheRoot })
+        } catch (err) {
+          recordMissingTag(tag, distTags, err.message, { cacheRoot })
+          guides = { source: 'error', root: null, versions: [], error: err.message }
+        }
       }
     }
   }
@@ -257,7 +303,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.met
       if (result.guides.root) {
         process.stderr.write(`指南来源: ${result.guides.source} (${result.guides.versions.length} 个版本)\n`)
       } else if (result.guides.error) {
-        process.stderr.write(`指南获取失败: ${result.guides.error}\n`)
+        process.stderr.write(`指南获取失败${result.guides.negativeCache ? '（否定缓存命中，1 小时内或 dist-tags 变化前不重试）' : ''}: ${result.guides.error}\n`)
       } else {
         process.stderr.write('指南来源: 无（无目标版本或未拉取）\n')
       }

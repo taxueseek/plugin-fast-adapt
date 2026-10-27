@@ -30,14 +30,29 @@ const TOOL_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 const SCRIPTS_DIR = path.join(TOOL_DIR, 'scripts')
 const SPAWN_SHELL = process.platform === 'win32'
 
-const args = process.argv.slice(2)
-const flag = (name) => args.includes(`--${name}`)
-const valueOf = (name) => {
-  const at = args.indexOf(`--${name}`)
-  return at !== -1 ? args[at + 1] : null
+// 只有 --target/--from 带值，其余都是布尔开关。旧实现按「前一个参数不以 -- 开头」
+// 认插件目录，`run.mjs --offline <目录>` 会把目录当成 --offline 的值而报用法错误。
+const VALUE_FLAGS = new Set(['target', 'from'])
+
+function parseArgv(argv) {
+  const positional = []
+  const flags = {}
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]
+    if (!arg.startsWith('--')) {
+      positional.push(arg)
+      continue
+    }
+    const name = arg.slice(2)
+    flags[name] = VALUE_FLAGS.has(name) ? argv[++i] ?? null : true
+  }
+  return { positional, flags }
 }
-const pluginDirArg = args.find((a, i) => !a.startsWith('--') && (i === 0 || !args[i - 1].startsWith('--')))
-const pluginDir = path.resolve(pluginDirArg || process.cwd())
+
+const { positional, flags: parsedFlags } = parseArgv(process.argv.slice(2))
+const flag = (name) => parsedFlags[name] === true
+const valueOf = (name) => (VALUE_FLAGS.has(name) ? parsedFlags[name] ?? null : null)
+const pluginDir = path.resolve(positional[0] || process.cwd())
 
 function runStep(script, scriptArgs, label, stages) {
   const started = Date.now()
@@ -264,6 +279,7 @@ if (!flag('no-typecheck')) runTypecheck(pluginDir, stages)
 const realSmoke = flag('real-smoke') ? runRealSmoke(pluginDir) : null
 
 const durationMs = Date.now() - startedAt
+const guideError = stages.guides?.error || stages.guides?.output?.guides?.error || null
 const report = {
   time: new Date().toISOString(),
   plugin: { name: pluginPkg.name, version: pluginPkg.version, dir: pluginDir },
@@ -285,11 +301,14 @@ const report = {
     : {
         findingCount: null,
         skipped: true,
-        reason: stages.guides?.error
-          ? `指南拉取失败: ${String(stages.guides.error).slice(0, 200)}`
+        // guide-sync 拉取失败时仍以退出码 0 返回，错误在 output.guides.error 里；
+        // 只看 stages.guides.error（进程级失败）会把「tag 不存在」报成「无指南根或无窗口」
+        reason: guideError
+          ? `指南拉取失败: ${String(guideError).slice(0, 200)}`
           : stages.scan?.error
             ? `扫描执行失败: ${String(stages.scan.error).slice(0, 200)}`
             : '无指南根或无窗口',
+        // error 只认进程级失败：上游 tag 未打属于预期内的跳过，phases 仍记 skipped
         error: Boolean(stages.guides?.error || stages.scan?.error),
       },
   audit: auditReport
