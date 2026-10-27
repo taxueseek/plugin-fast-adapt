@@ -27,6 +27,7 @@ import { loadGuides, listGuideVersions } from './lib/guide-parser.mjs'
 import { pickMigrationSteps } from './code-scan.mjs'
 import { syncGuides } from './guide-sync.mjs'
 import { findGlobalDsh } from './env-doctor.mjs'
+import { packageOnHost, symbolSearchRoots } from './lib/host-scope.mjs'
 
 const CACHE_ROOT = path.join(os.homedir(), '.cache', 'dsh-plugin-fast-adapt')
 
@@ -128,29 +129,23 @@ export function searchGuideEvidence(guides, query) {
 
 // ── 宿主侧：node_modules 一手事实 ────────────────────────────────────────────
 
-function nodeModulesScope(hostInfo) {
-  return hostInfo?.location ? path.dirname(path.dirname(hostInfo.location)) : null
-}
-
-// 包是否还在目标宿主的安装目录里（与 code-scan.verifyPackagesAgainstHost 同判据）。
+// 包是否还在目标宿主的安装目录里（与 code-scan.verifyPackagesAgainstHost 共用
+// lib/host-scope.mjs 的判据：套件子包在宿主主包内部的 node_modules 下，不在全局根）。
 // 裸的 dsh-* 名字按宿主套件惯例归一到 @deepseek-ai/ scope 再查——用户查
 // 「dsh-settings」指的就是那个包，不是宿主源码里的某个词。
 function checkPackageOnHost(query, hostInfo) {
-  const scope = nodeModulesScope(hostInfo)
-  if (!scope) return { kind: 'package', status: 'unknown', checkedWhere: null }
   const normalized = query.includes('/') ? query : /^dsh-/.test(query) ? `@deepseek-ai/${query}` : query
   const pkg = packageBase(normalized)
-  const dir = path.join(scope, pkg)
-  const present = fs.existsSync(path.join(dir, 'package.json'))
-  return { kind: 'package', status: present ? 'present' : 'absent', checkedWhere: dir }
+  const { status, checkedWhere } = packageOnHost(pkg, hostInfo)
+  return { kind: 'package', status, checkedWhere }
 }
 
-// 符号在宿主套件源码里有没有文本命中（搜索根 = location 的上一级，即 @deepseek-ai/*
-// 套件目录，覆盖 dsh 主包与 dsh-* 子包）。文本证据是弱证据：命中不代表 API 对插件
+// 符号在宿主套件源码里有没有文本命中（搜索根 = 宿主主包 + 每个套件作用域，
+// 覆盖 dsh 主包与 dsh-* 子包）。文本证据是弱证据：命中不代表 API 对插件
 // 可用（可能是压缩产物里的内部名），零命中也不代表不存在（可能在别处动态挂载）。
 function checkSymbolOnHost(query, hostInfo) {
-  if (!hostInfo?.location) return { kind: 'symbol', status: 'unknown', checkedWhere: null }
-  const pkgDir = path.dirname(hostInfo.location)
+  const roots = symbolSearchRoots(hostInfo)
+  if (!roots.length) return { kind: 'symbol', status: 'unknown', checkedWhere: null }
   const re = new RegExp(`\\b${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`)
   let files = 0
   let hits = 0
@@ -182,12 +177,12 @@ function checkSymbolOnHost(query, hostInfo) {
       }
     }
   }
-  walk(pkgDir, 0)
+  for (const root of roots) walk(root, 0)
   return {
     kind: 'symbol',
     status: hits > 0 ? 'text-present' : 'text-absent',
     filesScanned: files,
-    checkedWhere: pkgDir,
+    checkedWhere: roots.join(', '),
     caveat: '文本命中是弱证据：命中不代表该 API 对插件可用，零命中只覆盖宿主套件源码目录',
   }
 }

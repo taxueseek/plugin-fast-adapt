@@ -14,6 +14,7 @@ import path from 'node:path'
 import { printJson, scanSource, isDshPackage, compareVersions, packageBase } from './lib/scanner.mjs'
 import { loadGuides, listGuideVersions } from './lib/guide-parser.mjs'
 import { findGlobalDsh } from './env-doctor.mjs'
+import { packageOnHost } from './lib/host-scope.mjs'
 
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', '.trash', 'coverage'])
 const SOURCE_EXT = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'])
@@ -139,30 +140,29 @@ const KIND_ORDER = { package: 0, member: 1, code: 2 }
 //   host-present  → 宿主里还在 → 「装载必炸」不成立，降级 info 留给人工核对
 //   unknown       → 探测不到宿主安装位 → 不改分级，标未核查（不伪造结论）
 export function verifyPackagesAgainstHost(findings, hostInfo = null) {
-  const scope =
-    hostInfo?.location !== null && hostInfo?.location !== undefined
-      ? path.dirname(path.dirname(hostInfo.location)) // …/node_modules/@deepseek-ai/dsh → …/node_modules
-      : null
   let checked = 0
   let downgraded = 0
   const verified = findings.map((finding) => {
     if (finding.kind !== 'package') return finding
     const pkg = packageBase(finding.symbol)
-    let status = 'unknown'
-    if (scope !== null) {
-      checked++
-      status = fs.existsSync(path.join(scope, pkg, 'package.json')) ? 'host-present' : 'host-absent'
-    }
-    if (status === 'host-present') {
+    checked++
+    const { status, checkedWhere } = packageOnHost(pkg, hostInfo)
+    if (status === 'present') {
       downgraded++
       return {
         ...finding,
         severity: 'info',
         verified: status,
+        checkedWhere,
         verificationNote: `实测：${pkg} 仍存在于目标宿主安装目录，guide 只是提及并非移除，「装载必炸」不成立。请核对 guide 原文确认真正的变更主体（如配置取值、某方法的行为）。`,
       }
     }
-    return { ...finding, verified: status, ...(status === 'host-absent' ? { verificationNote: `实测：${pkg} 在目标宿主安装目录不存在，与 guide 声称一致。` } : {}) }
+    return {
+      ...finding,
+      verified: status,
+      ...(checkedWhere ? { checkedWhere } : {}),
+      ...(status === 'absent' ? { verificationNote: `实测：${pkg} 在目标宿主安装目录不存在，与 guide 声称一致。` } : {}),
+    }
   })
   return { findings: verified, checked, downgraded }
 }

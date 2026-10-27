@@ -130,6 +130,7 @@ node scripts/code-scan.mjs <插件目录> <upgrade-guide 目录> <本机版本> 
 
 # 4b. 接缝查询：某个包/API 在官方指南与本机宿主里的双源结论
 #     （指南说没说 × 宿主 node_modules 实测在不在，双源一致才下「已移除」）
+#     套件子包在宿主主包内部的 node_modules 下，路径解析见 lib/host-scope.mjs
 node scripts/seams.mjs dsh-settings
 ```
 

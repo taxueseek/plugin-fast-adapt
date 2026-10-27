@@ -1099,11 +1099,15 @@ test('sync-skill：--check 报告缺失与漂移，同步后归零（含 sub-ski
 
 test('code-scan：宿主实测核查——包还在降级 info，包没了维持 critical，探不到标 unknown', () => {
   const fakeHost = tmpPluginDir('fake-host')
-  // 夹具要同时有 dsh（宿主本体）和 dsh-tools（被核查的兄弟包）
-  fs.mkdirSync(path.join(fakeHost, '@deepseek-ai', 'dsh'), { recursive: true })
+  // 夹具按真实宿主形态：套件子包在宿主主包内部的 node_modules 下
+  // （<nm>/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-*），不在全局根。
+  // 2026-10-27 实测教训：旧夹具把 dsh-tools 平铺在 <nm>/@deepseek-ai/ 下，
+  // 恰好被旧判据（dirname(dirname(location))）命中，掩盖了套件包路径 bug。
+  const suiteDir = path.join(fakeHost, '@deepseek-ai', 'dsh', 'node_modules', '@deepseek-ai')
+  fs.mkdirSync(suiteDir, { recursive: true })
   fs.writeFileSync(path.join(fakeHost, '@deepseek-ai', 'dsh', 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.2.1-rc.3' }))
-  fs.mkdirSync(path.join(fakeHost, '@deepseek-ai', 'dsh-tools'), { recursive: true })
-  fs.writeFileSync(path.join(fakeHost, '@deepseek-ai', 'dsh-tools', 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-tools', version: '0.2.1-rc.3' }))
+  fs.mkdirSync(path.join(suiteDir, 'dsh-tools'), { recursive: true })
+  fs.writeFileSync(path.join(suiteDir, 'dsh-tools', 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-tools', version: '0.2.1-rc.3' }))
   const hostInfo = { version: '0.2.1-rc.3', location: path.join(fakeHost, '@deepseek-ai', 'dsh'), source: 'node_modules' }
 
   const findings = [
@@ -1115,10 +1119,15 @@ test('code-scan：宿主实测核查——包还在降级 info，包没了维持
   assert.strictEqual(checked, 2, '只核查 package 命中')
   const present = verified.find((f) => f.symbol === '@deepseek-ai/dsh-tools')
   assert.strictEqual(present.severity, 'info', '包仍在宿主 → 降级 info')
-  assert.strictEqual(present.verified, 'host-present')
+  assert.strictEqual(present.verified, 'present')
+  assert.strictEqual(
+    present.checkedWhere,
+    path.join(suiteDir, 'dsh-tools'),
+    'checkedWhere 要落在真实解析到的套件目录，不是候选拼接路径',
+  )
   const absent = verified.find((f) => f.symbol === '@deepseek-ai/dsh-ghost')
   assert.strictEqual(absent.severity, 'critical', '宿主确实没有 → 维持 critical')
-  assert.strictEqual(absent.verified, 'host-absent')
+  assert.strictEqual(absent.verified, 'absent')
   const member = verified.find((f) => f.kind === 'member')
   assert.strictEqual(member.verified, undefined, 'member 不做包核查')
   assert.strictEqual(downgraded, 1)
@@ -1227,9 +1236,11 @@ test('指南出处锚点：loadGuides 带文件与标题行号，findings 原样
   }
 })
 
-// 假宿主：<nm>/@deepseek-ai/dsh（主包，含 installBundle 源码）＋ dsh-tools 在、
-// dsh-settings 不在。location 的契约与 findGlobalDsh 一致：宿主包目录（不是包内文件），
-// nodeModulesScope 取 dirname(dirname(location)) 才能落在 node_modules 上。
+// 假宿主：<nm>/@deepseek-ai/dsh（主包，含 installBundle 源码）＋ 套件子包在
+// 主包内部 node_modules 下（dsh-tools 在、dsh-settings 不在）。location 的契约与
+// findGlobalDsh 一致：宿主包目录（不是包内文件）。套件子包的真实位置是
+// <nm>/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-*，2026-10-27 实测教训是
+// 夹具曾把 dsh-tools 平铺在 <nm>/@deepseek-ai/ 下，恰好被旧判据命中而掩盖了 bug。
 function makeFakeHost() {
   const nm = fs.mkdtempSync(path.join(os.tmpdir(), 'fast-adapt-nm-'))
   const mk = (rel, content = '{}') => {
@@ -1237,9 +1248,10 @@ function makeFakeHost() {
     fs.mkdirSync(path.dirname(file), { recursive: true })
     fs.writeFileSync(file, content)
   }
+  const suite = path.join('@deepseek-ai', 'dsh', 'node_modules', '@deepseek-ai')
   mk('@deepseek-ai/dsh/package.json')
   mk('@deepseek-ai/dsh/lib/index.js', 'export function installBundle(spec) { return spec }\n')
-  mk('@deepseek-ai/dsh-tools/package.json')
+  mk(`${suite}/dsh-tools/package.json`)
   return { nm, hostInfo: { version: '0.2.1-rc.3', source: 'test', location: path.join(nm, '@deepseek-ai', 'dsh') } }
 }
 
@@ -1256,6 +1268,15 @@ test('seams：包名查询给双源结论——一致已移除 / 宿主仍在报
     const b = querySeams('dsh-tools', { guideRoot: root, hostInfo })
     assert.strictEqual(b.hostEvidence.status, 'present', '裸 dsh-tools 应按套件包名查宿主')
     assert.strictEqual(b.conclusion.verdict, 'host-present-no-guide-record')
+    assert.strictEqual(
+      b.hostEvidence.checkedWhere,
+      path.join(nm, '@deepseek-ai', 'dsh', 'node_modules', '@deepseek-ai', 'dsh-tools'),
+      '套件子包要解析到主包内部 node_modules 下的真实位置',
+    )
+    // 全写 @scope/name 与裸名同解（作用域目录已含 scope，不能拼两次）
+    const b2 = querySeams('@deepseek-ai/dsh-tools', { guideRoot: root, hostInfo })
+    assert.strictEqual(b2.hostEvidence.status, 'present', '全写包名应与裸名同解')
+    assert.strictEqual(b2.hostEvidence.checkedWhere, b.hostEvidence.checkedWhere, '两种写法解析到同一位置')
     // 指南无记录 + 宿主也没有
     const c = querySeams('dsh-never-existed', { guideRoot: root, hostInfo })
     assert.strictEqual(c.hostEvidence.status, 'absent')
