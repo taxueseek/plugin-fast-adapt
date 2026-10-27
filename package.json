@@ -18,7 +18,8 @@
   "scripts": {
     "test": "node scripts/self-test.mjs",
     "run": "node scripts/run.mjs",
-    "log": "node scripts/run-log.mjs"
+    "log": "node scripts/run-log.mjs",
+    "release-check": "node scripts/release-check.mjs"
   },
   "engines": {
     "node": ">=22.13"
