@@ -1,0 +1,19 @@
+{
+  "name": "plugin-fast-adapt",
+  "version": "0.2.0",
+  "description": "DSH 插件升级适配与破坏性变更核查，兼具从零造插件与环境诊断能力",
+  "author": {
+    "name": "taxueseek"
+  },
+  "homepage": "https://github.com/taxueseek/plugin-fast-adapt",
+  "repository": "https://github.com/taxueseek/plugin-fast-adapt",
+  "license": "MIT",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "agent-skills",
+    "breaking-changes",
+    "upgrade-guide",
+    "plugin-scaffold"
+  ]
+}

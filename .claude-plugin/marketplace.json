@@ -1,0 +1,14 @@
+{
+  "name": "plugin-fast-adapt",
+  "description": "DSH 插件升级适配、破坏性变更扫描、从零造插件与环境诊断",
+  "owner": {
+    "name": "taxueseek"
+  },
+  "plugins": [
+    {
+      "name": "plugin-fast-adapt",
+      "source": "./",
+      "description": "查 DeepSeek 官方最新版本与升级指南，扫描 DSH 插件踩到的破坏性变更并给官方修法；附带五形态插件脚手架与宿主启动故障诊断。"
+    }
+  ]
+}
