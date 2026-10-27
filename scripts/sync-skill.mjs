@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 // sync-skill.mjs —— 把本工具仓的「技能面」同步到下游技能目录，并查漂移。
 //
-// 为什么需要它：plugin-fast-adapt 拆分独立仓后，dsh-plugin-upgrade-skill/skills/
-// 下留了一份静态副本。两份都是真文件时，下游会静默滞后（2026-10-25 实测：
-// 主仓已加客户端半三层判定，下游还缺 lib/client-graph.mjs、SKILL.md 也旧），
-// 而滞后副本被误跑时查不出新问题。同步面固定为技能读者真正会用的文件：
-//   SKILL.md / README.md / README.en.md / references/** / scripts/**
+// 为什么需要它：本仓已从 dsh-plugin-upgrade-skill 独立出来，默认不盯任何下游。
+// 但下游技能目录里可能还留着一份静态副本，两份都是真文件时会静默滞后
+// （2026-10-25 实测：主仓已加客户端半三层判定，下游还缺 lib/client-graph.mjs、
+// SKILL.md 也旧），滞后副本被误跑时查不出新问题。要镜像时显式给 --dest。
+// 同步面固定为技能读者真正会用的文件：
+//   SKILL.md / README.md / README.en.md / references/** / scripts/** / sub-skills/**
 // package.json 不入技能面（下游技能目录不带它，工具版本降级为 commit 可观测）。
 //
 // 用法：
@@ -21,7 +22,7 @@ import { fileURLToPath } from 'node:url'
 const TOOL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
 // 技能面：相对 TOOL_ROOT 的glob 式目录/文件清单
-const SURFACE = ['SKILL.md', 'README.md', 'README.en.md', 'references', 'scripts']
+const SURFACE = ['SKILL.md', 'README.md', 'README.en.md', 'references', 'scripts', 'sub-skills']
 const SKIP_DIRS = new Set(['node_modules', '.git', 'tmp', '.trash', 'coverage'])
 
 // 展开技能面为相对路径清单（递归目录）

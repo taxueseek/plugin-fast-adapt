@@ -2,7 +2,7 @@
 
 **简体中文** | [English](README.en.md)
 
-[![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D22.13-blue.svg)](package.json) [![外部依赖](https://img.shields.io/badge/外部依赖-0-blue.svg)](#依赖与自检) [![自检](https://img.shields.io/badge/自检-134项断言-brightgreen.svg)](#依赖与自检)
+[![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D22.13-blue.svg)](package.json) [![外部依赖](https://img.shields.io/badge/外部依赖-0-blue.svg)](#依赖与自检) [![自检](https://img.shields.io/badge/自检-136项断言-brightgreen.svg)](#依赖与自检)
 
 > **DSH 每次发新版，老插件就可能启动不了。** 这个技能直连 DeepSeek 官方升级指南，扫你的插件代码，报出踩了哪几条破坏性变更、官方给的修法是什么；还能一条命令从零造出可运行的插件。
 
@@ -13,7 +13,7 @@
 | 上游发新版 | 无需任何改动，直接可用（直连官方源，不维护知识卡片） |
 | 扫描误报 | 12 处 → 0（四层降噪） |
 | 验证一次改动 | 3600 秒真宿主冷启动 → 毫秒级内存冒烟 |
-| 自检 | 134 项断言，离线可跑 |
+| 自检 | 136 项断言，离线可跑 |
 | 外部依赖 | 0（只用 Node 内置模块 + `git`/`npm` 命令） |
 | 网络 | 只取官方源时用，核心步骤全离线 |
 | 造插件 | 一条命令出五形态可运行插件，生成即验证 |
@@ -35,9 +35,31 @@ DSH（DeepSeek Harness）是一个「所有功能都以插件形式存在」的 
 - **验证便宜**：内存级 Cordis 冒烟毫秒到秒级出结果，不用真宿主冷启动；需要真证据时 `--real-smoke` 再补干净 profile 真装真启档
 - **零外部依赖**：只用 Node 内置模块加 `git`/`npm` 命令，没有 TypeScript、没有 AST 库、没有网络请求库
 - **网络依赖很轻**：只有「取官方源」走网络——定版本读 npm 的 dist-tags、取指南 clone 官方仓库。dist-tags 缓存 1 小时，失败降级旧缓存并明确标 stale；指南优先复用本机已有 clone，`--no-clone` 可跳过。环境巡检、代码扫描、冒烟、体检、日志诊断、接缝查询全离线
-- **可复现**：134 项自检离线可跑；CI 在 push 和 PR 上自动跑
+- **可复现**：136 项自检离线可跑；CI 在 push 和 PR 上自动跑
 - **不止适配**：`scaffold.mjs` 一条命令生成五形态可运行插件（真基类装载验证），`write-gate.mjs` 写完出「出生证」
 - **边界诚实**：冒烟通过不等于宿主兼容，这句话写在工具输出里；体检的软指标只透传，不替用户说「合格」
+
+## 三条车道
+
+主入口只做路由，三条车道各管一件事，按意图读对应文档，不一次把三份都读进来：
+
+```
+SKILL.md                      主技能：判断走哪条 + 一键编排 + 跨车道纪律
+sub-skills/adapt/SKILL.md     升级适配：定版本 → 取指南 → 扫命中 → 接缝 → 秒验 → 体检
+sub-skills/build/SKILL.md     造插件：scaffold 五形态 + write-gate 体检门
+sub-skills/diagnose/SKILL.md  环境与启动故障：env-doctor + log-doctor + env-heal
+scripts/                      三条车道共用的工具箱，不随车道分家
+references/                   降噪规则、迁移 SOP、CI 模板
+```
+
+`build` 与 `diagnose` 还各有一个顶层别名，可以让它们独立响应触发词（不建也能用，主技能会按意图读对应车道文档）：
+
+```sh
+ln -s <repo>/sub-skills/build    ~/.agents/skills/dsh-plugin-build
+ln -s <repo>/sub-skills/diagnose ~/.agents/skills/dsh-plugin-diagnose
+```
+
+别名的作用是让「造插件」和「装了没生效」这两类独立目标有自己的触发面，不必挤在主技能一个 description 里。宿主加载器对 `description` 有 1024 字符硬上限，超了整条技能会被丢弃而不是截断——这条现在由自检门禁守住。
 
 ## 安装
 
@@ -170,7 +192,7 @@ node scripts/write-gate.mjs <插件目录>   # 出生证：硬门禁自动判，
 自检：
 
 ```sh
-npm test   # node scripts/self-test.mjs，134 项断言
+npm test   # node scripts/self-test.mjs，136 项断言
 ```
 
 开发者建议启用提交前门禁（一次性）：`git config core.hooksPath .githooks`——commit 时自动跑自检，改完真源忘了 sync-skill 在这一刻被拦。
@@ -210,7 +232,7 @@ npm test   # node scripts/self-test.mjs，134 项断言
 
 - `env-doctor`、`code-scan`、`plugin-audit`、`log-doctor`、`seams`、`run-log` 完全只读
 - `env-heal` 默认 dry-run，真动手也是移动不删除（进 `~/.dsh/.trash/<日期>/`）
-- `sync-skill` 显式写下游技能目录，只复制固定技能面（`SKILL.md`/`README*`/`references`/`scripts`），`--check`/`--dry-run` 供先确认
+- `sync-skill` 显式写下游技能目录，只复制固定技能面（`SKILL.md`/`README*`/`references`/`scripts`/`sub-skills`），`--check`/`--dry-run` 供先确认
 - 不改 DSH 本体，不动 `~/.dsh` 下的配置和 profile 声明
 - 不自动改插件代码，只报命中和官方修法；`--peer-patch` 也只打印建议
 - 网络只用在「取官方源」这一步：定版本读 npm 的 dist-tags，取指南 clone 官方仓库。两处都有超时，失败明确报错而不是静默跳过；dist-tags 有 1 小时缓存，失败时降级用旧缓存并标 stale；指南优先复用本机已有 clone，`--no-clone` 可跳过

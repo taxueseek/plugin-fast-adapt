@@ -556,33 +556,81 @@ test('完整点链优先于短链', () => {
 // ── 文档引用完整性 ──────────────────────────────────────────────────────────
 // SOP 和 SKILL.md 里链接的原版文件必须真实存在，防止走廊卡片改名后出现死链。
 
-test('SOP 与 SKILL 引用的原版文件不漂移', () => {
+test('SOP 与各层 SKILL 引用的文件不漂移', () => {
   const skillDir = path.resolve(import.meta.dirname, '..')
+  // 三层文档都算技能面：主技能、三条车道、迁移 SOP。链接指向的本地文件必须真实存在。
   const docs = [
     path.join(skillDir, 'SKILL.md'),
+    ...['adapt', 'build', 'diagnose'].map((lane) => path.join(skillDir, 'sub-skills', lane, 'SKILL.md')),
     path.join(skillDir, 'references', 'legacy-migration-sop.md'),
   ]
-  // 独立仓库后，对原版文件的引用走 GitHub URL（前缀固定，防手滑改错仓）；
-  // 本仓库内部引用仍走 references/ 相对路径，本地文件必须真实存在。
-  const upstreamPrefix = 'https://github\\.com/oh-my-dsh/dsh-plugin-upgrade-skill/tree/main/skills/'
-  const linkRe = new RegExp(`\\((${upstreamPrefix}[\\w/.-]+)\\)|\\((references\\/[\\w/.-]+)\\)`, 'g')
+  const upstreamPrefix = 'https://github.com/oh-my-dsh/dsh-plugin-upgrade-skill/tree/main/skills/'
   let checked = 0
   for (const doc of docs) {
     const text = fs.readFileSync(doc, 'utf8')
-    for (const m of text.matchAll(linkRe)) {
-      const upstreamUrl = m[1]
-      if (upstreamUrl) {
-        assert.ok(upstreamUrl.startsWith('https://github.com/oh-my-dsh/dsh-plugin-upgrade-skill/tree/main/skills/'),
-          `${path.basename(doc)} 引用的原版 URL 前缀不对：${upstreamUrl}`)
+    for (const m of text.matchAll(/\]\(([^)\s]+)\)/g)) {
+      const target = m[1]
+      if (target.startsWith('http')) {
+        // 只约束指向原版技能仓的链接；arxiv 一类外部链接不参与
+        if (!target.includes('github.com/oh-my-dsh/dsh-plugin-upgrade-skill')) continue
+        const repoRoot = 'https://github.com/oh-my-dsh/dsh-plugin-upgrade-skill'
+        assert.ok(target === repoRoot || target.startsWith(upstreamPrefix),
+          `${path.relative(skillDir, doc)} 引用的原版 URL 不对（只允许仓根或 /tree/main/skills/ 前缀）：${target}`)
+      } else if (target.endsWith('.md')) {
+        const abs = path.resolve(path.dirname(doc), target)
+        assert.ok(fs.existsSync(abs), `${path.relative(skillDir, doc)} 引用的 ${target} 不存在（死链）`)
       } else {
-        const rel = m[2]
-        const target = path.resolve(path.dirname(doc), rel)
-        assert.ok(fs.existsSync(target), `${path.basename(doc)} 引用的 ${rel} 不存在（死链）`)
+        continue
       }
       checked++
     }
   }
-  assert.ok(checked >= 8, `应至少核对 8 处引用，实际 ${checked} 处——SOP 可能被清空了`)
+  assert.ok(checked >= 8, `应至少核对 8 处引用，实际 ${checked} 处——SOP 或车道文档可能被清空了`)
+})
+
+// 宿主加载器对 description 有 1024 字符硬上限，超了整条技能被丢弃而不是截断
+// （2026-10-27 实测：本技能 1058 字符，在 ZCode 里完全不可见，诊断码 skill_description_too_long）。
+test('技能面 description 不超过 1024 字符', () => {
+  const root = path.resolve(import.meta.dirname, '..')
+  const walk = (dir, out = []) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (e.name.startsWith('.') || e.name === 'node_modules' || e.name === 'tmp') continue
+      const full = path.join(dir, e.name)
+      if (e.isDirectory()) walk(full, out)
+      else if (e.name === 'SKILL.md') out.push(full)
+    }
+    return out
+  }
+  const files = walk(root)
+  assert.ok(files.length >= 4, `应至少扫到主技能与三份车道文档，实际 ${files.length} 份`)
+  for (const file of files) {
+    const text = fs.readFileSync(file, 'utf8')
+    const fm = text.match(/^---\r?\n([\s\S]*?)\r?\n---/)
+    assert.ok(fm, `${path.relative(root, file)} 缺 frontmatter`)
+    const line = fm[1].split(/\r?\n/).find((l) => l.startsWith('description:'))
+    assert.ok(line, `${path.relative(root, file)} 缺 description`)
+    const desc = line.slice('description:'.length).trim()
+    assert.ok(desc.length > 0 && desc.length <= 1024,
+      `${path.relative(root, file)} 的 description 是 ${desc.length} 字符，超过宿主 1024 上限会被整条丢弃`)
+  }
+})
+
+test('三条车道结构完整，主技能有路由表', () => {
+  const root = path.resolve(import.meta.dirname, '..')
+  const nameOf = (rel) => {
+    const fm = fs.readFileSync(path.join(root, rel), 'utf8').match(/^---\r?\n([\s\S]*?)\r?\n---/)
+    return fm?.[1].split(/\r?\n/).find((l) => l.startsWith('name:'))?.slice(5).trim()
+  }
+  for (const lane of ['adapt', 'build', 'diagnose']) {
+    assert.ok(fs.existsSync(path.join(root, 'sub-skills', lane, 'SKILL.md')), `缺 sub-skills/${lane}/SKILL.md`)
+  }
+  // 两条车道要能被顶层软链别名独立触发，name 必须与别名目录同名
+  assert.strictEqual(nameOf('sub-skills/build/SKILL.md'), 'dsh-plugin-build', 'build 车道的 name 应等于顶层别名')
+  assert.strictEqual(nameOf('sub-skills/diagnose/SKILL.md'), 'dsh-plugin-diagnose', 'diagnose 车道的 name 应等于顶层别名')
+  const main = fs.readFileSync(path.join(root, 'SKILL.md'), 'utf8')
+  for (const lane of ['adapt', 'build', 'diagnose']) {
+    assert.ok(main.includes(`sub-skills/${lane}/SKILL.md`), `主技能没有指向 sub-skills/${lane}/SKILL.md`)
+  }
 })
 
 test('文档宣称的断言数与实际一致（防手工漂移）', () => {
@@ -980,22 +1028,25 @@ test('audit：peerPatchFor 只给宿主包生成已验证替换，不碰同 scop
   assert.deepStrictEqual(peerPatchFor(pkg, null), [])
 })
 
-test('sync-skill：--check 报告缺失与漂移，同步后归零', () => {
+test('sync-skill：--check 报告缺失与漂移，同步后归零（含 sub-skills）', () => {
   const src = tmpPluginDir('sync-src')
   fs.mkdirSync(path.join(src, 'scripts', 'lib'), { recursive: true })
   fs.mkdirSync(path.join(src, 'references'), { recursive: true })
+  fs.mkdirSync(path.join(src, 'sub-skills', 'build'), { recursive: true })
   fs.writeFileSync(path.join(src, 'SKILL.md'), '# skill\n')
   fs.writeFileSync(path.join(src, 'scripts', 'run.mjs'), '// run\n')
   fs.writeFileSync(path.join(src, 'scripts', 'lib', 'x.mjs'), '// x\n')
   fs.writeFileSync(path.join(src, 'references', 'h.md'), '# h\n')
+  fs.writeFileSync(path.join(src, 'sub-skills', 'build', 'SKILL.md'), '# build\n')
 
   const dest = tmpPluginDir('sync-dest')
   const before = checkSkillSync({ srcRoot: src, destRoot: dest })
-  assert.strictEqual(before.missing.length, 4, '初始目标为空应全缺失')
+  assert.strictEqual(before.missing.length, 5, '初始目标为空应全缺失')
+  assert.ok(before.missing.includes('sub-skills/build/SKILL.md'), '同步面应含 sub-skills/**，否则下游会缺车道文档')
   assert.strictEqual(before.clean, false)
 
   const written = syncSkill({ srcRoot: src, destRoot: dest })
-  assert.strictEqual(written.written.length, 4)
+  assert.strictEqual(written.written.length, 5)
   assert.strictEqual(checkSkillSync({ srcRoot: src, destRoot: dest }).clean, true, '同步后应无漂移')
 
   fs.writeFileSync(path.join(dest, 'SKILL.md'), '# changed\n')
@@ -1274,17 +1325,19 @@ test('run --real-smoke：桥接 verify-runtime——fail 退出码 2，pass 退�
   } catch {}
 })
 
-test('下游技能面零漂移（真机拦截；下游目录不存在时跳过）', () => {
+test('下游技能面零漂移（仅在显式给 PFA_DOWNSTREAM_DIR 时检查）', () => {
   const selfRoot = path.resolve(SCRIPTS, '..')
-  const dest = process.env.PFA_DOWNSTREAM_DIR || path.resolve(SCRIPTS, '../../../dsh-plugin-upgrade-skill/skills/plugin-fast-adapt')
-  if (!fs.existsSync(dest) || path.resolve(dest) === selfRoot) {
-    process.stderr.write(`  （跳过：下游目录不存在或就是本仓，${dest}）\n`)
+  // 本仓已从上游独立，默认不再自动盯兄弟仓——那层耦合正是「下游静默滞后」的来源。
+  // 需要镜像时显式指定目录：PFA_DOWNSTREAM_DIR=/path/to/downstream npm test
+  const dest = process.env.PFA_DOWNSTREAM_DIR
+  if (!dest || !fs.existsSync(dest) || path.resolve(dest) === selfRoot) {
+    process.stderr.write(`  （跳过：未设置 PFA_DOWNSTREAM_DIR${dest ? `，或路径不可用（${dest}）` : ''}）\n`)
     return
   }
   const result = checkSkillSync({ destRoot: dest })
   assert.ok(
     result.clean,
-    `下游技能面有漂移——缺失 [${result.missing.join(', ')}] 不同 [${result.differing.join(', ')}]；改完真源先跑 sync-skill 同步再提交（2026-10-25 README 漂移实录）`
+    `下游技能面有漂移——缺失 [${result.missing.join(', ')}] 不同 [${result.differing.join(', ')}]；先跑 sync-skill 同步再提交（2026-10-25 README 漂移实录）`
   )
 })
 

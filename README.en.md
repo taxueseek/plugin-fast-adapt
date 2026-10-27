@@ -2,7 +2,7 @@
 
 [简体中文](README.md) | English
 
-[![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D22.13-blue.svg)](package.json) [![Dependencies](https://img.shields.io/badge/dependencies-0-blue.svg)](#dependencies) [![Self-test](https://img.shields.io/badge/self--test-134%20passing-brightgreen.svg)](#dependencies)
+[![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D22.13-blue.svg)](package.json) [![Dependencies](https://img.shields.io/badge/dependencies-0-blue.svg)](#dependencies) [![Self-test](https://img.shields.io/badge/self--test-136%20passing-brightgreen.svg)](#dependencies)
 
 > **Every time DSH ships a new release, existing plugins can stop working.** This skill reads the vendor's official upgrade guide directly, scans your plugin code, and reports which breaking changes you hit together with the vendor's own fix instructions; it also scaffolds a runnable plugin from zero in one command and verifies it.
 
@@ -13,7 +13,7 @@
 | Upstream ships a new release | Works immediately, zero changes (reads vendor sources, no hand-curated cards) |
 | Scan false positives | 12 → 0 (four noise-reduction layers) |
 | Verifying one change | 3,600 s real host cold start → millisecond-scale in-memory smoke test |
-| Self-test | 134 assertions, runs offline |
+| Self-test | 136 assertions, runs offline |
 | External dependencies | 0 (Node built-ins + the `git`/`npm` commands only) |
 | Network | Only used to fetch vendor sources; the core steps are fully offline |
 | Scaffolding | One command emits a runnable plugin in five forms, verified on creation, then a write gate issues the birth certificate |
@@ -35,9 +35,31 @@ This project takes a different approach: **maintain the method of obtaining know
 - **Cheap verification**: the in-memory Cordis smoke test returns in milliseconds to seconds, with no real host cold start; add `--real-smoke` when you need real-host evidence (clean profile, install and boot)
 - **Zero external dependencies**: Node built-ins plus the `git`/`npm` commands only — no TypeScript, no AST library, no HTTP client
 - **Very light network dependence**: only "fetching vendor sources" touches the network — version resolution reads npm `dist-tags`, guide fetching clones the official repo. `dist-tags` is cached for 1 hour and degrades to the stale cache with an explicit `stale` marker; guides reuse an existing local clone first, and `--no-clone` skips the fetch. Environment inspection, code scanning, smoke tests, audits, log diagnosis and seam queries are fully offline
-- **Reproducible**: 134 assertions, runs offline; CI runs on every push and pull request
+- **Reproducible**: 136 assertions, runs offline; CI runs on every push and pull request
 - **More than adaptation**: `scaffold.mjs` emits a runnable plugin in five forms in one command (verified against the real host base classes), and `write-gate.mjs` issues a birth certificate when you are done
 - **Honest about its limits**: a passing smoke test is not host compatibility, and the tool says so in its output; soft audit metrics are passed through, never turned into a verdict on your behalf
+
+## Three lanes
+
+The main entry only routes. Each lane owns one job, and the agent reads the matching document instead of loading all three:
+
+```
+SKILL.md                      main skill: pick a lane + one-shot pipeline + cross-lane discipline
+sub-skills/adapt/SKILL.md     upgrade adaptation: resolve version → fetch guide → scan hits → seams → smoke → audit
+sub-skills/build/SKILL.md     plugin authoring: scaffold five forms + write-gate birth certificate
+sub-skills/diagnose/SKILL.md  environment and boot failures: env-doctor + log-doctor + env-heal
+scripts/                      shared toolbox for all lanes, not split per lane
+references/                   noise rules, migration SOP, CI template
+```
+
+`build` and `diagnose` also ship optional top-level aliases so they can trigger on their own (they are not required — the main skill reads the lane document by intent):
+
+```sh
+ln -s <repo>/sub-skills/build    ~/.agents/skills/dsh-plugin-build
+ln -s <repo>/sub-skills/diagnose ~/.agents/skills/dsh-plugin-diagnose
+```
+
+The aliases exist so "author a plugin" and "installed but not working" each get their own trigger surface instead of competing inside one `description`. Host loaders cap `description` at 1024 characters and drop the whole skill when it overflows (they do not truncate); the self-test now guards that limit.
 
 ## Install
 
@@ -175,7 +197,7 @@ No TypeScript, no AST library, no HTTP client. Runs on Node 22.13+ (`import.meta
 Self-test:
 
 ```sh
-npm test   # node scripts/self-test.mjs, 134 assertions
+npm test   # node scripts/self-test.mjs, 136 assertions
 ```
 
 Contributors should enable the pre-commit gate (one time): `git config core.hooksPath .githooks` — every commit runs the self-test, so a forgotten downstream sync is caught at commit time.
@@ -214,7 +236,7 @@ To gate your own plugin's repository at commit time (smoke/typecheck as hard gat
 
 - `env-doctor`, `code-scan`, `plugin-audit`, `log-doctor`, `seams` and `run-log` are strictly read-only
 - `env-heal` is dry-run by default and moves rather than deletes when applied (into `~/.dsh/.trash/<date>/`)
-- `sync-skill` writes to a downstream skill directory explicitly, copying only the fixed skill surface (`SKILL.md`/`README*`/`references`/`scripts`); `--check`/`--dry-run` let you inspect first
+- `sync-skill` writes to a downstream skill directory explicitly, copying only the fixed skill surface (`SKILL.md`/`README*`/`references`/`scripts`/`sub-skills`); `--check`/`--dry-run` let you inspect first
 - Never modifies DSH itself, nor config or profile declarations under `~/.dsh`
 - Never edits plugin code automatically; it reports findings and vendor fixes only, and `--peer-patch` prints rather than applies
 - Network is used only for "fetching vendor sources": version resolution reads npm `dist-tags`, guide fetching clones the official repo. Both have timeouts and report failures explicitly instead of silently skipping; `dist-tags` is cached for 1 hour and degrades to the stale cache with a `stale` marker; guides reuse an existing local clone first, and `--no-clone` skips the fetch

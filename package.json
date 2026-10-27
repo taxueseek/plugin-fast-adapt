@@ -1,7 +1,7 @@
 {
   "name": "plugin-fast-adapt",
-  "version": "0.1.1",
-  "description": "DSH 插件适配与破坏性变更核查：直连官方升级指南，零外部依赖",
+  "version": "0.2.0",
+  "description": "DSH 插件升级适配：主入口加三条车道子技能，直连官方指南，零外部依赖",
   "type": "module",
   "bin": {
     "plugin-fast-adapt": "scripts/cli.mjs"
@@ -11,6 +11,7 @@
     "README.md",
     "README.en.md",
     "LICENSE",
+    "sub-skills/**/*.md",
     "scripts/**/*.mjs",
     "references/**/*.md"
   ],
