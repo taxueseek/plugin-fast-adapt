@@ -80,7 +80,7 @@ export function extractAnchors(changeText, migrationText) {
   // 「The mode fields of @deepseek-ai/dsh-tools accept only native or ptc」讲的是字段取值，
   // 包没被移除；无差别抽取会把所有 import 该包的插件误报成 critical。
   const REMOVAL_RE =
-    /\b(removed|remove|retired|renamed|deleted|dropped|no longer|replaced by|moved to)\b/i
+    /\b(removed|remove|retired|renamed|deleted|dropped|no longer|replaced by|moved to|exported by|update imports|migrated|migrate|deprecated|discontinue|split into)\b/i
   const sentenceHasRemoval = (text, pkg) => {
     for (const sentence of text.split(/(?<=[.!?])\s+|\n+/)) {
       if (sentence.includes(pkg) && REMOVAL_RE.test(sentence)) return true
@@ -115,7 +115,15 @@ export function extractAnchors(changeText, migrationText) {
   }
 
   // 常量锚点：只从 Change 段抽（见上面规则 1）
+  // 1. kebab-case 格式 (like 'already-installed')
   for (const m of changeText.matchAll(/['"`]([a-z][a-z0-9]*(?:-[a-z0-9]+)+)['"`]/g)) {
+    anchors.codes.add(m[1])
+  }
+  // 2. SCREAMING_SNAKE 错误码/状态码 (like 'ABORTED', 'CODE_RUN_FAILED')
+  for (const m of changeText.matchAll(/['"`]([A-Z][A-Z0-9_]{3,39})['"`]/g)) {
+    anchors.codes.add(m[1])
+  }
+  for (const m of changeText.matchAll(/\b(?:as|than|code)\s+([A-Z][A-Z0-9_]{3,30})\b/g)) {
     anchors.codes.add(m[1])
   }
 
@@ -194,49 +202,145 @@ function normalizeSymbol(raw) {
     .trim()
 }
 
-// 读一个版本目录下的全部 guide，返回带版本与主题的锚点表
-export function loadGuides(guideRoot, version) {
-  const versionDir = path.join(guideRoot, version)
-  if (!fs.existsSync(versionDir)) return []
+import os from 'node:os'
 
+const RELEASES_CACHE_DIR = path.join(os.homedir(), '.cache', 'dsh-plugin-fast-adapt', 'releases')
+
+// 从 GitHub Release 文本中抽取出虚拟指南条目
+export function parseReleaseNotesToGuides(releaseText, version) {
+  if (!releaseText) return []
   const guides = []
-  for (const topic of fs.readdirSync(versionDir)) {
-    const guidePath = path.join(versionDir, topic, 'guide.md')
-    if (!fs.existsSync(guidePath)) continue
 
-    const raw = fs.readFileSync(guidePath, 'utf8')
-    const parsed = parseGuideMarkdown(raw)
-    const anchors = extractAnchors(parsed.change, parsed.migration)
+  // 匹配破坏性变更区块：### 破坏性变更 或 ### Breaking Changes 直到下一个 ### 或结尾
+  const reSection = /###\s+(?:破坏性变更|Breaking Changes)\s*([\s\S]*?)(?=\n###\s|\n---\s*$|$)/i
+  const m = releaseText.match(reSection)
+  const body = m ? m[1] : releaseText
+
+  // 按 bullet 切分
+  const bullets = body
+    .split(/\n(?=[•*-]\s+)/)
+    .map((b) => b.replace(/^[•*-]\s+/, '').trim())
+    .filter(Boolean)
+
+  let idx = 1
+  for (const item of bullets) {
+    const anchors = extractAnchors(item, item)
     if (!anchors.packages.length && !anchors.members.length && !anchors.codes.length) continue
 
-    // 出处锚点：指南内相对路径 + 标题行号。findings 带上它们，
-    // 每个结论都能回溯到官方原文位置，不用在指南目录里再搜标题。
-    let titleLine = null
-    for (const [i, line] of raw.split('\n').entries()) {
-      if (/^#\s+/.test(line.replace(/\r$/, ''))) {
-        titleLine = i + 1
-        break
-      }
-    }
-
-    guides.push({ version, topic, guideFile: `${version}/${topic}/guide.md`, titleLine, ...parsed, anchors })
+    const firstSentence = item.split(/[。\n.!?]/)[0] || `Change ${idx}`
+    const topic = `release-${version}-${idx}`
+    guides.push({
+      version,
+      topic,
+      guideFile: `releases/${version}.json#${idx}`,
+      titleLine: idx,
+      title: firstSentence.slice(0, 80),
+      description: item,
+      change: item,
+      migration: item,
+      anchors,
+      virtual: true,
+    })
+    idx++
   }
   return guides
+}
+
+// 查找与当前 guideRoot 配套的 releases 虚拟指南目录
+function resolveReleasesDir(guideRoot, explicitDir = null) {
+  if (explicitDir) return explicitDir
+  if (!guideRoot) return null
+  // 1. 同级或上级 releases 目录
+  const candidates = [
+    path.join(guideRoot, 'releases'),
+    path.resolve(guideRoot, '..', 'releases'),
+    path.resolve(guideRoot, '..', '..', 'releases'),
+    path.resolve(guideRoot, '..', '..', '..', 'releases'),
+  ]
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return c
+  }
+  return null
+}
+
+// 读一个版本目录下的全部 guide，返回带版本与主题的锚点表
+export function loadGuides(guideRoot, version, { releasesDir = null } = {}) {
+  const versionDir = path.join(guideRoot, version)
+  if (fs.existsSync(versionDir)) {
+    const guides = []
+    for (const topic of fs.readdirSync(versionDir)) {
+      const guidePath = path.join(versionDir, topic, 'guide.md')
+      if (!fs.existsSync(guidePath)) continue
+
+      const raw = fs.readFileSync(guidePath, 'utf8')
+      const parsed = parseGuideMarkdown(raw)
+      const anchors = extractAnchors(parsed.change, parsed.migration)
+      if (!anchors.packages.length && !anchors.members.length && !anchors.codes.length) continue
+
+      // 出处锚点：指南内相对路径 + 标题行号。findings 带上它们，
+      // 每个结论都能回溯到官方原文位置，不用在指南目录里再搜标题。
+      let titleLine = null
+      for (const [i, line] of raw.split('\n').entries()) {
+        if (/^#\s+/.test(line.replace(/\r$/, ''))) {
+          titleLine = i + 1
+          break
+        }
+      }
+
+      guides.push({ version, topic, guideFile: `${version}/${topic}/guide.md`, titleLine, ...parsed, anchors })
+    }
+    return guides
+  }
+
+  // 降级：从 releases 缓存读取虚拟指南（只在匹配的缓存根下查找，不污染沙箱）
+  const relRoot = resolveReleasesDir(guideRoot, releasesDir)
+  if (relRoot && fs.existsSync(relRoot)) {
+    const bareVer = version.replace(/^v/, '')
+    const relFile = path.join(relRoot, `${bareVer}.json`)
+    if (fs.existsSync(relFile)) {
+      try {
+        const data = JSON.parse(fs.readFileSync(relFile, 'utf8'))
+        const text = data.body || data.text || ''
+        return parseReleaseNotesToGuides(text, version)
+      } catch {}
+    }
+  }
+
+  return []
 }
 
 // 官方指南目录下的全部版本，按 semver 升序。
 // 目录名带 v 前缀（v0.2.1-alpha.2），比较时剥掉。
 // 排序复用 scanner 的 compareVersions：这里曾自带一份字典序实现，
 // rc.10 会排到 rc.9 前面，两处必须同源。
-export function listGuideVersions(guideRoot) {
-  if (!fs.existsSync(guideRoot)) return []
+export function listGuideVersions(guideRoot, { releasesDir = null } = {}) {
+  const versions = new Set()
   const bare = (name) => name.replace(/^v/, '')
-  return fs
-    .readdirSync(guideRoot, { withFileTypes: true })
-    .filter((e) => e.isDirectory())
-    .map((e) => e.name)
-    .filter((name) => /^v?\d+\.\d+\.\d+/.test(name))
-    .sort((a, b) => compareVersions(bare(a), bare(b)))
+
+  if (fs.existsSync(guideRoot)) {
+    const entries = fs
+      .readdirSync(guideRoot, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name)
+      .filter((name) => /^v?\d+\.\d+\.\d+/.test(name))
+    for (const e of entries) versions.add(e)
+  }
+
+  // 并入配套 releases 缓存里的虚拟版本
+  const relRoot = resolveReleasesDir(guideRoot, releasesDir)
+  if (relRoot && fs.existsSync(relRoot)) {
+    try {
+      const files = fs.readdirSync(relRoot)
+      for (const f of files) {
+        if (f.endsWith('.json')) {
+          const v = f.slice(0, -5)
+          if (/^\d+\.\d+\.\d+/.test(v)) versions.add(`v${v}`)
+        }
+      }
+    } catch {}
+  }
+
+  return [...versions].sort((a, b) => compareVersions(bare(a), bare(b)))
 }
 
 // 供自检使用：确认解析器不会把注释里的同名词当成锚点

@@ -126,3 +126,29 @@ test('cli --help：打印用法，不跑流水线', () => {
   assert.match(out, /plugin-fast-adapt v/)
   assert.ok(!out.includes('"plugin"'), '--help 不应输出运行报告 JSON')
 })
+
+test('Release Note 靶向解析：破坏性变更抽取虚拟指南与包名常量锚点', async () => {
+  const { parseReleaseNotesToGuides } = await import('../lib/guide-parser.mjs')
+  const sample = `
+### 破坏性变更
+• Official bundle lists are now exported by @deepseek-ai/dsh-official-bundles; custom integrations must update imports from app-boot.
+• Report caller-cancelled run_code calls in PTC Mode as ABORTED rather than CODE_RUN_FAILED.
+`
+  const guides = parseReleaseNotesToGuides(sample, '0.2.2-alpha.2')
+  assert.strictEqual(guides.length, 2)
+  assert.deepStrictEqual(guides[0].anchors.packages, ['@deepseek-ai/dsh-official-bundles'])
+  assert.ok(guides[1].anchors.codes.includes('ABORTED'))
+  assert.ok(guides[1].anchors.codes.includes('CODE_RUN_FAILED'))
+})
+
+test('三元版本账本快照：最新成功记录检索与源码未修改快速探测', async () => {
+  const { getLatestSuccessfulRun, isPluginUnmodifiedSince } = await import('../lib/runlog.mjs')
+  const dir = tmpPluginDir('ledger-test')
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 't-ledger', version: '1.0.0' }))
+  fs.mkdirSync(path.join(dir, 'src'), { recursive: true })
+  fs.writeFileSync(path.join(dir, 'src', 'index.js'), 'export default {}')
+
+  const now = Date.now()
+  assert.strictEqual(isPluginUnmodifiedSince(dir, now + 1000), true, '未来时间戳应判定为未修改')
+  assert.strictEqual(isPluginUnmodifiedSince(dir, now - 10000), false, '过去时间戳应判定为有修改')
+})

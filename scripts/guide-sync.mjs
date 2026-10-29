@@ -402,6 +402,32 @@ export function upstreamCheckExit(resolution) {
   return resolution?.verdict === 'upgrade-available' ? 1 : 0
 }
 
+// 靶向获取 Release Note 补全指南真空期
+export function fetchReleaseNoteIfMissing(targetVersion, { cacheRoot = CACHE_ROOT } = {}) {
+  if (!targetVersion) return null
+  const bare = targetVersion.replace(/^v/, '')
+  const relDir = path.join(cacheRoot, 'releases')
+  const relFile = path.join(relDir, `${bare}.json`)
+  if (fs.existsSync(relFile)) {
+    try {
+      return JSON.parse(fs.readFileSync(relFile, 'utf8'))
+    } catch {}
+  }
+  // 靶向获取：优先 gh cli，零配置认证
+  try {
+    fs.mkdirSync(relDir, { recursive: true })
+    const out = execFileSync('gh', ['release', 'view', `dsh-v${bare}`, '--repo', 'deepseek-ai/deepseek-harness', '--json', 'body,tagName,publishedAt'], {
+      encoding: 'utf8',
+      timeout: 10000,
+    })
+    const data = JSON.parse(out)
+    fs.writeFileSync(relFile, JSON.stringify(data, null, 2))
+    return data
+  } catch {
+    return null
+  }
+}
+
 // cacheRoot 可注入（默认真实缓存根）：与 runlog 的 DSH_PFA_RUNS_DIR 同一条纪律——
 // 自检直调本函数时不许碰真实用户缓存（2026-10-26 实录：合成 dist-tags 落进真实
 // 缓存，真实 run.mjs 在 1h TTL 内读到的是自检刷进去的版本数据）。
@@ -445,6 +471,15 @@ export async function runGuideSync(localVersion, { clone = false, fetcher = null
           recordMissingTag(tag, distTags, err.message, { cacheRoot })
           guides = { source: 'error', root: null, versions: [], error: err.message }
         }
+      }
+    }
+
+    // 5. 靶向抓取：若指南根目录缺失目标版本的指南，尝试靶向获取该版本 Release Note 填补真空期
+    if (guides.root && guideVersion) {
+      const hasVer = (guides.versions || []).some((v) => v.replace(/^v/, '') === guideVersion.replace(/^v/, ''))
+      if (!hasVer) {
+        fetchReleaseNoteIfMissing(guideVersion, { cacheRoot })
+        guides.versions = listGuideVersions(guides.root)
       }
     }
 

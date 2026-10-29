@@ -187,6 +187,64 @@ export function listRuns(limit = 20) {
   })
 }
 
+// 查询指定插件最近一条成功的运行记录
+export function getLatestSuccessfulRun(pluginName, { root } = {}) {
+  const index = root ? path.join(root, 'index.jsonl') : indexFile()
+  if (!fs.existsSync(index)) return null
+  const lines = fs.readFileSync(index, 'utf8').split('\n').filter(Boolean)
+  for (let i = lines.length - 1; i >= 0; i--) {
+    try {
+      const rec = JSON.parse(lines[i])
+      if (rec.plugin === pluginName && rec.phases?.scan !== 'error' && rec.smoke !== false && rec.typecheck !== 'fail') {
+        return rec
+      }
+    } catch {}
+  }
+  return null
+}
+
+// 检查插件源码目录自指定时间点以来是否未被修改（极速 mtime 探测，排除 node_modules/.git/dist）
+const SKIP_SCAN_DIRS = new Set(['node_modules', '.git', 'dist', '.trash', 'coverage', 'tmp'])
+
+export function isPluginUnmodifiedSince(pluginDir, sinceIsoTime) {
+  const sinceMs = typeof sinceIsoTime === 'number' ? sinceIsoTime : new Date(sinceIsoTime).getTime()
+  if (isNaN(sinceMs)) return false
+
+  const check = (dir, depth = 0) => {
+    if (depth > 5) return true
+    let entries
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true })
+    } catch {
+      return false
+    }
+    for (const ent of entries) {
+      if (ent.name.startsWith('.') || SKIP_SCAN_DIRS.has(ent.name)) continue
+      const full = path.join(dir, ent.name)
+      try {
+        const st = fs.statSync(full)
+        if (st.mtimeMs > sinceMs) return false
+        if (ent.isDirectory()) {
+          if (!check(full, depth + 1)) return false
+        }
+      } catch {
+        return false
+      }
+    }
+    return true
+  }
+
+  // 先检查 package.json
+  try {
+    const pkgStat = fs.statSync(path.join(pluginDir, 'package.json'))
+    if (pkgStat.mtimeMs > sinceMs) return false
+  } catch {
+    return false
+  }
+
+  return check(pluginDir, 0)
+}
+
 // id 可以是索引里的 file 名、完整路径或其前缀
 export function resolveRunFile(id) {
   if (path.isAbsolute(id) && fs.existsSync(id)) return id

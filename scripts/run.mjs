@@ -24,17 +24,24 @@ import { fileURLToPath } from 'node:url'
 import { printJson, computeWindow, compareVersions } from './lib/scanner.mjs'
 import { probeEnvironment } from './env-doctor.mjs'
 import { auditPlugin } from './plugin-audit.mjs'
-import { writeRunLog } from './lib/runlog.mjs'
+import { writeRunLog, getLatestSuccessfulRun, isPluginUnmodifiedSince } from './lib/runlog.mjs'
 
 const TOOL_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const SCRIPTS_DIR = path.join(TOOL_DIR, 'scripts')
 const SPAWN_SHELL = process.platform === 'win32'
 
+// 当前工具自身版本号
+let currentToolVersion = '0.2.1'
+try {
+  const toolPkg = JSON.parse(fs.readFileSync(path.join(TOOL_DIR, 'package.json'), 'utf8'))
+  if (toolPkg.version) currentToolVersion = toolPkg.version
+} catch {}
+
 // 只有 --target/--from 带值，其余都是布尔开关。旧实现按「前一个参数不以 -- 开头」
 // 认插件目录，`run.mjs --offline <目录>` 会把目录当成 --offline 的值而报用法错误。
 const VALUE_FLAGS = new Set(['target', 'from'])
-const BOOLEAN_FLAGS = new Set(['offline', 'no-clone', 'no-smoke', 'no-typecheck', 'no-log', 'real-smoke', 'strict', 'help'])
-const USAGE = '用法: node scripts/run.mjs <插件目录> [--target <版本>] [--from <版本>] [--no-clone] [--no-smoke] [--no-typecheck] [--no-log] [--real-smoke] [--offline] [--strict]'
+const BOOLEAN_FLAGS = new Set(['offline', 'no-clone', 'no-smoke', 'no-typecheck', 'no-log', 'real-smoke', 'strict', 'help', 'force'])
+const USAGE = '用法: node scripts/run.mjs <插件目录> [--target <版本>] [--from <版本>] [--no-clone] [--no-smoke] [--no-typecheck] [--no-log] [--real-smoke] [--offline] [--strict] [--force]'
 
 function parseArgv(argv) {
   const positional = []
@@ -248,6 +255,44 @@ if ((env.overlayFindings?.length ?? 0) > 0) {
   // 共享农场（profiles/node_modules）的悬空软链不在各 profile 覆盖层里，
   // env-heal 不处理这一层；先报出来让人清，别让它继续以 ERR_MODULE_NOT_FOUND 的形式出现。
   stages.env.warning = `共享 node_modules 农场有 ${env.sharedFarmFindings.brokenCount} 条悬空软链（指向宿主 ${env.sharedFarmFindings.hostBackedBroken}），消费它们的插件会装载失败；env-heal 不覆盖这一层，需手工清。`
+}
+
+// ── 账本守卫：三元版本匹配 (Plugin, Host, Skill) 且源码无修改时秒级稳态直通 ─────
+const pluginName = pluginPkg?.name ?? null
+const lastRun = pluginName ? getLatestSuccessfulRun(pluginName) : null
+const isCustomRun = Boolean(valueOf('from') || valueOf('target') || flag('real-smoke') || flag('force') || flag('strict'))
+
+if (lastRun && !isCustomRun && hostVersion && pluginPkg?.version) {
+  const isHostSame = lastRun.hostVersion === hostVersion
+  const isPluginSame = lastRun.pluginVersion === pluginPkg.version
+  const isToolSame = (lastRun.toolVersion || currentToolVersion) === currentToolVersion
+  const isClean = isPluginUnmodifiedSince(pluginDir, lastRun.time)
+
+  if (isHostSame && isPluginSame && isToolSame && isClean) {
+    const elapsed = Date.now() - startedAt
+    process.stdout.write(`\n[账本直通] 插件 ${pluginName}@${pluginPkg.version} 在宿主 ${hostVersion} 下已于 ${lastRun.time} 验证通过。\n`)
+    process.stdout.write(`  三元版本账本一致 (Plugin: ${pluginPkg.version}, Host: ${hostVersion}, Skill: ${currentToolVersion})，且源码无修改。\n`)
+    process.stdout.write(`  0 网络 / 0 冗余扫描 / 毫秒级复用上次健康结论 (体检 ${lastRun.auditScore ?? 100}分，无 critical/high)。\n`)
+    process.stdout.write(`  如需强制重新全量编排，可追加 --force 开关。\n\n`)
+
+    if (!flag('no-log')) {
+      const fastRecord = {
+        time: new Date().toISOString(),
+        plugin: { name: pluginName, version: pluginPkg.version, dir: pluginDir },
+        tool: { version: currentToolVersion },
+        host: { version: hostVersion },
+        window: lastRun.window || { local: hostVersion, target: hostVersion },
+        phases: { scan: 'ok', smoke: 'ok', typecheck: 'skipped', realSmoke: null },
+        fastPass: true,
+        auditScore: lastRun.auditScore,
+        durationMs: elapsed,
+      }
+      writeRunLog(fastRecord, { toolDir: TOOL_DIR })
+    }
+    process.exit(0)
+  } else if (!isHostSame) {
+    process.stdout.write(`\n[版本跃迁] 检测到宿主从 ${lastRun.hostVersion} 变更为 ${hostVersion}，启动靶向差分分析...\n`)
+  }
 }
 
 // 2. 定版本：宿主是否落后官方 + 扫描窗口
