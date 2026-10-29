@@ -233,6 +233,7 @@ npm test   # node scripts/self-test.mjs，192 项断言
 | `scripts/lib/guide-parser.mjs` | 官方指南解析与锚点抽取（含移除动词语义门） |
 | `scripts/lib/runlog.mjs` | 运行日志写入、索引与脱敏 |
 | `scripts/lib/host-modules.mjs` | 解析本机宿主的 `@deepseek-ai/*` 基类模块，做真基类装载验证 |
+| `references/user-guide.md` | 完整实战指南（本地锚定、跨平台自适应、Web/APP 集群治理矩阵与低级错误守卫） |
 | `references/legacy-migration-sop.md` | 老插件迁移 SOP（官方指南覆盖不到时的对照手册） |
 | `references/heuristics.md` | 扫描降噪规则与实测依据 |
 | `references/ci-snippet.md` | 插件仓 CI 门禁模板（冒烟/typecheck 硬门＋体检软门） |

@@ -58,6 +58,7 @@ node scripts/sync-skill.mjs --dest <下游技能目录>            # 同步
 
 | 场景 | 读什么 |
 | --- | --- |
+| 完整使用指南与集群多维治理实战 | `references/user-guide.md` |
 | 官方指南覆盖不到的老插件 | `references/legacy-migration-sop.md` |
 | 扫描降噪规则与实测依据 | `references/heuristics.md` |
 | 给插件自己的仓库加提交时门禁 | `references/ci-snippet.md` |

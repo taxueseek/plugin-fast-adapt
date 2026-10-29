@@ -236,6 +236,7 @@ To gate your own plugin's repository at commit time (smoke/typecheck as hard gat
 | `scripts/lib/scanner.mjs` | Lexical scanner and version comparison (zero-dependency) |
 | `scripts/lib/guide-parser.mjs` | Official guide parsing and anchor extraction |
 | `scripts/lib/host-modules.mjs` | Resolves the host `@deepseek-ai/*` base classes and runs the real-base-class load check |
+| `references/user-guide.md` | Comprehensive user guide (local anchoring, cross-platform adaptability, Web/APP fleet governance, guardrails) |
 | `references/legacy-migration-sop.md` | Legacy migration SOP (for ranges the official guide does not cover) |
 | `references/heuristics.md` | Scan noise-reduction rules and the measurements behind them |
 | `references/ci-snippet.md` | CI gate template for plugin repositories (smoke/typecheck hard gates + audit soft report) |
