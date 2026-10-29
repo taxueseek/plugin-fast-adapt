@@ -40,8 +40,8 @@ try {
 // 只有 --target/--from 带值，其余都是布尔开关。旧实现按「前一个参数不以 -- 开头」
 // 认插件目录，`run.mjs --offline <目录>` 会把目录当成 --offline 的值而报用法错误。
 const VALUE_FLAGS = new Set(['target', 'from'])
-const BOOLEAN_FLAGS = new Set(['offline', 'no-clone', 'no-smoke', 'no-typecheck', 'no-log', 'real-smoke', 'strict', 'help', 'force'])
-const USAGE = '用法: node scripts/run.mjs <插件目录> [--target <版本>] [--from <版本>] [--no-clone] [--no-smoke] [--no-typecheck] [--no-log] [--real-smoke] [--offline] [--strict] [--force]'
+const BOOLEAN_FLAGS = new Set(['offline', 'no-clone', 'no-smoke', 'no-typecheck', 'no-log', 'real-smoke', 'strict', 'help', 'force', 'check-upstream'])
+const USAGE = '用法: node scripts/run.mjs <插件目录> [--target <版本>] [--from <版本>] [--no-clone] [--no-smoke] [--no-typecheck] [--no-log] [--real-smoke] [--offline] [--strict] [--force] [--check-upstream]'
 
 function parseArgv(argv) {
   const positional = []
@@ -295,11 +295,63 @@ if (lastRun && !isCustomRun && hostVersion && pluginPkg?.version) {
   }
 }
 
-// 2. 定版本：宿主是否落后官方 + 扫描窗口
-// --offline：跳过 guide-sync（自检零网络用），只保留 env/audit/typecheck/smoke
+function checkBuildArtifact(pluginRoot) {
+  const pkgPath = path.join(pluginRoot, 'package.json')
+  if (!fs.existsSync(pkgPath)) return { ok: true }
+  let pkg = null
+  try {
+    pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
+  } catch {
+    return { ok: true }
+  }
+  const hasTsConfig = fs.existsSync(path.join(pluginRoot, 'tsconfig.json'))
+  const hasSrc = fs.existsSync(path.join(pluginRoot, 'src'))
+  if (!hasTsConfig && !hasSrc) return { ok: true }
+
+  const entryRel =
+    pkg.exports?.['.']?.default ||
+    (typeof pkg.exports?.['.'] === 'string' ? pkg.exports['.'] : null) ||
+    pkg.main ||
+    'lib/index.js'
+  const entryPath = path.resolve(pluginRoot, entryRel)
+  if (!fs.existsSync(entryPath)) {
+    return {
+      ok: false,
+      entryRel,
+      reason: `未找到构建入口产物: ${entryRel}。请先执行构建 (如 pnpm run build 或 npm run build)。`,
+    }
+  }
+  return { ok: true, entryRel }
+}
+
+// 2. 定版本：以本地宿主环境为唯一基准（方案 B，零网络、防服务压力）
+// 只有显式传入 --target 或 --check-upstream 时，才访问官方 npm registry
 const offline = flag('offline')
-const versionResult = hostVersion && !offline ? runStep('guide-sync.mjs', [hostVersion], 'version', stages) : null
-const officialTarget = versionResult?.resolution?.target ?? null
+const explicitTarget = valueOf('target')
+const checkUpstream = flag('check-upstream')
+
+let versionResult = null
+let officialTarget = null
+
+if (explicitTarget) {
+  officialTarget = explicitTarget
+  stages.version = { status: 'ok', resolution: { target: explicitTarget, source: 'explicit-flag' } }
+  versionResult = { resolution: stages.version.resolution }
+} else if (checkUpstream && hostVersion && !offline) {
+  versionResult = runStep('guide-sync.mjs', [hostVersion], 'version', stages)
+  officialTarget = versionResult?.resolution?.target ?? hostVersion
+} else {
+  stages.version = {
+    status: 'ok',
+    resolution: {
+      target: hostVersion,
+      source: 'local-host',
+      reason: '以本机已安装宿主为准（本地环境自洽，0 外部网络请求）',
+    },
+  }
+  versionResult = { resolution: stages.version.resolution }
+  officialTarget = hostVersion
+}
 
 // 扫描窗口：起点取插件在宿主包（@deepseek-ai/dsh 及 dsh-* 子包）上声明的
 // peer 下限，适配走廊从声明底到目标；--from 可覆盖，终点 = --target 或宿主版本。
@@ -310,7 +362,7 @@ const windowInfo = computeWindow({
   peers: pluginPkg.peerDependencies || {},
   hostVersion,
   from: valueOf('from'),
-  target: valueOf('target') || hostVersion || officialTarget,
+  target: explicitTarget || hostVersion || officialTarget,
 })
 const windowLocal = windowInfo.local
 const windowTarget = windowInfo.target
@@ -345,9 +397,16 @@ try {
   stages.audit = { status: 'error', error: err.message?.slice(0, 500) }
 }
 
-// 6. 冒烟
+// 6. 冒烟（前置低级错误拦截：未构建则阻断冒烟）
 let smokeResult = null
-if (!flag('no-smoke')) {
+const buildCheck = checkBuildArtifact(pluginDir)
+if (!buildCheck.ok) {
+  stages.smoke = {
+    status: 'error',
+    stage: 'entry_resolution',
+    error: buildCheck.reason,
+  }
+} else if (!flag('no-smoke')) {
   smokeResult = runStep('quick-smoke.mjs', [pluginDir], 'smoke', stages)
 }
 
@@ -399,7 +458,9 @@ const report = {
     : null,
   smoke: smokeResult
     ? { success: smokeResult.success, durationMs: smokeResult.durationMs, registeredToolsCount: smokeResult.registeredToolsCount, mockFallbacks: smokeResult.mockFallbacks }
-    : { skipped: true },
+    : stages.smoke?.status === 'error'
+      ? { status: 'error', stage: stages.smoke.stage, error: stages.smoke.error, skipped: false }
+      : { skipped: true },
   typecheck: stages.typecheck ?? { skipped: true },
   realSmoke,
   durationMs,
@@ -437,7 +498,8 @@ if (report.scan?.skipped) {
 if (criticalOrHigh > 0) verdictLines.push(`⚠ critical/high 命中 ${criticalOrHigh} 处——先清零再做优化`)
 else if (report.scan?.findingCount != null) verdictLines.push(`扫描命中 ${report.scan.findingCount} 处（无 critical/high）`)
 if (report.audit) verdictLines.push(`体检 ${report.audit.overallScore}/100（性能 ${report.audit.scores.performance}/弹性 ${report.audit.scores.resilience}/预算 ${report.audit.scores.contextBudget}/生命周期 ${report.audit.scores.lifecycle}）`)
-if (report.smoke?.success != null) verdictLines.push(report.smoke.success ? `冒烟通过（${report.smoke.registeredToolsCount} 工具，${report.smoke.durationMs}ms）` : '冒烟失败——看 smoke 段')
+if (report.smoke?.status === 'error') verdictLines.push(`⚠ 冒烟阻断（${report.smoke.stage}）——${report.smoke.error}`)
+else if (report.smoke?.success != null) verdictLines.push(report.smoke.success ? `冒烟通过（${report.smoke.registeredToolsCount} 工具，${report.smoke.durationMs}ms）` : '冒烟失败——看 smoke 段')
 if (report.typecheck?.status === 'fail') verdictLines.push('typecheck 红——适配前先修构建')
 else if (report.typecheck?.status === 'ok') verdictLines.push('typecheck 通过')
 else if (report.typecheck?.status === 'skipped') verdictLines.push(`typecheck 跳过（${report.typecheck.reason}）`)

@@ -38,6 +38,7 @@ import './self-test/scaffold.test.mjs'
 import './self-test/desktop.test.mjs'
 import './self-test/ghost.test.mjs'
 import './self-test/plan-a.test.mjs'
+import './self-test/plan-b.test.mjs'
 import './self-test/plan-c.test.mjs'
 
 process.stderr.write('plugin-fast-adapt 自检\n\n')

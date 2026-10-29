@@ -19,6 +19,7 @@ import path from 'node:path'
 import { printJson, scanSource, satisfiesRange, packageBase, parseVersion, isDshHostPackage, isPluginForm } from './lib/scanner.mjs'
 import { findSourceFiles, pickScanRoots, scanPluginFromGuideRoot } from './code-scan.mjs'
 import { findGlobalDsh } from './env-doctor.mjs'
+import { packageOnHost } from './lib/host-scope.mjs'
 
 // 上游已移除或非核心、不该被普通插件强 import 的包
 const RISKY_IMPORTS = new Set([
@@ -84,7 +85,7 @@ export function peerPatchFor(pkg, targetVersion) {
   return patches
 }
 
-export function auditPlugin(pluginDir, { scanResult = null, targetVersion = null, hostLibText = undefined } = {}) {
+export function auditPlugin(pluginDir, { scanResult = null, targetVersion = null, hostLibText = undefined, hostInfo = undefined } = {}) {
   const root = path.resolve(pluginDir)
   const pkgPath = path.join(root, 'package.json')
   if (!fs.existsSync(pkgPath)) {
@@ -110,6 +111,7 @@ export function auditPlugin(pluginDir, { scanResult = null, targetVersion = null
   const roots = pickScanRoots(root)
   const files = roots.flatMap((r) => findSourceFiles(r))
   const hostLibTextResolved = hostLibText !== undefined ? hostLibText : getHostLibText()
+  const hostInfoResolved = hostInfo !== undefined ? hostInfo : findGlobalDsh()
 
   for (const file of files) {
     const rel = path.relative(root, file)
@@ -177,6 +179,34 @@ export function auditPlugin(pluginDir, { scanResult = null, targetVersion = null
         title: `类型引用已移除或非核心宿主包 (${riskyTypeOnly.join(', ')})`,
         detail: 'import type 不参与运行时装载，不会让插件挂掉；但宿主删掉类型导出后 tsc 会红，跟进宿主时顺手把类型改为本地声明或弱类型。',
       })
+    }
+
+    // 维度 2 补强（方案 B 本地契约）：核对引用的 @deepseek-ai/* 套件包在本地宿主中是否存在
+    if (hostInfoResolved?.location) {
+      const dshPackages = [...importSources.values()].filter((s) => {
+        const base = packageBase(s)
+        return (
+          base.startsWith('@deepseek-ai/') &&
+          base !== '@deepseek-ai/dsh' &&
+          !RISKY_IMPORTS.has(base) &&
+          base !== pkg.name &&
+          scanned.imports.some((imp) => imp.source === s && isValueImport(imp))
+        )
+      })
+      for (const rawPkg of dshPackages) {
+        const base = packageBase(rawPkg)
+        const check = packageOnHost(base, hostInfoResolved)
+        if (check.status === 'absent') {
+          report.findings.push({
+            dimension: 'resilience',
+            severity: 'HIGH',
+            file: rel,
+            title: `引用了本地宿主不存在的套件包 (${base})`,
+            detail: `该包在当前本地宿主 (${hostInfoResolved.version || '未知版本'}) 中物理不存在（检查位置: ${check.checkedWhere}）。请核对宿主改动或改用替代包（如 @deepseek-ai/dsh-official-bundles）。`,
+          })
+          deduct('resilience', 50, 15)
+        }
+      }
     }
 
     // 维度 3：上下文常驻预算
