@@ -93,3 +93,38 @@ test('集群治理：fleet-sweep CLI --json 结构化输出与退出码', () => 
   assert.strictEqual(report.healthy, 1)
   assert.strictEqual(report.broken, 0)
 })
+
+test('集群治理：discoverAllPlugins 多维梳理 Web、APP 与运行中/已禁用生命周期', async () => {
+  const { discoverAllPlugins } = await import('../fleet-sweep.mjs')
+  const mockEnv = {
+    runningProcesses: [{ command: 'node /bin/dsh web' }],
+    installedPlugins: [
+      {
+        profile: 'web',
+        patchEntries: ['- plugin-web-live', '- plugin-web-off'],
+        globalPatchEntries: ['- plugin-web-off disabled: true'],
+      },
+      {
+        profile: 'desktop',
+        patchEntries: ['- plugin-desktop-idle'],
+        globalPatchEntries: [],
+      },
+    ],
+  }
+
+  const items = discoverAllPlugins([], { scanInstalled: true, scanWorkspace: false, envData: mockEnv })
+  const runningItem = items.find((x) => x.name === 'plugin-web-live')
+  const disabledItem = items.find((x) => x.name === 'plugin-web-off')
+  const desktopItem = items.find((x) => x.name === 'plugin-desktop-idle')
+
+  assert.ok(runningItem, '应发现运行中的 Web 插件')
+  assert.strictEqual(runningItem.platform, 'web')
+  assert.strictEqual(runningItem.state, 'RUNNING')
+
+  assert.ok(disabledItem, '应发现禁用的 Web 插件')
+  assert.strictEqual(disabledItem.state, 'DISABLED')
+
+  assert.ok(desktopItem, '应发现桌面端 (APP) 插件')
+  assert.strictEqual(desktopItem.platform, 'app')
+  assert.strictEqual(desktopItem.state, 'ENABLED')
+})
