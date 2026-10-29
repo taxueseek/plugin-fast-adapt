@@ -2,7 +2,7 @@
 
 [简体中文](README.md) | English
 
-[![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D22.13-blue.svg)](package.json) [![Dependencies](https://img.shields.io/badge/dependencies-0-blue.svg)](#dependencies) [![Self-test](https://img.shields.io/badge/self--test-187%20passing-brightgreen.svg)](#dependencies)
+[![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D22.13-blue.svg)](package.json) [![Dependencies](https://img.shields.io/badge/dependencies-0-blue.svg)](#dependencies) [![Self-test](https://img.shields.io/badge/self--test-191%20passing-brightgreen.svg)](#dependencies)
 
 > **Every time DSH ships a new release, existing plugins can stop working.** This skill reads the vendor's official upgrade guide directly, scans your plugin code, and reports which breaking changes you hit together with the vendor's own fix instructions; it also scaffolds a runnable plugin from zero in one command and verifies it.
 
@@ -15,7 +15,7 @@
 | Verifying one change | 3,600 s real host cold start → millisecond-scale in-memory smoke test |
 | Ghost host | Warns when the disk has new code but the running process still executes the old one (compares process start time, not version strings) |
 | Fake-green check | Warns when `tsconfig` `paths` point at a missing checkout, where TypeScript silently falls back to published types |
-| Self-test | 187 assertions, runs offline |
+| Self-test | 191 assertions, runs offline |
 | External dependencies | 0 (Node built-ins + the `git`/`npm` commands only) |
 | Network | Only used to fetch vendor sources; the core steps are fully offline |
 | Scaffolding | One command emits a runnable plugin in five forms, verified on creation, then a write gate issues the birth certificate |
@@ -37,7 +37,7 @@ This project takes a different approach: **maintain the method of obtaining know
 - **Cheap verification**: the in-memory Cordis smoke test returns in milliseconds to seconds, with no real host cold start; add `--real-smoke` when you need real-host evidence (clean profile, install and boot)
 - **Zero external dependencies**: Node built-ins plus the `git`/`npm` commands only — no TypeScript, no AST library, no HTTP client
 - **Very light network dependence**: only "fetching vendor sources" touches the network — version resolution reads npm `dist-tags`, guide fetching reads a managed snapshot of the official repo's default branch (1-hour TTL; release tags are an offline-only fallback marked `frozen`). `dist-tags` is cached for 1 hour and degrades to the stale cache with an explicit `stale` marker; guides reuse an existing local clone first, and `--no-clone` skips the fetch. Environment inspection, code scanning, smoke tests, audits, log diagnosis and seam queries are fully offline
-- **Reproducible**: 187 assertions, runs offline; CI runs on ubuntu, macOS and Windows for every push and PR, plus a release preflight on tags
+- **Reproducible**: 191 assertions, runs offline; CI runs on ubuntu, macOS and Windows for every push and PR, plus a release preflight on tags
 - **More than adaptation**: `scaffold.mjs` emits a runnable plugin in five forms in one command (verified against the real host base classes), and `write-gate.mjs` issues a birth certificate when you are done
 - **Silent failures have hard evidence**: `ghostHost` compares process start time against the disk change time to catch "new code on disk, old code in memory"; `falseGreen` catches TypeScript's silent fallback when `tsconfig` `paths` point at a missing checkout. Both report evidence and never pretend to decide for you
 - **Honest about its limits**: a passing smoke test is not host compatibility, and the tool says so in its output; soft audit metrics are passed through, never turned into a verdict on your behalf
@@ -204,7 +204,7 @@ No TypeScript, no AST library, no HTTP client. Runs on Node 22.13+ (`import.meta
 Self-test:
 
 ```sh
-npm test   # node scripts/self-test.mjs, 187 assertions
+npm test   # node scripts/self-test.mjs, 191 assertions
 ```
 
 Contributors should enable the pre-commit gate (one time): `git config core.hooksPath .githooks` — every commit runs the self-test, so a forgotten downstream sync is caught at commit time.

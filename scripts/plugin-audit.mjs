@@ -313,6 +313,26 @@ export function auditPlugin(pluginDir, { scanResult = null, targetVersion = null
     }
   }
 
+  // 维度 2 补强（吸纳上游 PR #267）：Bundle Resolution Shadow 检测
+  // 宿主加载器在解析 bundle 时优先读取宿主主包安装树下的内置包。若第三方插件包名
+  // 与宿主内置包同名，会导致 profile 中的本地插件被宿主内置实现静默遮蔽。
+  if (hostInfoResolved?.location && pkg.name) {
+    const shadowCheck = packageOnHost(pkg.name, hostInfoResolved)
+    if (shadowCheck.status === 'present' && shadowCheck.checkedWhere) {
+      const isSelf = path.resolve(shadowCheck.checkedWhere) === root
+      if (!isSelf) {
+        report.findings.push({
+          dimension: 'resilience',
+          severity: 'HIGH',
+          file: 'package.json',
+          title: `检测到宿主官方同名 Bundle 遮蔽风险 (Bundle Resolution Shadow: ${pkg.name})`,
+          detail: `宿主官方安装位已存在同名内置包（位置: ${shadowCheck.checkedWhere}）。DSH 加载器会优先加载官方版本，导致当前插件被静默覆盖失效。建议更换插件名称或避免占用官方套件命名空间。`,
+        })
+        deduct('resilience', 50, 20)
+      }
+    }
+  }
+
   // 新版本感知：有 code-scan 结果时交叉出「适配未完成项 + 官方修法」。
   // package 命中若已被宿主实测判为 host-present（包还在），「装载必炸」不成立，
   // 不再按 HIGH 扣分——只把真正 absent/unknown 的当确认项。
