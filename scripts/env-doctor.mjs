@@ -50,8 +50,18 @@ export function candidateGlobalRoots({ platform = process.platform, env = proces
   const roots = [
     path.join(HOME, '.local', 'lib', 'node_modules'),
     '/usr/local/lib/node_modules',
+    '/usr/lib/node_modules',
     '/opt/homebrew/lib/node_modules',
   ]
+  // Android / Termux 移动端环境：$PREFIX 通常为 /data/data/com.termux/files/usr
+  if (env.PREFIX) {
+    roots.push(path.join(env.PREFIX, 'lib', 'node_modules'))
+  }
+  // 自定义 npm prefix (npm_config_prefix)
+  if (env.npm_config_prefix) {
+    roots.push(path.join(env.npm_config_prefix, 'lib', 'node_modules'))
+    roots.push(path.join(env.npm_config_prefix, 'node_modules'))
+  }
   // Windows npm 默认前缀是 %APPDATA%\npm，node_modules 在其下；
   // 先探这里可以免掉一次 npm spawn
   if (platform === 'win32' && env.APPDATA) {
@@ -85,15 +95,45 @@ function readPackageJson(dir) {
   }
 }
 
+// 向上查找局部 node_modules 中的宿主（适应 monorepo、独立工作区或本地依赖场景）
+function findLocalDshInAncestors(startDir) {
+  if (!startDir) return null
+  let cur = path.resolve(startDir)
+  for (let i = 0; i < 5; i++) {
+    const cand = path.join(cur, 'node_modules', '@deepseek-ai', 'dsh')
+    const pkg = readPackageJson(cand)
+    if (pkg?.version) return { version: pkg.version, location: cand, source: 'local-ancestor-node_modules' }
+    const parent = path.dirname(cur)
+    if (parent === cur) break
+    cur = parent
+  }
+  return null
+}
+
 // 导出供 code-scan 的宿主实测核查复用：guide 是二手语义，
 // 目标宿主的 node_modules 是一手事实——包到底还在不在，stat 一次就知道。
-export function findGlobalDsh() {
+// 支持环境变量注入 (DSH_HOST_PATH/DSH_LOCATION) 与从工作区向上回溯本地宿主。
+export function findGlobalDsh(startDir = null) {
+  // 1. 显式环境变量覆盖（CI、Docker、远程服务器与非标环境直接注入）
+  const envPath = process.env.DSH_HOST_PATH || process.env.DSH_LOCATION
+  if (envPath) {
+    const pkg = readPackageJson(envPath)
+    if (pkg?.version) return { version: pkg.version, location: path.resolve(envPath), source: 'env-override' }
+  }
+
+  // 2. 当前工作区及其父目录探测（局部安装、monorepo、无全局安装形态）
+  const localHost = findLocalDshInAncestors(startDir || process.cwd())
+  if (localHost) return localHost
+
+  // 3. 全局 node_modules 候选根
   for (const root of candidateGlobalRoots()) {
     const pkg = readPackageJson(path.join(root, '@deepseek-ai', 'dsh'))
     if (pkg?.version) {
       return { version: pkg.version, location: path.join(root, '@deepseek-ai', 'dsh'), source: 'node_modules' }
     }
   }
+
+  // 4. PATH 中的 CLI 兜底
   try {
     const out = execFileSync('dsh', ['--version'], { encoding: 'utf8', shell: SPAWN_SHELL }).trim()
     const m = out.match(/(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)/)

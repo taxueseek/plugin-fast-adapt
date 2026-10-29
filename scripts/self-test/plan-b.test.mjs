@@ -95,3 +95,46 @@ test('方案 B Peer 依赖自适应：生成精确覆盖本地宿主版本的 ca
   assert.strictEqual(patches[0].to, '^0.2.2-alpha.2')
   assert.strictEqual(patches[0].verified, true)
 })
+
+test('方案 B 环境自适应：candidateGlobalRoots 包含移动端 Termux PREFIX 与自定义 npm 前缀', async () => {
+  const { candidateGlobalRoots } = await import('../env-doctor.mjs')
+  const roots = candidateGlobalRoots({
+    platform: 'linux',
+    env: { PREFIX: '/data/data/com.termux/files/usr', npm_config_prefix: '/opt/custom-npm' },
+  })
+  assert.ok(roots.includes('/data/data/com.termux/files/usr/lib/node_modules'), '应包含 Termux 模块路径')
+  assert.ok(roots.includes('/opt/custom-npm/lib/node_modules'), '应包含自定义 npm 前缀路径')
+  assert.ok(roots.includes('/usr/lib/node_modules'), '应包含标准 Linux 发行版路径')
+})
+
+test('方案 B 环境自适应：DSH_HOST_PATH 环境变量直接覆盖宿主定位', async () => {
+  const { findGlobalDsh } = await import('../env-doctor.mjs')
+  const dir = tmpPluginDir('env-host-override')
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.2.9-ci' }))
+  
+  const orig = process.env.DSH_HOST_PATH
+  try {
+    process.env.DSH_HOST_PATH = dir
+    const found = findGlobalDsh()
+    assert.strictEqual(found?.version, '0.2.9-ci')
+    assert.strictEqual(found?.source, 'env-override')
+  } finally {
+    if (orig !== undefined) process.env.DSH_HOST_PATH = orig
+    else delete process.env.DSH_HOST_PATH
+  }
+})
+
+test('方案 B 环境自适应：支持从工作区目录向上回溯探测本地依赖宿主', async () => {
+  const { findGlobalDsh } = await import('../env-doctor.mjs')
+  const workspaceRoot = tmpPluginDir('workspace-monorepo')
+  const subPlugin = path.join(workspaceRoot, 'packages', 'my-plugin')
+  fs.mkdirSync(subPlugin, { recursive: true })
+  
+  const localDsh = path.join(workspaceRoot, 'node_modules', '@deepseek-ai', 'dsh')
+  fs.mkdirSync(localDsh, { recursive: true })
+  fs.writeFileSync(path.join(localDsh, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.2.2-local' }))
+
+  const found = findGlobalDsh(subPlugin)
+  assert.strictEqual(found?.version, '0.2.2-local')
+  assert.strictEqual(found?.source, 'local-ancestor-node_modules')
+})

@@ -21,7 +21,11 @@ import { findGlobalDsh } from './env-doctor.mjs'
 // 而这里只用到 dist-tags，网络、解析、缓存落盘全是白付的。
 const DIST_TAGS_URL = 'https://registry.npmjs.org/-/package/@deepseek-ai/dsh/dist-tags'
 const HARNESS_REPO = 'https://github.com/deepseek-ai/deepseek-harness.git'
-const CACHE_ROOT = path.join(os.homedir(), '.cache', 'dsh-plugin-fast-adapt')
+const CACHE_ROOT =
+  process.env.DSH_CACHE_DIR ||
+  (process.env.XDG_CACHE_HOME
+    ? path.join(process.env.XDG_CACHE_HOME, 'dsh-plugin-fast-adapt')
+    : path.join(os.homedir(), '.cache', 'dsh-plugin-fast-adapt'))
 // tag 是冻结快照，官方在发版后还会把同版本的指南补全到默认分支
 // （2026-10-27 实测：dsh-v0.2.1-rc.3 tag 里 v0.2.1-rc.2 只有 1 条变更，
 // 默认分支同一目录 23 条；tag 之后新增的 rc.3 指南只存在于分支上）。
@@ -141,15 +145,32 @@ function cacheDirFor(version, cacheRoot = CACHE_ROOT) {
 }
 
 // 本机可能已有 harness clone，优先复用，省一次网络
-function findLocalClone() {
+// 覆盖：环境变量、当前工作区同级/子级、常见开发者根（workspace/projects）与 Documents
+function findLocalClone(startDir = process.cwd()) {
   const candidates = []
+  const envClone = process.env.DSH_HARNESS_CLONE
+  if (envClone) candidates.push(envClone)
+
+  // 1. 当前工作区周边（同级/下级）
+  candidates.push(path.resolve(startDir, 'deepseek-harness'))
+  candidates.push(path.resolve(startDir, '..', 'deepseek-harness'))
+  candidates.push(path.resolve(startDir, '..', '..', 'deepseek-harness'))
+
+  // 2. 常见开发根目录（Linux/macOS/容器通用）
+  const home = os.homedir()
+  candidates.push(path.join(home, 'deepseek-harness'))
+  candidates.push(path.join(home, 'workspace', 'deepseek-harness'))
+  candidates.push(path.join(home, 'projects', 'deepseek-harness'))
+
+  // 3. Documents 子目录兜底
   try {
-    for (const entry of fs.readdirSync(path.join(os.homedir(), 'Documents'), { withFileTypes: true })) {
-      if (entry.isDirectory()) candidates.push(path.join(os.homedir(), 'Documents', entry.name, 'deepseek-harness'))
+    const docs = path.join(home, 'Documents')
+    if (fs.existsSync(docs)) {
+      for (const entry of fs.readdirSync(docs, { withFileTypes: true })) {
+        if (entry.isDirectory()) candidates.push(path.join(docs, entry.name, 'deepseek-harness'))
+      }
     }
   } catch {}
-  const envClone = process.env.DSH_HARNESS_CLONE
-  if (envClone) candidates.unshift(envClone)
 
   for (const dir of candidates) {
     if (fs.existsSync(path.join(dir, 'docs', 'upgrade-guide'))) return dir
