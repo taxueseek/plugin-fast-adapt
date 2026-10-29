@@ -4,20 +4,23 @@
 
 [![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D22.13-blue.svg)](package.json) [![Dependencies](https://img.shields.io/badge/dependencies-0-blue.svg)](#dependencies) [![Self-test](https://img.shields.io/badge/self--test-198%20passing-brightgreen.svg)](#dependencies)
 
-> **Every time DSH ships a new release, existing plugins can stop working.** This skill reads the vendor's official upgrade guide directly, scans your plugin code, and reports which breaking changes you hit together with the vendor's own fix instructions; it also scaffolds a runnable plugin from zero in one command and verifies it.
+> **Every time DSH ships a new release, existing plugins can stop working.** This skill reads the vendor's official upgrade guide directly, scans your plugin code, and reports which breaking changes you hit together with the vendor's own fix instructions; it also scaffolds a runnable plugin from zero in one command and verifies it. **Now fully adapted for the latest DSH 0.2.2 series (including 0.2.2-alpha.2)**, featuring local environment anchoring, Release Note targeted extraction, and fleet multi-dimensional governance.
 
 ## At a glance
 
 | | |
 | --- | --- |
-| Upstream ships a new release | Works immediately, zero changes (reads vendor sources, no hand-curated cards) |
-| Scan false positives | 12 → 0 (four noise-reduction layers) |
-| Verifying one change | 3,600 s real host cold start → millisecond-scale in-memory smoke test |
+| Upstream ships a new release | Works immediately, zero changes (reads vendor sources and release notes, no hand-curated cards) |
+| DSH Host Compatibility | **Fully adapted for latest DSH 0.2.2 series** (covers v0.1.7-rc.2 through 0.2.2-alpha.2) |
+| Fleet Governance Board | One-click sweep across Web/APP installed plugins & workspace code with life-cycle matrix |
+| Version Authority | Strictly anchors to the local installed host version by default (Plan B: 0 network requests) |
+| Scan false positives | 12 → 0 (four noise-reduction layers + word boundary regex + virtual guide deduplication) |
+| Verifying one change | 3,600 s real host cold start → millisecond-scale in-memory smoke test (with unbuilt check & host module fallback) |
 | Ghost host | Warns when the disk has new code but the running process still executes the old one (compares process start time, not version strings) |
 | Fake-green check | Warns when `tsconfig` `paths` point at a missing checkout, where TypeScript silently falls back to published types |
 | Self-test | 198 assertions, runs offline |
 | External dependencies | 0 (Node built-ins + the `git`/`npm` commands only) |
-| Network | Only used to fetch vendor sources; the core steps are fully offline |
+| Cross-platform | Native support for macOS, Linux standard paths, Termux Android, and containers (XDG-compliant) |
 | Scaffolding | One command emits a runnable plugin in five forms, verified on creation, then a write gate issues the birth certificate |
 
 ## What problem it solves
@@ -32,15 +35,23 @@ This project takes a different approach: **maintain the method of obtaining know
 
 ### Advantages
 
-- **Tracks new releases automatically**: reads the official `docs/upgrade-guide/` and npm `dist-tags` directly, so it works the moment upstream ships — no card lag, no corridor gaps
-- **Zero false positives**: four noise-reduction layers took a real plugin from 12 false positives to 0, and every finding carries `severity`, `evidence` and provenance anchors pointing straight at the official guide
-- **Cheap verification**: the in-memory Cordis smoke test returns in milliseconds to seconds, with no real host cold start; add `--real-smoke` when you need real-host evidence (clean profile, install and boot)
-- **Zero external dependencies**: Node built-ins plus the `git`/`npm` commands only — no TypeScript, no AST library, no HTTP client
-- **Very light network dependence**: only "fetching vendor sources" touches the network — version resolution reads npm `dist-tags`, guide fetching reads a managed snapshot of the official repo's default branch (1-hour TTL; release tags are an offline-only fallback marked `frozen`). `dist-tags` is cached for 1 hour and degrades to the stale cache with an explicit `stale` marker; guides reuse an existing local clone first, and `--no-clone` skips the fetch. Environment inspection, code scanning, smoke tests, audits, log diagnosis and seam queries are fully offline
-- **Reproducible**: 198 assertions, runs offline; CI runs on ubuntu, macOS and Windows for every push and PR, plus a release preflight on tags
-- **More than adaptation**: `scaffold.mjs` emits a runnable plugin in five forms in one command (verified against the real host base classes), and `write-gate.mjs` issues a birth certificate when you are done
-- **Silent failures have hard evidence**: `ghostHost` compares process start time against the disk change time to catch "new code on disk, old code in memory"; `falseGreen` catches TypeScript's silent fallback when `tsconfig` `paths` point at a missing checkout. Both report evidence and never pretend to decide for you
-- **Honest about its limits**: a passing smoke test is not host compatibility, and the tool says so in its output; soft audit metrics are passed through, never turned into a verdict on your behalf
+- **Full adaptation for latest DSH 0.2.2 series**: reads the official `docs/upgrade-guide/` and Release Notes directly, covering breaking change anchors and official migrations in 0.2.2-alpha.2; generates virtual guides and speeds up scans with a 3-tuple compatibility ledger
+- **Local environment authority anchoring (zero network reliance)**: defaults to the locally installed DSH host version (Plan B, 0 external network requests), eliminating upstream network jitters and GitHub rate limits; uses `--check-upstream` for explicit check
+- **Fleet multi-dimensional governance board**: introduces `fleet-sweep.mjs` to inspect workspace code, installed Web plugins, APP desktop plugins, and active processes in a multi-stage life-cycle matrix, with `--apply-compat` batch safe patching
+- **Hard guards against false positives & unbuilt traps**:
+  - Four noise-reduction layers + regex word boundaries (preventing `ABORTED` matching `FS_ABORTED`)
+  - Virtual release note & official guide deduplication
+  - Unbuilt TypeScript plugin hard gate (blocks and guides `pnpm run build` when missing `lib/index.js`)
+  - Bundle Resolution Shadow detection for host-bundled packages
+  - Exit code 143 (`SIGTERM`) acknowledged as graceful shutdown, eliminating false crash alarms
+  - Auto Schemastery `Config({})` parsing and temporary host `node_modules` fallback symlinking during smoke tests
+- **Cross-platform & container ready**: eliminates hardcoded directory assumptions, supporting Linux standard paths (`/usr/lib/node_modules`), Termux on Android (`$PREFIX/lib/node_modules`), `npm_config_prefix`, `DSH_HOST_PATH` / `DSH_LOCATION` env overrides, and XDG cache specs
+- **Cheap verification**: in-memory Cordis smoke test returns in milliseconds to seconds without a real host cold start; `--real-smoke` provides real-host isolated profile boot verification
+- **Zero external dependencies**: Node built-ins plus `git`/`npm` commands only
+- **Reproducible**: 198 assertions, runs offline; CI runs on ubuntu, macOS, and Windows
+- **More than adaptation**: `scaffold.mjs` emits a runnable plugin in five forms in one command, and `write-gate.mjs` issues a birth certificate
+- **Silent failures have hard evidence**: `ghostHost` compares process start time against disk change time; `falseGreen` catches TypeScript silent fallbacks
+- **Honest about its limits**: passing smoke test ≠ host compatibility, and the tool states this clearly in its output
 
 ## Three lanes
 
@@ -95,12 +106,15 @@ git clone https://github.com/taxueseek/plugin-fast-adapt.git
 
 ## Pipeline
 
-Run the whole chain with one command (recommended); every run writes a local log:
+### 1. Single Plugin Pipeline (run.mjs)
+
+Run the whole chain with one command (recommended); every run writes a local log and updates the compatibility ledger:
 
 ```sh
-node scripts/run.mjs <plugin-dir>        # env → version → guide → scan → audit → smoke → typecheck
+node scripts/run.mjs <plugin-dir>        # env → version → guide → scan → build-check → audit → smoke → typecheck
+node scripts/run.mjs <plugin-dir> --check-upstream # explicitly check upstream npm registry and release tags
 node scripts/run.mjs <plugin-dir> --real-smoke   # plus one more tier: install & boot in a clean profile (bridges upstream verify-runtime)
-node scripts/run.mjs <plugin-dir> --offline      # skip fetching vendor sources (no npm read, no clone); local five steps only
+node scripts/run.mjs <plugin-dir> --offline      # skip fetching vendor sources (no npm read, no clone); local all-step pipeline
 node scripts/run.mjs <plugin-dir> --no-clone     # resolve the version but do not fetch the guide (use an existing local clone)
 node scripts/run.mjs <plugin-dir> --strict       # exit 2 when the scan did not run or the guide does not cover the target version (CI)
 node scripts/run-log.mjs list           # review past runs (tool version@commit included)
@@ -108,6 +122,22 @@ node scripts/run-log.mjs doctor         # cross-check run logs × host startup l
 node scripts/run-log.mjs sanitize --latest --out share.json   # sanitise before sharing
 npm run release-check                   # release preflight: version sync, tag, npm publish state, pack contents, self-test
 ```
+
+### 2. Fleet Governance Board (fleet-sweep.mjs)
+
+When upgrading DSH hosts or managing monorepos, sweep and categorize all plugins:
+
+```sh
+node scripts/fleet-sweep.mjs                   # full matrix board: running, workspace, web, app, disabled
+node scripts/fleet-sweep.mjs --running         # active plugins currently loaded in running host
+node scripts/fleet-sweep.mjs --workspace       # workspace source plugins only
+node scripts/fleet-sweep.mjs --web             # Web profile plugins only
+node scripts/fleet-sweep.mjs --app             # Desktop (APP) profile plugins only
+node scripts/fleet-sweep.mjs --disabled        # disabled/inactive plugins and reasons
+node scripts/fleet-sweep.mjs --target 0.2.2-alpha.2 --apply-compat # batch adapt zero-hit plugins
+```
+
+Detailed SOP and multi-platform practices are in [references/user-guide.md](references/user-guide.md).
 
 You can also run each step on its own (the six-step spine remains; run.mjs just chains the steps below, and the optional ones are added as needed):
 

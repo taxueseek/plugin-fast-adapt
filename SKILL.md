@@ -20,7 +20,7 @@ DSH 插件升级适配的主入口。三条车道各管一件事，先判意图�
 ## 一键编排（推荐入口）
 
 ```sh
-node scripts/run.mjs <插件目录> [--target <版本>] [--from <版本>] [--no-clone] [--no-smoke] [--no-typecheck] [--no-log] [--real-smoke] [--strict]
+node scripts/run.mjs <插件目录> [--check-upstream] [--target <版本>] [--from <版本>] [--no-clone] [--no-smoke] [--no-typecheck] [--no-log] [--real-smoke] [--strict]
 ```
 
 环境→定版→指南→扫描→体检→冒烟→typecheck 一条命令跑完，出一份统一 JSON 报告并写本地运行日志。退出码：0 干净，2 有 critical/high 命中、typecheck 红或真冷启动失败；加 `--strict` 时「扫描没跑」和「指南没覆盖到目标版本」也按 2 退出。报告里的 `scan.coverage` 写明本轮指南覆盖到哪一版：没扫或覆盖不全时屏幕会明说「不能当查干净」，不再用「命中 0 处」冒充干净。扫描窗口、`--real-smoke`、运行日志（`run-log.mjs list/show/sanitize/doctor`）的细节见 `sub-skills/adapt/SKILL.md`。「插件报错 / 装了没生效」的第一站是 `node scripts/run-log.mjs doctor`，它把运行日志和宿主启动日志并排核对。

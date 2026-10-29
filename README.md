@@ -4,20 +4,23 @@
 
 [![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D22.13-blue.svg)](package.json) [![外部依赖](https://img.shields.io/badge/外部依赖-0-blue.svg)](#依赖与自检) [![自检](https://img.shields.io/badge/自检-198项断言-brightgreen.svg)](#依赖与自检)
 
-> **DSH 每次发新版，老插件就可能启动不了。** 这个技能直连 DeepSeek 官方升级指南，扫你的插件代码，报出踩了哪几条破坏性变更、官方给的修法是什么；还能一条命令从零造出可运行的插件。
+> **DSH 每次发新版，老插件就可能启动不了。** 这个技能直连 DeepSeek 官方升级指南，扫你的插件代码，报出踩了哪几条破坏性变更、官方给的修法是什么；还能一条命令从零造出可运行的插件。**现已深度适配 DSH 最新版本（0.2.2 系列，含 0.2.2-alpha.2）**，支持本地环境权威锚定、Release Note 破坏性变更提取与整机集群多维批量治理。
 
 ## 速览
 
 | | |
 | --- | --- |
-| 上游发新版 | 无需任何改动，直接可用（直连官方源，不维护知识卡片） |
-| 扫描误报 | 12 处 → 0（四层降噪） |
-| 验证一次改动 | 3600 秒真宿主冷启动 → 毫秒级内存冒烟 |
+| 上游发新版 | 无需任何改动，直接可用（直连官方源与 Release Notes，不维护滞后卡片） |
+| DSH 宿主适配 | **已完整适配最新 DSH 0.2.2 系列**（覆盖 v0.1.7-rc.2 至 0.2.2-alpha.2） |
+| 集群治理看板 | 一键扫描整机 Web / APP 插件与工作区，按运行态生命周期多维矩阵呈现 |
+| 定版权威 | 默认收敛到本机真实宿主版本（方案 B 零网络请求，防上游频控） |
+| 扫描误报 | 12 处 → 0（四层降噪 + 常量词边界正则 + 虚拟指南去重） |
+| 验证一次改动 | 3600 秒真宿主冷启动 → 毫秒级内存冒烟（支持未构建产物硬拦截与宿主模块软链兜底） |
 | 幽灵宿主 | 磁盘已换新、进程还在跑旧代码时报警（比进程启动时间，不读版本号） |
 | 假绿检测 | `tsconfig` 的 `paths` 指向不存在的 checkout 时报警（本地门禁可能全绿而实际已坏） |
 | 自检 | 198 项断言，离线可跑 |
 | 外部依赖 | 0（只用 Node 内置模块 + `git`/`npm` 命令） |
-| 网络 | 只取官方源时用，核心步骤全离线 |
+| 跨平台 | 原生支持 macOS、Linux 标准路径、Termux 移动端与容器环境（支持 XDG 规范） |
 | 造插件 | 一条命令出五形态可运行插件，生成即验证 |
 
 ## 它解决什么
@@ -32,11 +35,19 @@ DSH（DeepSeek Harness）是一个「所有功能都以插件形式存在」的 
 
 ### 优势
 
-- **自动跟上新版**：直连官方 `docs/upgrade-guide/` 与 npm `dist-tags`，上游发版即生效，没有卡片滞后也没有走廊缺口
-- **误报清零**：四层降噪把真实插件的命中从 12 处误报降到 0，每条命中带 `severity`、`evidence` 和直达官方指南的出处锚点
+- **完整适配最新 DSH 0.2.2 系列**：直连官方 `docs/upgrade-guide/` 与 Release Notes，全面纳入 0.2.2-alpha.2 等最新版本的破坏性变更锚点与官方修法，支持虚拟指南自动生成与三元版本账本快速探测
+- **本地环境权威锚定（零网络依赖）**：默认定版本严格收敛到本机已安装的 DSH 宿主版本（方案 B，零外部网络请求），免除官方源网络波动与 GitHub 频控影响；显式 `--check-upstream` 才核对上游
+- **集群全域多维治理看板**：新增 `fleet-sweep.mjs`，一键扫描整机 Web 插件、APP 桌面端插件、工作区源码与运行中服务，输出五大生命周期矩阵看板，支持 `--apply-compat` 批量安全修补
+- **误报与低级错误硬守卫**：
+  - 四层降噪 + 常量词边界正则匹配（避免 `ABORTED` 误伤 `FS_ABORTED`）
+  - 虚拟 Release 指南与官方真实指南自动去重
+  - 未构建 TypeScript 插件硬拦截（未见 `lib/index.js` 等入口即阻断并指引 `pnpm run build`）
+  - 宿主同名内置包遮蔽（Bundle Resolution Shadow）检测，防官方同名包静默覆盖
+  - 宿主冷启动退出码 143（`SIGTERM`）优雅停机正常判定，杜绝假死误报
+  - 冒烟自动解析 Schemastery `Config({})` 填充默认值，未安装 node_modules 的单文件插件自动挂载宿主依赖兜底
+- **跨平台与容器自适应**：消除绝对路径硬编码，扩展适配 Linux 发行版标准路径（`/usr/lib/node_modules`）、Termux 移动端（`$PREFIX/lib/node_modules`）与 `npm_config_prefix`，支持环境变量 `DSH_HOST_PATH` / `DSH_LOCATION` 直接覆盖，严格遵循 XDG 缓存规范
 - **验证便宜**：内存级 Cordis 冒烟毫秒到秒级出结果，不用真宿主冷启动；需要真证据时 `--real-smoke` 再补干净 profile 真装真启档
 - **零外部依赖**：只用 Node 内置模块加 `git`/`npm` 命令，没有 TypeScript、没有 AST 库、没有网络请求库
-- **网络依赖很轻**：只有「取官方源」走网络——定版本读 npm 的 dist-tags、取指南读官方仓库默认分支的受管快照（1 小时 TTL，tag 仅离线兜底并标 `frozen`）。dist-tags 缓存 1 小时，失败降级旧缓存并明确标 stale；指南优先复用本机已有 clone，`--no-clone` 可跳过。环境巡检、代码扫描、冒烟、体检、日志诊断、接缝查询全离线
 - **可复现**：198 项自检离线可跑；CI 在 push 和 PR 上跑 ubuntu/macOS/Windows 三平台，打 tag 时另跑发布预检
 - **不止适配**：`scaffold.mjs` 一条命令生成五形态可运行插件（真基类装载验证），`write-gate.mjs` 写完出「出生证」
 - **静默失败有判据**：`ghostHost` 比对进程启动时间与磁盘变更时间，抓「磁盘新版、内存旧版」；`falseGreen` 抓 `tsconfig` 的 `paths` 指向不存在 checkout 时 TypeScript 的静默回落。两条都只报不判，证据写在输出里
@@ -95,12 +106,15 @@ git clone https://github.com/taxueseek/plugin-fast-adapt.git
 
 ## 流程
 
-一条命令跑完全链（推荐），每次运行自动写本地日志：
+### 1. 单兵深度流水线（run.mjs）
+
+一条命令跑完全链（推荐），每次运行自动写本地日志并更新三元版本账本：
 
 ```sh
-node scripts/run.mjs <插件目录>          # 环境→定版→指南→扫描→体检→冒烟→typecheck
+node scripts/run.mjs <插件目录>          # 环境→定版→指南→扫描→构建核验→体检→冒烟→typecheck
+node scripts/run.mjs <插件目录> --check-upstream # 显式核对上游官方 npm 与最新 tag
 node scripts/run.mjs <插件目录> --real-smoke   # 再补一档：干净 profile 真装真启（桥接原仓库 verify-runtime）
-node scripts/run.mjs <插件目录> --offline      # 跳过取官方源（不读 npm、不 clone），只跑本地五步
+node scripts/run.mjs <插件目录> --offline      # 跳过取官方源（不读 npm、不 clone），只跑本地全流程
 node scripts/run.mjs <插件目录> --no-clone     # 取版本但不拉指南（本机已有 clone 时用）
 node scripts/run.mjs <插件目录> --strict       # 扫描没跑或指南没覆盖到目标版本时退出 2（CI 用）
 node scripts/run-log.mjs list           # 回看历史运行（含工具版本@commit）
@@ -108,6 +122,22 @@ node scripts/run-log.mjs doctor         # 运行日志 × 宿主启动日志交�
 node scripts/run-log.mjs sanitize --latest --out share.json   # 脱敏后才可外发
 npm run release-check                   # 发布前预检：版本一致、tag、npm 发布状态、包内容、自检
 ```
+
+### 2. 集群全域治理看板（fleet-sweep.mjs）
+
+当 DSH 宿主升级、维护多插件大仓或需要巡检整机生态健康时，一键输出多维看板：
+
+```sh
+node scripts/fleet-sweep.mjs                   # 全域看板：运行中、工作区源码、Web已装、APP已装、已禁用
+node scripts/fleet-sweep.mjs --running         # 仅看当前活跃宿主进程正在执行的插件
+node scripts/fleet-sweep.mjs --workspace       # 仅扫描当前工作区源码插件
+node scripts/fleet-sweep.mjs --web             # 仅查看 Web 平台插件
+node scripts/fleet-sweep.mjs --app             # 仅查看 Desktop (APP) 桌面端插件
+node scripts/fleet-sweep.mjs --disabled        # 仅查看被标记 disabled 或未激活的插件清单与原因
+node scripts/fleet-sweep.mjs --target 0.2.2-alpha.2 --apply-compat # 批量修补 0 破坏命中的 package.json
+```
+
+详细操作 SOP 与多平台实战指引见 [references/user-guide.md](references/user-guide.md)。
 
 也可以按步单跑（六步主干保留，run.mjs 就是把下面这些串起来，可选步按需加）：
 
