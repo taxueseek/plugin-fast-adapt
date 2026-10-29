@@ -152,3 +152,50 @@ test('三元版本账本快照：最新成功记录检索与源码未修改快�
   assert.strictEqual(isPluginUnmodifiedSince(dir, now + 1000), true, '未来时间戳应判定为未修改')
   assert.strictEqual(isPluginUnmodifiedSince(dir, now - 10000), false, '过去时间戳应判定为有修改')
 })
+
+test('code-scan 词边界与双语 Release Note 去重：ABORTED 不误伤 FS_ABORTED，Other Changes 识别', async () => {
+  const { parseReleaseNotesToGuides } = await import('../lib/guide-parser.mjs')
+  const { scanPlugin } = await import('../code-scan.mjs')
+  const bilingual = `
+### 其他变更
+• 在 PTC 模式中将取消的调用报告为 ABORTED 而非 CODE_RUN_FAILED。
+---
+### Other Changes
+• Report caller-cancelled run_code calls in PTC Mode as ABORTED rather than CODE_RUN_FAILED.
+`
+  const guides = parseReleaseNotesToGuides(bilingual, '0.2.2-alpha.2')
+  assert.strictEqual(guides.length, 1, '中英双语 Release Note 优先英文段且不产生双倍重复条目')
+
+  const dir = tmpPluginDir('code-boundary')
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 't-code', version: '1.0.0' }))
+  fs.mkdirSync(path.join(dir, 'src'), { recursive: true })
+  fs.writeFileSync(
+    path.join(dir, 'src', 'index.js'),
+    `export const a = 'FS_ABORTED'\nexport const b = 'ABORTED'\n`,
+  )
+  const res = scanPlugin(dir, guides, {
+    localVersion: '0.2.1-rc.4',
+    targetVersion: '0.2.2-alpha.2',
+    verifyHost: false,
+  })
+  const hits = res.findings.filter((f) => f.kind === 'code')
+  assert.strictEqual(hits.length, 1, 'FS_ABORTED 不应被 ABORTED 子串误伤')
+  assert.strictEqual(hits[0].line, 2, '只有第 2 行精确词边界的 ABORTED 才命中')
+})
+
+test('quick-smoke：自动调用 Config({}) 填充默认配置后再执行 apply，且 run.mjs 保留失败 stage', async () => {
+  const dir = tmpPluginDir('smoke-config-default')
+  fs.writeFileSync(
+    path.join(dir, 'package.json'),
+    JSON.stringify({ name: 't-smoke-cfg', version: '1.0.0', type: 'module', main: 'index.js' }),
+  )
+  fs.writeFileSync(
+    path.join(dir, 'index.js'),
+    `export function Config(raw = {}) { return { maxFileBytes: raw.maxFileBytes ?? 1024 } }\n` +
+      `export function apply(ctx, cfg) {\n` +
+      `  if (!Number.isInteger(cfg?.maxFileBytes) || cfg.maxFileBytes <= 0) throw new Error('maxFileBytes must be a positive integer')\n` +
+      `}\n`,
+  )
+  const smokeRes = await runQuickSmoke(dir)
+  assert.strictEqual(smokeRes.success, true, `导出 Config 函数的插件应拿到默认配置通过冒烟: ${smokeRes.error || ''}`)
+})

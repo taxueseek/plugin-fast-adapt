@@ -11,11 +11,12 @@
 //   node scripts/fleet-sweep.mjs [目录...] [--installed] [--workspace] [--web] [--app] [--running] [--disabled] [--json] [--strict] [--target <版本>]
 
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { printJson, isPluginForm } from './lib/scanner.mjs'
 import { findGlobalDsh, listInstalledPlugins, probeEnvironment } from './env-doctor.mjs'
-import { auditPlugin } from './plugin-audit.mjs'
+import { auditPlugin, peerPatchFor, compatPatchFor } from './plugin-audit.mjs'
 
 const TOOL_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -30,6 +31,9 @@ function parseArgs(argv) {
   let filterApp = false
   let filterRunning = false
   let filterDisabled = false
+  let adapt = false
+  let applyCompat = false
+  let includeOfficial = false
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
@@ -39,6 +43,11 @@ function parseArgs(argv) {
     else if (a === '--app' || a === '--desktop') filterApp = true
     else if (a === '--running') filterRunning = true
     else if (a === '--disabled') filterDisabled = true
+    else if (a === '--adapt') adapt = true
+    else if (a === '--apply-compat') {
+      adapt = true
+      applyCompat = true
+    } else if (a === '--include-official') includeOfficial = true
     else if (a === '--json') json = true
     else if (a === '--strict') strict = true
     else if (a === '--target') target = argv[++i] ?? null
@@ -46,16 +55,19 @@ function parseArgs(argv) {
       process.stdout.write(
         '用法: node scripts/fleet-sweep.mjs [目录...] [选项]\n\n' +
           '选项:\n' +
-          '  [目录...]         扫描指定工作区目录（默认同时扫描当前工作区与安装环境）\n' +
-          '  --installed       仅扫描本机 DSH profiles 中已安装的插件\n' +
-          '  --workspace       仅扫描本地工作区源码插件\n' +
-          '  --web             仅筛选 Web 平台插件\n' +
-          '  --app / --desktop 仅筛选 Desktop (APP) 桌面端插件\n' +
-          '  --running         仅筛选当前正在活跃运行中的插件\n' +
-          '  --disabled        仅筛选已禁用或未启用的插件\n' +
-          '  --json            输出完整结构化分类 JSON 报告\n' +
-          '  --strict          存在任何 warning 或 broken 时以退出码 2 退出\n' +
-          '  --target <版本>   指定目标宿主版本（默认取本机当前宿主）\n',
+          '  [目录...]          扫描指定工作区目录（默认同时扫描当前工作区与安装环境）\n' +
+          '  --installed        仅扫描本机 DSH profiles 中已安装的插件\n' +
+          '  --workspace        仅扫描本地工作区源码插件\n' +
+          '  --web              仅筛选 Web 平台插件\n' +
+          '  --app / --desktop  仅筛选 Desktop (APP) 桌面端插件\n' +
+          '  --running          仅筛选当前正在活跃运行中的插件\n' +
+          '  --disabled         仅筛选已禁用或未启用的插件\n' +
+          '  --adapt            批量评估目标版本准入账本与 Peer 修补建议\n' +
+          '  --apply-compat     对 0 代码破坏性命中的插件自动写入 package.json 兼容账本与 Peer 范围\n' +
+          '  --include-official 包含宿主官方内置 @deepseek-ai/dsh-* 组件\n' +
+          '  --json             输出完整结构化分类 JSON 报告\n' +
+          '  --strict           存在任何 warning 或 broken 时以退出码 2 退出\n' +
+          '  --target <版本>    指定目标宿主版本（默认取本机当前宿主）\n',
       )
       process.exit(0)
     } else if (!a.startsWith('--')) {
@@ -63,7 +75,21 @@ function parseArgs(argv) {
     }
   }
 
-  return { dirs, installed, workspaceOnly, json, strict, target, filterWeb, filterApp, filterRunning, filterDisabled }
+  return {
+    dirs,
+    installed,
+    workspaceOnly,
+    json,
+    strict,
+    target,
+    filterWeb,
+    filterApp,
+    filterRunning,
+    filterDisabled,
+    adapt,
+    applyCompat,
+    includeOfficial,
+  }
 }
 
 export { discoverWorkspacePlugins as discoverPlugins, inspectPluginItem as inspectPlugin }
@@ -128,10 +154,85 @@ export function discoverWorkspacePlugins(roots = [process.cwd()]) {
   return [...candidates].sort()
 }
 
+// 解析已安装插件在磁盘上的真实目录（支持软链回溯到源码仓）
+export function resolveInstalledPluginDir(pkgName, profile, dshHome = null) {
+  if (!pkgName) return null
+  const baseHome = dshHome || process.env.DSH_PFA_DSH_HOME || path.join(os.homedir(), '.dsh')
+  const parts = pkgName.split('/')
+  const candidates = [
+    profile ? path.join(baseHome, 'profiles', profile, 'node_modules', ...parts) : null,
+    path.join(baseHome, 'profiles', 'node_modules', ...parts),
+  ].filter(Boolean)
+
+  for (const cand of candidates) {
+    try {
+      if (fs.existsSync(path.join(cand, 'package.json'))) {
+        try {
+          return fs.realpathSync(cand)
+        } catch {
+          return cand
+        }
+      }
+    } catch {}
+  }
+  return null
+}
+
+// 批量应用 package.json 准入账本与 Peer 范围修补（仅用于 0 代码破坏性命中的插件）
+export function applyCompatAndPeerPatch(pluginDir, { targetVersion = null, peerPatch = null, compatPatch = null } = {}) {
+  const pkgPath = path.join(path.resolve(pluginDir), 'package.json')
+  if (!fs.existsSync(pkgPath)) return { updated: false, changes: [] }
+  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
+  const resolvedPeers = peerPatch ?? (targetVersion ? peerPatchFor(pkg, targetVersion) : [])
+  const resolvedCompat = compatPatch ?? (targetVersion ? compatPatchFor(pkg, targetVersion) : [])
+  const changes = []
+
+  if (resolvedPeers.length > 0 && pkg.peerDependencies) {
+    for (const p of resolvedPeers) {
+      if (pkg.peerDependencies[p.package] !== undefined && pkg.peerDependencies[p.package] !== p.to) {
+        pkg.peerDependencies[p.package] = p.to
+        changes.push({ kind: 'peer', field: `peerDependencies.${p.package}`, from: p.from, to: p.to })
+      }
+    }
+  }
+
+  if (resolvedCompat.length > 0) {
+    for (const c of resolvedCompat) {
+      if (c.field === 'dsh.compatibility.dsh') {
+        pkg.dsh = pkg.dsh || {}
+        pkg.dsh.compatibility = pkg.dsh.compatibility || {}
+        pkg.dsh.compatibility.dsh = c.to
+        changes.push({ kind: 'compat', field: c.field, from: c.from, to: c.to })
+      } else if (c.field.startsWith('dsh.compatibility.dshReleases.')) {
+        const ver = c.field.slice('dsh.compatibility.dshReleases.'.length)
+        pkg.dsh = pkg.dsh || {}
+        pkg.dsh.compatibility = pkg.dsh.compatibility || {}
+        pkg.dsh.compatibility.dshReleases = pkg.dsh.compatibility.dshReleases || {}
+        pkg.dsh.compatibility.dshReleases[ver] = c.to
+        changes.push({ kind: 'compat', field: c.field, from: c.from, to: c.to })
+      } else if (c.field === 'engines.dsh') {
+        pkg.engines = pkg.engines || {}
+        pkg.engines.dsh = c.to
+        changes.push({ kind: 'compat', field: c.field, from: c.from, to: c.to })
+      }
+    }
+  }
+
+  if (changes.length > 0) {
+    fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`, 'utf8')
+  }
+  return { updated: changes.length > 0, changes }
+}
+
 // 全域发现：区分来源、平台形态与挂载配置
-export function discoverAllPlugins(targetDirs = [], { scanInstalled = true, scanWorkspace = true, envData = null } = {}) {
+export function discoverAllPlugins(
+  targetDirs = [],
+  { scanInstalled = true, scanWorkspace = true, envData = null, includeOfficial = false } = {},
+) {
   const list = []
   const seenPaths = new Set()
+  const dshHome = envData?.dshDir || process.env.DSH_PFA_DSH_HOME || null
+  const hostLoc = envData?.globalDsh?.location ? path.resolve(envData.globalDsh.location) : null
 
   // 1. 扫描安装环境中的插件
   if (scanInstalled && envData) {
@@ -147,6 +248,7 @@ export function discoverAllPlugins(targetDirs = [], { scanInstalled = true, scan
       const prof = group.profile
       const patchEntries = group.patchEntries || []
       const isRunningHost = runningProfiles.has(prof)
+      const seenInProfile = new Set()
 
       for (const entry of patchEntries) {
         const m = entry.match(/^-\s+([^\s]+)/)
@@ -154,12 +256,25 @@ export function discoverAllPlugins(targetDirs = [], { scanInstalled = true, scan
         const pkgName = m[1]
         // 排除非插件的内部指令或服务别名
         if (pkgName.startsWith('-') || pkgName.includes(' ') || pkgName === 'insert:') continue
+        if (seenInProfile.has(pkgName)) continue
+
+        const resolvedDir = resolveInstalledPluginDir(pkgName, prof, dshHome)
+        // 默认过滤官方内置 @deepseek-ai/dsh-* 服务条目（它们是宿主自带模块，除非用户显式 --include-official）
+        if (!includeOfficial && pkgName.startsWith('@deepseek-ai/dsh-')) {
+          const isHostBuiltin =
+            !resolvedDir || (hostLoc && (resolvedDir === hostLoc || resolvedDir.startsWith(hostLoc + path.sep)))
+          if (isHostBuiltin) continue
+        }
+
+        seenInProfile.add(pkgName)
 
         let platform = 'core'
         if (prof === 'web') platform = 'web'
         else if (prof.includes('desktop')) platform = 'app'
 
-        const isDisabled = group.globalPatchEntries?.some((e) => e.includes(pkgName) && e.includes('disabled: true'))
+        const isDisabled =
+          entry.includes('disabled: true') ||
+          group.globalPatchEntries?.some((e) => e.includes(pkgName) && e.includes('disabled: true'))
 
         let state = 'ENABLED'
         if (isDisabled) state = 'DISABLED'
@@ -168,7 +283,7 @@ export function discoverAllPlugins(targetDirs = [], { scanInstalled = true, scan
         list.push({
           sourceType: 'INSTALLED',
           name: pkgName,
-          dir: null,
+          dir: resolvedDir,
           profile: prof,
           platform,
           state,
@@ -211,7 +326,10 @@ export function discoverAllPlugins(targetDirs = [], { scanInstalled = true, scan
 }
 
 // 统一巡检与问题诊断
-export function inspectPluginItem(rawItem, { hostInfo = null, targetVersion = null, envData = null } = {}) {
+export function inspectPluginItem(
+  rawItem,
+  { hostInfo = null, targetVersion = null, envData = null, applyCompat = false } = {},
+) {
   const item = typeof rawItem === 'string'
     ? {
         name: path.basename(rawItem),
@@ -225,6 +343,7 @@ export function inspectPluginItem(rawItem, { hostInfo = null, targetVersion = nu
     : rawItem
 
   const dir = item.dir
+  const effectiveTarget = targetVersion || hostInfo?.version || null
   let pkg = { name: item.name, version: '0.0.0' }
   if (dir) {
     try {
@@ -238,19 +357,51 @@ export function inspectPluginItem(rawItem, { hostInfo = null, targetVersion = nu
     try {
       audit = auditPlugin(dir, {
         hostInfo,
-        targetVersion: targetVersion || hostInfo?.version || null,
+        targetVersion: effectiveTarget,
       })
     } catch (err) {
       audit = { overallScore: 0, scores: {}, findings: [{ severity: 'CRITICAL', title: err.message }] }
     }
   } else {
-    audit = { overallScore: 100, scores: { performance: 100, resilience: 100, contextBudget: 100, lifecycle: 100 }, findings: [] }
+    audit = {
+      overallScore: 100,
+      scores: { performance: 100, resilience: 100, contextBudget: 100, lifecycle: 100 },
+      findings: [],
+      peerPatch: [],
+      compatPatch: [],
+    }
   }
 
-  const findings = audit.findings || []
-  const criticalCount = findings.filter((f) => f.severity === 'CRITICAL').length
-  const highCount = findings.filter((f) => f.severity === 'HIGH').length
-  const mediumCount = findings.filter((f) => f.severity === 'MEDIUM').length
+  let findings = audit.findings || []
+  let criticalCount = findings.filter((f) => f.severity === 'CRITICAL').length
+  let highCount = findings.filter((f) => f.severity === 'HIGH').length
+  let mediumCount = findings.filter((f) => f.severity === 'MEDIUM').length
+  let appliedPatches = null
+
+  // 批量自适应修补：仅当无代码级 CRITICAL/HIGH 阻断且用户开启 applyCompat 时写入 package.json
+  if (
+    applyCompat &&
+    dir &&
+    criticalCount === 0 &&
+    highCount === 0 &&
+    ((audit.peerPatch?.length ?? 0) > 0 || (audit.compatPatch?.length ?? 0) > 0)
+  ) {
+    appliedPatches = applyCompatAndPeerPatch(dir, {
+      targetVersion: effectiveTarget,
+      peerPatch: audit.peerPatch,
+      compatPatch: audit.compatPatch,
+    })
+    if (appliedPatches.updated) {
+      // 重跑一次轻量审计，刷新准入账本与 Peer 得分
+      try {
+        audit = auditPlugin(dir, { hostInfo, targetVersion: effectiveTarget })
+        findings = audit.findings || []
+        criticalCount = findings.filter((f) => f.severity === 'CRITICAL').length
+        highCount = findings.filter((f) => f.severity === 'HIGH').length
+        mediumCount = findings.filter((f) => f.severity === 'MEDIUM').length
+      } catch {}
+    }
+  }
 
   let healthStatus = 'healthy'
   const issues = []
@@ -289,6 +440,9 @@ export function inspectPluginItem(rawItem, { hostInfo = null, targetVersion = nu
     mediumCount,
     issues,
     findingsCount: findings.length,
+    peerPatch: audit.peerPatch || [],
+    compatPatch: audit.compatPatch || [],
+    ...(appliedPatches ? { appliedPatches } : {}),
   }
 }
 
@@ -302,8 +456,20 @@ export function runFleetSweep(argv = process.argv.slice(2)) {
   const scanInstalled = args.installed || (!args.workspaceOnly && args.dirs.length === 0)
   const scanWorkspace = !args.installed
 
-  const rawList = discoverAllPlugins(args.dirs, { scanInstalled, scanWorkspace, envData })
-  let items = rawList.map((item) => inspectPluginItem(item, { hostInfo, targetVersion: targetVer, envData }))
+  const rawList = discoverAllPlugins(args.dirs, {
+    scanInstalled,
+    scanWorkspace,
+    envData,
+    includeOfficial: args.includeOfficial,
+  })
+  let items = rawList.map((item) =>
+    inspectPluginItem(item, {
+      hostInfo,
+      targetVersion: targetVer,
+      envData,
+      applyCompat: args.applyCompat,
+    }),
+  )
 
   // 条件筛选过滤
   if (args.filterWeb) items = items.filter((x) => x.platform === 'web')

@@ -18,9 +18,11 @@
 //   未声明的非内建属性         → 抛契约错（与真宿主同形，不再静默）
 
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { printJson, resolveEntryFile, pickExistingEntry } from './lib/scanner.mjs'
+import { findGlobalDsh } from './env-doctor.mjs'
 
 // Cordis 内建 mixin 属性（ReflectService 构造时混入 ctx，无需 inject）：
 // reflect.get/set/provide/accessor/mixin、fiber.runtime/effect、registry.inject/plugin、
@@ -185,23 +187,64 @@ export async function runQuickSmoke(pluginRoot) {
 
   const ctx = new MockContext()
   const startTime = Date.now()
+  let tmpHostFallbackDir = null
 
   try {
     // cache-busting：同一进程内多次冒烟不读 ESM 缓存。
     // 入口 URL 走 pathToFileURL：手拼 `file://${path}` 在 Windows 盘符路径
     // （C:\...）下是非法 URL，动态 import 直接抛错。
-    const entryUrl = `${pathToFileURL(entryPath).href}?t=${Date.now()}-${Math.random().toString(36).slice(2)}`
-    const mod = await import(entryUrl)
+    const makeUrl = (p) => `${pathToFileURL(p).href}?t=${Date.now()}-${Math.random().toString(36).slice(2)}`
+    let mod
+    try {
+      mod = await import(makeUrl(entryPath))
+    } catch (importErr) {
+      // 轻量级/单文件工作区插件常不装本地 node_modules，而是消费宿主运行时的 @deepseek-ai/*。
+      // 当直接 import 报 ERR_MODULE_NOT_FOUND 且本机存在宿主 node_modules 时，
+      // 在临时目录挂载宿主 node_modules 重试装载，避免误判为插件代码崩溃。
+      const host = findGlobalDsh(root)
+      const hostNm = host?.location ? path.join(host.location, 'node_modules') : null
+      if (importErr?.code === 'ERR_MODULE_NOT_FOUND' && hostNm && fs.existsSync(hostNm)) {
+        tmpHostFallbackDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pfa-smoke-'))
+        const skip = new Set(['node_modules', '.git', '.trash', 'coverage', 'tmp'])
+        const copyTree = (src, dest) => {
+          fs.mkdirSync(dest, { recursive: true })
+          for (const ent of fs.readdirSync(src, { withFileTypes: true })) {
+            if (skip.has(ent.name)) continue
+            const s = path.join(src, ent.name)
+            const d = path.join(dest, ent.name)
+            if (ent.isDirectory()) copyTree(s, d)
+            else if (!ent.isSymbolicLink()) fs.copyFileSync(s, d)
+          }
+        }
+        copyTree(root, tmpHostFallbackDir)
+        const linkType = process.platform === 'win32' ? 'junction' : 'dir'
+        fs.symlinkSync(hostNm, path.join(tmpHostFallbackDir, 'node_modules'), linkType)
+        mod = await import(makeUrl(path.join(tmpHostFallbackDir, entryFile)))
+      } else {
+        throw importErr
+      }
+    }
     const pluginTarget = mod.default || mod
 
     if (pluginTarget.inject) {
       ctx.injectedList = Array.isArray(pluginTarget.inject) ? pluginTarget.inject : Object.keys(pluginTarget.inject)
     }
 
+    // 与真实 Cordis 宿主及 host-modules.mjs 对齐：若插件导出了 Schemastery Config 构造器，
+    // 先以 Config({}) 解析出默认值再传入 apply(ctx, config)，避免插件守卫因空对象 {} 误炸。
+    const ConfigFn = pluginTarget.Config || mod.Config
+    let resolvedConfig = {}
+    if (typeof ConfigFn === 'function') {
+      try {
+        const parsed = ConfigFn({})
+        if (parsed && typeof parsed === 'object') resolvedConfig = parsed
+      } catch {}
+    }
+
     if (typeof pluginTarget.apply === 'function') {
-      await pluginTarget.apply(ctx, {})
+      await pluginTarget.apply(ctx, resolvedConfig)
     } else if (typeof pluginTarget === 'function') {
-      await pluginTarget(ctx, {})
+      await pluginTarget(ctx, resolvedConfig)
     } else {
       return {
         success: false,
@@ -241,6 +284,12 @@ export async function runQuickSmoke(pluginRoot) {
       version: pkg.version,
       entry: entryFile,
       undeclaredInjectAccess: isInjectContract ? [message.match(/"([^"]+)" without inject/)?.[1]].filter(Boolean) : [],
+    }
+  } finally {
+    if (tmpHostFallbackDir) {
+      try {
+        fs.rmSync(tmpHostFallbackDir, { recursive: true, force: true })
+      } catch {}
     }
   }
 }

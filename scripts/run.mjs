@@ -91,14 +91,21 @@ function runStep(script, scriptArgs, label, stages) {
     stages[label] = { status: 'ok', durationMs: Date.now() - started, output: json }
     return json
   } catch (err) {
+    let json = null
+    try {
+      const rawOut = String(err.stdout || '').trim()
+      if (rawOut.startsWith('{')) json = JSON.parse(rawOut)
+    } catch {}
     stages[label] = {
       status: 'error',
       durationMs: Date.now() - started,
-      error: err.message?.slice(0, 1000),
+      stage: json?.stage || undefined,
+      error: json?.error || err.message?.slice(0, 1000),
+      output: json,
       stdout: String(err.stdout || '').slice(0, 4000),
       stderr: String(err.stderr || '').slice(0, 2000),
     }
-    return null
+    return json
   }
 }
 
@@ -466,12 +473,28 @@ const report = {
         error: Boolean(stages.guides?.error || stages.scan?.error),
       },
   audit: auditReport
-    ? { scores: auditReport.scores, overallScore: auditReport.overallScore, findings: auditReport.findings, versionAdvice: auditReport.versionAdvice ?? null, peerPatch: auditReport.peerPatch ?? null }
+    ? {
+        scores: auditReport.scores,
+        overallScore: auditReport.overallScore,
+        findings: auditReport.findings,
+        versionAdvice: auditReport.versionAdvice ?? null,
+        peerPatch: auditReport.peerPatch ?? null,
+        compatPatch: auditReport.compatPatch ?? null,
+      }
     : null,
   smoke: smokeResult
-    ? { success: smokeResult.success, durationMs: smokeResult.durationMs, registeredToolsCount: smokeResult.registeredToolsCount, mockFallbacks: smokeResult.mockFallbacks }
+    ? smokeResult.success
+      ? { success: true, durationMs: smokeResult.durationMs, registeredToolsCount: smokeResult.registeredToolsCount, mockFallbacks: smokeResult.mockFallbacks }
+      : {
+          status: 'error',
+          success: false,
+          stage: smokeResult.stage || 'runtime_execution',
+          error: smokeResult.error,
+          undeclaredInjectAccess: smokeResult.undeclaredInjectAccess,
+          skipped: false,
+        }
     : stages.smoke?.status === 'error'
-      ? { status: 'error', stage: stages.smoke.stage, error: stages.smoke.error, skipped: false }
+      ? { status: 'error', success: false, stage: stages.smoke.stage || 'runtime_execution', error: stages.smoke.error, skipped: false }
       : { skipped: true },
   typecheck: stages.typecheck ?? { skipped: true },
   realSmoke,
@@ -510,8 +533,11 @@ if (report.scan?.skipped) {
 if (criticalOrHigh > 0) verdictLines.push(`⚠ critical/high 命中 ${criticalOrHigh} 处——先清零再做优化`)
 else if (report.scan?.findingCount != null) verdictLines.push(`扫描命中 ${report.scan.findingCount} 处（无 critical/high）`)
 if (report.audit) verdictLines.push(`体检 ${report.audit.overallScore}/100（性能 ${report.audit.scores.performance}/弹性 ${report.audit.scores.resilience}/预算 ${report.audit.scores.contextBudget}/生命周期 ${report.audit.scores.lifecycle}）`)
-if (report.smoke?.status === 'error') verdictLines.push(`⚠ 冒烟阻断（${report.smoke.stage}）——${report.smoke.error}`)
-else if (report.smoke?.success != null) verdictLines.push(report.smoke.success ? `冒烟通过（${report.smoke.registeredToolsCount} 工具，${report.smoke.durationMs}ms）` : '冒烟失败——看 smoke 段')
+if (report.smoke?.status === 'error' || report.smoke?.success === false) {
+  verdictLines.push(`⚠ 冒烟阻断（${report.smoke.stage || 'runtime_execution'}）——${String(report.smoke.error || '').split('\n')[0]}`)
+} else if (report.smoke?.success != null) {
+  verdictLines.push(`冒烟通过（${report.smoke.registeredToolsCount} 工具，${report.smoke.durationMs}ms）`)
+}
 if (report.typecheck?.status === 'fail') verdictLines.push('typecheck 红——适配前先修构建')
 else if (report.typecheck?.status === 'ok') verdictLines.push('typecheck 通过')
 else if (report.typecheck?.status === 'skipped') verdictLines.push(`typecheck 跳过（${report.typecheck.reason}）`)

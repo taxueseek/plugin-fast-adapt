@@ -179,13 +179,30 @@ export function scanPlugin(pluginDir, guides, { localVersion = null, targetVersi
     return true
   })
 
+  // 收集真实指南已覆盖的锚点：当某版本由 GitHub Release 派生出虚拟指南（virtual: true）
+  // 且同一扫描走廊内已有官方真实 guide.md 覆盖相同锚点时，虚拟指南不重复报同一符号。
+  const realCovered = { packages: new Set(), members: new Set(), codes: new Set() }
+  for (const g of relevant) {
+    if (g.virtual) continue
+    for (const p of g.anchors.packages || []) realCovered.packages.add(p)
+    for (const m of g.anchors.members || []) realCovered.members.add(m)
+    for (const c of g.anchors.codes || []) realCovered.codes.add(c)
+  }
+
   // guide 侧的过滤与锚点预解析只做一次，不随文件数翻倍。
   // 成员锚点按末段分桶：一个成员命中只查自己末段那一桶，
   // 不再对全部锚点做线性扫描（大仓库实测从 23s 降到 1-2s）。
   const guideIndex = relevant.map((guide) => {
     const introduced = new Set(guide.anchors.introduced || [])
-    const members = guide.anchors.members.filter((a) => !isIntroduced(introduced, a))
-    const codes = guide.anchors.codes.filter((a) => !isIntroduced(introduced, a))
+    const packages = (guide.anchors.packages || []).filter(
+      (p) => !isIntroduced(introduced, p) && (!guide.virtual || !realCovered.packages.has(p)),
+    )
+    const members = guide.anchors.members.filter(
+      (a) => !isIntroduced(introduced, a) && (!guide.virtual || !realCovered.members.has(a)),
+    )
+    const codes = guide.anchors.codes.filter(
+      (a) => !isIntroduced(introduced, a) && (!guide.virtual || !realCovered.codes.has(a)),
+    )
 
     const memberBuckets = new Map()
     for (const anchor of members) {
@@ -194,7 +211,12 @@ export function scanPlugin(pluginDir, guides, { localVersion = null, targetVersi
       memberBuckets.get(prep.last).push(prep)
     }
 
-    return { guide, memberBuckets, codes }
+    const codeMatchers = codes.map((code) => {
+      const esc = code.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      return { code, re: new RegExp(`(?:^|[^A-Za-z0-9_-])${esc}(?:$|[^A-Za-z0-9_-])`) }
+    })
+
+    return { guide, packages, memberBuckets, codeMatchers }
   })
 
   const findings = []
@@ -226,13 +248,13 @@ export function scanPlugin(pluginDir, guides, { localVersion = null, targetVersi
       ...scanned.calls.map((c) => ({ name: c.name, dotted: c.name, line: c.line })),
     ]
 
-    for (const { guide, memberBuckets, codes } of guideIndex) {
+    for (const { guide, packages, memberBuckets, codeMatchers } of guideIndex) {
       // 包名命中：只认「等于锚点」或「锚点的子路径」。
       // 不做反向前缀（pkg.startsWith(imp.source)）：官方包名全以 @deepseek-ai/dsh
       // 开头，import 主包 @deepseek-ai/dsh 会因此撞上已移除的 dsh-settings 一类
       // 兄弟包，把没踩雷的插件报成 critical（2026-10-24 复现后去掉）。
       for (const imp of scanned.imports) {
-        for (const pkg of guide.anchors.packages) {
+        for (const pkg of packages) {
           if (imp.source === pkg || imp.source.startsWith(`${pkg}/`)) {
             findings.push({
               file: relFile,
@@ -273,10 +295,10 @@ export function scanPlugin(pluginDir, guides, { localVersion = null, targetVersi
         }
       }
 
-      // 常量命中（错误码一类，落在字符串里）
-      for (const code of codes) {
+      // 常量命中（错误码一类，落在字符串里；词边界匹配，避免 ABORTED 误伤 FS_ABORTED）
+      for (const { code, re } of codeMatchers) {
         for (const str of scanned.strings) {
-          if (str.value.includes(code)) {
+          if (str.value === code || re.test(str.value)) {
             findings.push({
               file: relFile,
               line: str.line,

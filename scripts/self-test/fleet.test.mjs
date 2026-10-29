@@ -128,3 +128,50 @@ test('集群治理：discoverAllPlugins 多维梳理 Web、APP 与运行中/已�
   assert.strictEqual(desktopItem.platform, 'app')
   assert.strictEqual(desktopItem.state, 'ENABLED')
 })
+
+test('方案 3 集群自动化适配：resolveInstalledPluginDir 解析真实路径与 applyCompatAndPeerPatch 批量写入账本', async () => {
+  const { resolveInstalledPluginDir, applyCompatAndPeerPatch, inspectPlugin } = await import('../fleet-sweep.mjs')
+  const fakeDsh = tmpPluginDir('fleet-dsh-home')
+  const realPluginDir = tmpPluginDir('fleet-real-plugin')
+  fs.writeFileSync(
+    path.join(realPluginDir, 'package.json'),
+    JSON.stringify({
+      name: 'dsh-demo-adapt',
+      version: '1.0.0',
+      main: 'index.js',
+      peerDependencies: { '@deepseek-ai/dsh': '^0.2.1-rc.1' },
+      dsh: {
+        compatibility: {
+          dsh: '^0.2.1-rc.1',
+          dshReleases: { '0.2.1-rc.4': 'compatible' },
+        },
+      },
+    }),
+  )
+  fs.writeFileSync(path.join(realPluginDir, 'index.js'), 'export default {}\n')
+
+  const profileNm = path.join(fakeDsh, 'profiles', 'web', 'node_modules')
+  fs.mkdirSync(profileNm, { recursive: true })
+  fs.symlinkSync(
+    realPluginDir,
+    path.join(profileNm, 'dsh-demo-adapt'),
+    process.platform === 'win32' ? 'junction' : 'dir',
+  )
+
+  const resolved = resolveInstalledPluginDir('dsh-demo-adapt', 'web', fakeDsh)
+  assert.strictEqual(resolved, fs.realpathSync(realPluginDir), '应透过 profile 软链解析到插件真实源码目录')
+
+  // 执行批量兼容账本与 Peer 自动修补
+  const inspected = inspectPlugin(realPluginDir, { targetVersion: '0.2.2-alpha.2', applyCompat: true })
+  assert.strictEqual(inspected.appliedPatches?.updated, true, '0 代码阻断的插件应自动完成账本与 Peer 修补')
+  assert.strictEqual(inspected.status, 'healthy', '修补后复检应恢复为 healthy')
+
+  const updatedPkg = JSON.parse(fs.readFileSync(path.join(realPluginDir, 'package.json'), 'utf8'))
+  assert.strictEqual(updatedPkg.peerDependencies['@deepseek-ai/dsh'], '^0.2.2-alpha.2')
+  assert.strictEqual(updatedPkg.dsh.compatibility.dshReleases['0.2.2-alpha.2'], 'compatible')
+  assert.ok(updatedPkg.dsh.compatibility.dsh.includes('^0.2.2-alpha.2'))
+
+  // 幂等验证：再次运行不应重复修改
+  const second = applyCompatAndPeerPatch(realPluginDir, { targetVersion: '0.2.2-alpha.2' })
+  assert.strictEqual(second.updated, false)
+})

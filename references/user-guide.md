@@ -141,6 +141,9 @@ node scripts/fleet-sweep.mjs --disabled
 
 # 7. 指定目标版本并输出结构化 JSON 报告（供自动化脚本消费）
 node scripts/fleet-sweep.mjs --target 0.2.2-alpha.2 --json
+
+# 8. 批量准入账本与 Peer 范围自适应修补（仅对 0 代码级破坏性命中的插件自动更新 package.json）
+node scripts/fleet-sweep.mjs --workspace --target 0.2.2-alpha.2 --apply-compat
 ```
 
 ---

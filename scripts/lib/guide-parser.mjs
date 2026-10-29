@@ -211,9 +211,11 @@ export function parseReleaseNotesToGuides(releaseText, version) {
   if (!releaseText) return []
   const guides = []
 
-  // 匹配破坏性变更区块：### 破坏性变更 或 ### Breaking Changes 直到下一个 ### 或结尾
-  const reSection = /###\s+(?:破坏性变更|Breaking Changes)\s*([\s\S]*?)(?=\n###\s|\n---\s*$|$)/i
-  const m = releaseText.match(reSection)
+  // 优先匹配英文 Breaking Changes / Other Changes 区块（中英双语 Release Note 下避免中英各扫一遍双倍重复，
+  // 且英文区块保留了完整的 API 符号与错误码原名）；若无英文区块则匹配中文 破坏性变更 / 其他变更。
+  const reEn = /###\s+(?:Breaking Changes|Other Changes)\s*([\s\S]*?)(?=\n###\s|\n---\s*$|$)/i
+  const reZh = /###\s+(?:破坏性变更|其他变更)\s*([\s\S]*?)(?=\n###\s|\n---\s*$|$)/i
+  const m = releaseText.match(reEn) || releaseText.match(reZh)
   const body = m ? m[1] : releaseText
 
   // 按 bullet 切分
@@ -223,9 +225,13 @@ export function parseReleaseNotesToGuides(releaseText, version) {
     .filter(Boolean)
 
   let idx = 1
+  const seenAnchorKeys = new Set()
   for (const item of bullets) {
     const anchors = extractAnchors(item, item)
     if (!anchors.packages.length && !anchors.members.length && !anchors.codes.length) continue
+    const key = `${anchors.packages.join(',')}|${anchors.members.join(',')}|${anchors.codes.join(',')}`
+    if (seenAnchorKeys.has(key)) continue
+    seenAnchorKeys.add(key)
 
     const firstSentence = item.split(/[。\n.!?]/)[0] || `Change ${idx}`
     const topic = `release-${version}-${idx}`

@@ -29,6 +29,15 @@ const RISKY_IMPORTS = new Set([
   '@deepseek-ai/dsh-session-query',
 ])
 
+// 浏览器端共享模块表（由前端 ModuleLoader / PLATFORM_MODULES 在浏览器运行时提供，
+// 物理上不作为 Node 包存在于 @deepseek-ai/dsh/node_modules 下）
+const CLIENT_PLATFORM_MODULES = new Set([
+  'react',
+  'react-dom',
+  'react/jsx-runtime',
+  '@deepseek-ai/dsh-client-ui-primitives',
+])
+
 const SYNC_IO_CALLS = new Set(['readFileSync', 'writeFileSync', 'appendFileSync', 'execFileSync', 'execSync'])
 const READ_APIS = new Set(['readFile', 'createReadStream'])
 
@@ -85,6 +94,57 @@ export function peerPatchFor(pkg, targetVersion) {
   return patches
 }
 
+// 准入账本修补建议（吸纳上游 DSH-0.2.2-J1-01 / PR #286 / PR #295）：
+// 宿主安装器与启动器会校验 package.json 中的 dsh.compatibility.dsh、
+// dsh.compatibility.dshReleases 与 engines.dsh，未覆盖目标宿主版本会触发准入拦截或告警。
+export function compatPatchFor(pkg, targetVersion) {
+  if (!targetVersion || !pkg || typeof pkg !== 'object') return []
+  const patches = []
+  const pv = parseVersion(targetVersion)
+  const caretTarget = pv.pre
+    ? `^${pv.major}.${pv.minor}.${pv.patch}-${pv.pre}`
+    : `^${pv.major}.${pv.minor}.${pv.patch}`
+
+  const buildCandidateRange = (rawRange) => {
+    const r = String(rawRange).trim()
+    const appended = r ? `${r} || ${caretTarget}` : caretTarget
+    if (satisfiesRange(targetVersion, appended)) return appended
+    if (satisfiesRange(targetVersion, caretTarget)) return caretTarget
+    return null
+  }
+
+  const compatDsh = pkg.dsh?.compatibility?.dsh
+  if (typeof compatDsh === 'string' && !compatDsh.includes('*') && !satisfiesRange(targetVersion, compatDsh)) {
+    const to = buildCandidateRange(compatDsh)
+    if (to) {
+      patches.push({ field: 'dsh.compatibility.dsh', from: compatDsh, to, verified: true })
+    }
+  }
+
+  const releases = pkg.dsh?.compatibility?.dshReleases
+  if (releases && typeof releases === 'object' && !Array.isArray(releases)) {
+    const bareTarget = String(targetVersion).replace(/^v/, '')
+    if (releases[bareTarget] !== 'compatible') {
+      patches.push({
+        field: `dsh.compatibility.dshReleases.${bareTarget}`,
+        from: releases[bareTarget] ?? null,
+        to: 'compatible',
+        verified: true,
+      })
+    }
+  }
+
+  const enginesDsh = pkg.engines?.dsh
+  if (typeof enginesDsh === 'string' && !enginesDsh.includes('*') && !satisfiesRange(targetVersion, enginesDsh)) {
+    const to = buildCandidateRange(enginesDsh)
+    if (to) {
+      patches.push({ field: 'engines.dsh', from: enginesDsh, to, verified: true })
+    }
+  }
+
+  return patches
+}
+
 export function auditPlugin(pluginDir, { scanResult = null, targetVersion = null, hostLibText = undefined, hostInfo = undefined } = {}) {
   const root = path.resolve(pluginDir)
   const pkgPath = path.join(root, 'package.json')
@@ -112,9 +172,15 @@ export function auditPlugin(pluginDir, { scanResult = null, targetVersion = null
   const files = roots.flatMap((r) => findSourceFiles(r))
   const hostLibTextResolved = hostLibText !== undefined ? hostLibText : getHostLibText()
   const hostInfoResolved = hostInfo !== undefined ? hostInfo : findGlobalDsh()
+  const clientExternals = new Set([
+    ...CLIENT_PLATFORM_MODULES,
+    ...(Array.isArray(pkg.dsh?.client?.external) ? pkg.dsh.client.external : []),
+    ...(Array.isArray(pkg.dsh?.client?.inject) ? pkg.dsh.client.inject : []),
+  ])
 
   for (const file of files) {
     const rel = path.relative(root, file)
+    const isClientFile = /(?:^|[\\/])(?:client|web|ui)(?:[\\/]|$)|\.client\.[jt]sx?$|\.tsx$/i.test(rel)
     const source = fs.readFileSync(file, 'utf8')
     const scanned = scanSource(source)
 
@@ -182,9 +248,12 @@ export function auditPlugin(pluginDir, { scanResult = null, targetVersion = null
     }
 
     // 维度 2 补强（方案 B 本地契约）：核对引用的 @deepseek-ai/* 套件包在本地宿主中是否存在
+    // 排除浏览器端共享模块表（CLIENT_PLATFORM_MODULES）与客户端半显式声明的 external/inject 模块，
+    // 它们由前端 window.__ModuleLoader__ 在浏览器运行时提供，不作为 Node 包存在于宿主 node_modules。
     if (hostInfoResolved?.location) {
       const dshPackages = [...importSources.values()].filter((s) => {
         const base = packageBase(s)
+        if (CLIENT_PLATFORM_MODULES.has(base) || (isClientFile && clientExternals.has(base))) return false
         return (
           base.startsWith('@deepseek-ai/') &&
           base !== '@deepseek-ai/dsh' &&
@@ -207,6 +276,19 @@ export function auditPlugin(pluginDir, { scanResult = null, targetVersion = null
           deduct('resilience', 50, 15)
         }
       }
+    }
+
+    // 维度 2 补强（吸纳上游 PR #288）：提示词模板已移除变量 {{cwd}} 检测
+    // 0.2.1+ 的 @deepseek-ai/dsh-system-prompt 对未注册的 {{variable}} 直接抛错阻断会话启动。
+    if (scanned.strings.some((s) => /\{\{\s*cwd\s*\}\}/.test(s.value))) {
+      report.findings.push({
+        dimension: 'resilience',
+        severity: 'HIGH',
+        file: rel,
+        title: '检测到已移除的提示词模板变量 {{cwd}}',
+        detail: '0.2.1+ 宿主的 @deepseek-ai/dsh-system-prompt 已移除 {{cwd}} 并在插值时对未注册变量直接抛错（unknown prompt variable "{{cwd}}"），会导致会话启动失败。',
+      })
+      deduct('resilience', 50, 15)
     }
 
     // 维度 3：上下文常驻预算
@@ -334,14 +416,15 @@ export function auditPlugin(pluginDir, { scanResult = null, targetVersion = null
   }
 
   // 新版本感知：有 code-scan 结果时交叉出「适配未完成项 + 官方修法」。
-  // package 命中若已被宿主实测判为 host-present（包还在），「装载必炸」不成立，
+  // package 命中若已被宿主实测判为 present / host-present（包还在），「装载必炸」不成立，
   // 不再按 HIGH 扣分——只把真正 absent/unknown 的当确认项。
   if (scanResult && typeof scanResult === 'object' && scanResult.findingCount > 0) {
     const byKind = { package: [], member: [], code: [] }
     for (const f of scanResult.findings || []) {
       ;(byKind[f.kind] || (byKind[f.kind] = [])).push(f)
     }
-    const confirmedPackages = byKind.package.filter((f) => f.verified !== 'host-present')
+    const isHostPresent = (f) => f.verified === 'present' || f.verified === 'host-present'
+    const confirmedPackages = byKind.package.filter((f) => !isHostPresent(f))
     const refutedPackages = byKind.package.length - confirmedPackages.length
     if (confirmedPackages.length) {
       report.findings.push({
@@ -357,7 +440,7 @@ export function auditPlugin(pluginDir, { scanResult = null, targetVersion = null
       report.findings.push({
         dimension: 'resilience',
         severity: 'INFO',
-        file: byKind.package.filter((f) => f.verified === 'host-present').map((f) => f.file).join(', '),
+        file: byKind.package.filter(isHostPresent).map((f) => f.file).join(', '),
         title: `${String(refutedPackages)} 个包命中经宿主实测证伪（包仍在宿主，guide 只是提及）`,
         detail: '已降级为 info，不扣分；详情见 code-scan 的 verificationNote，建议人工核对 guide 原文的变更主体。',
       })
@@ -372,11 +455,29 @@ export function auditPlugin(pluginDir, { scanResult = null, targetVersion = null
     report.versionAdvice = { window: scanResult.window, findingCount: 0, note: '目标版本区间内无官方破坏性变更命中，可直接进入性能与架构审计。' }
   }
 
+  // 准入账本核查（吸纳上游 DSH-0.2.2-J1-01 / PR #286 / PR #295）：
+  // 宿主在安装与启动阶段检查 dsh.compatibility.dsh / dsh.compatibility.dshReleases / engines.dsh。
+  const compatPatch = compatPatchFor(pkg, targetVersionResolved)
+  if (compatPatch.length > 0) {
+    const hasRangeMismatch = compatPatch.some((p) => p.field === 'dsh.compatibility.dsh' || p.field === 'engines.dsh')
+    report.findings.push({
+      dimension: 'resilience',
+      severity: hasRangeMismatch ? 'MEDIUM' : 'INFO',
+      file: 'package.json',
+      title: `准入账本 dsh.compatibility / engines.dsh 未覆盖目标宿主 ${targetVersionResolved}`,
+      detail:
+        `待更新字段：${compatPatch.map((p) => `${p.field}: "${p.from ?? ''}" → "${p.to}"`).join('；')}。` +
+        `宿主安装器与启动器会校验准入账本（DSH-0.2.2-J1-01），建议同步更新 compatPatch。`,
+    })
+    if (hasRangeMismatch) deduct('resilience', 70, 10)
+  }
+
   report.overallScore = Math.round(
     (report.scores.performance + report.scores.resilience + report.scores.contextBudget + report.scores.lifecycle) / 4
   )
   report.scannedFiles = files.length
   report.peerPatch = peerPatchFor(pkg, targetVersionResolved)
+  report.compatPatch = compatPatch
   return report
 }
 

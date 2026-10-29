@@ -195,7 +195,14 @@ export function getLatestSuccessfulRun(pluginName, { root } = {}) {
   for (let i = lines.length - 1; i >= 0; i--) {
     try {
       const rec = JSON.parse(lines[i])
-      if (rec.plugin === pluginName && rec.phases?.scan !== 'error' && rec.smoke !== false && rec.typecheck !== 'fail') {
+      if (
+        rec.plugin === pluginName &&
+        rec.phases?.scan !== 'error' &&
+        rec.phases?.smoke !== 'fail' &&
+        rec.smoke !== false &&
+        rec.typecheck !== 'fail' &&
+        (rec.criticalOrHigh ?? 0) === 0
+      ) {
         return rec
       }
     } catch {}

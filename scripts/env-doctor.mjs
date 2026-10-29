@@ -19,7 +19,7 @@ import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { printJson, isDshPackage, isPluginForm, packageBase, parseVersion, compareVersions, peerFloor, maskSource, CODE, resolveEntryFile, pickExistingEntry } from './lib/scanner.mjs'
 export { resolveEntryFile, pickExistingEntry }
-import { diagnoseClientHalf, isDeliberateRosterInsert } from './lib/client-graph.mjs'
+import { diagnoseClientHalf, isDeliberateRosterInsert, stripYamlConfigBlocks } from './lib/client-graph.mjs'
 import { probeDesktopApp } from './lib/desktop-app.mjs'
 
 const HOME = os.homedir()
@@ -331,18 +331,22 @@ export function scanSharedFarm({ farmDir = null, hostRoots = null } = {}) {
 // 解析 patch 层条目。多行 YAML 是常态（- insert: / - id: 换行后才是 name），
 // 单行正则会把活跃插件整个漏掉——实测 web profile 的 wide-research 条目
 // name 在 - id: 的下一行，argo-dsh 被误判成「未挂载」。
-// 注释掉的条目不算挂载；只看条目头部，深层 config.name 是模型名不是插件名。
+// 注释掉的条目不算挂载；先用 stripYamlConfigBlocks 剥离 config: 子树，
+// 防止 providers/models/presets/agents 下的 - id: / - name: 混入插件清单。
 export function parsePatchEntries(text) {
   const entries = []
-  for (const block of text.split(/(?=^\s*-\s)/m)) {
+  const cleaned = stripYamlConfigBlocks(text)
+  for (const block of cleaned.split(/(?=^\s*-\s)/m)) {
     const live = block.split('\n').filter((line) => !/^\s*#/.test(line)).join('\n')
     if (!/^\s*-\s/.test(live)) continue
-    const header = live.split('\n').slice(0, 5).join('\n')
+    const header = live.split('\n').slice(0, 6).join('\n')
     const name = header.match(/name:\s*['"]?([\w@/.-]+)['"]?/)
     const id = header.match(/id:\s*['"]?([\w@/.-]+)['"]?/)
     const inlineInsert = header.match(/^\s*-\s*insert:\s*(\S+)/m)
     const parts = [...new Set([name?.[1], id?.[1], inlineInsert?.[1]].filter(Boolean))]
-    if (parts.length) entries.push(`- ${parts.join(' ')}`)
+    if (!parts.length) continue
+    if (/^\s*disabled:\s*true\b/m.test(live)) parts.push('disabled: true')
+    entries.push(`- ${parts.join(' ')}`)
   }
   return entries
 }
@@ -750,10 +754,42 @@ function dedupeFalseGreen(findings) {
   })
 }
 
+// ── 全局安装位与 PATH CLI 分裂核查（吸纳上游 PR #292 实测） ──────────────────
+// 当用户在 ~/.local/lib/node_modules 与 /opt/homebrew/lib/node_modules 等多处装过 DSH 时，
+// PATH 中的 dsh --version 可能与 candidateGlobalRoots 命中的第一处 node_modules 版本不一致。
+export function checkPrefixSplit(globalDsh, cliVersion) {
+  if (!globalDsh?.version || !cliVersion) return null
+  if (globalDsh.version === cliVersion) return null
+  return {
+    mismatch: true,
+    nodeModulesVersion: globalDsh.version,
+    nodeModulesLocation: globalDsh.location || null,
+    cliVersion,
+    message: `全局 node_modules 宿主 (${globalDsh.version}) 与 PATH 中的 dsh CLI (${cliVersion}) 版本分裂，存在多前缀安装冲突`,
+  }
+}
+
 // ── 主流程 ──────────────────────────────────────────────────────────────────
 
 export function probeEnvironment(targetDir = process.cwd()) {
   const globalDsh = findGlobalDsh()
+  let cliVersion = null
+  if (globalDsh?.source === 'node_modules') {
+    try {
+      const out = execFileSync('dsh', ['--version'], {
+        encoding: 'utf8',
+        shell: SPAWN_SHELL,
+        timeout: 1500,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim()
+      const m = out.match(/(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)/)
+      if (m) cliVersion = m[1]
+    } catch {}
+  }
+  const prefixSplit = checkPrefixSplit(globalDsh, cliVersion)
+  if (prefixSplit && globalDsh) {
+    globalDsh.prefixSplit = prefixSplit
+  }
   // 桌面 APP 跑自己 asar 里捆的宿主，不是 npm 全局那份；两份版本错开时，
   // desktop profile 的名册与扫描窗口按 globalDsh 算就是错的，这里如实报出来
   const desktopApp = probeDesktopApp()

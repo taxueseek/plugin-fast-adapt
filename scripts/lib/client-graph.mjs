@@ -101,12 +101,40 @@ function profileDepManifests(profileDir) {
   return out
 }
 
+// 剥离 YAML 中插件条目的 config: 子树：
+// Cordis 的 cordis.patch.yml 中，config: 下常挂载 providers/models/presets/agents 等深层列表
+// （同样带 - id: / - name:），不先剥离会被当成顶层插件条目污染名册与集群巡检。
+export function stripYamlConfigBlocks(text) {
+  if (!text) return ''
+  const out = []
+  let configIndent = null
+  for (const line of String(text).split('\n')) {
+    if (/^\s*#/.test(line)) continue
+    if (!line.trim()) {
+      out.push(line)
+      continue
+    }
+    const indent = line.match(/^\s*/)[0].length
+    if (configIndent !== null) {
+      if (indent > configIndent) continue
+      configIndent = null
+    }
+    if (/^\s*config:\s*(?:#.*)?$/.test(line)) {
+      configIndent = indent
+      continue
+    }
+    out.push(line)
+  }
+  return out.join('\n')
+}
+
 // overlay 挂载名提取。与 env-doctor 的 parsePatchEntries 同一套块切分规则，
 // 但不 import 它（env-doctor 依赖本模块，反向引用会成环）；
-// 注释行剥除后取条目头部的 name/id/inline-insert。
+// 注释行与 config: 子树剥除后取条目头部的 name/id/inline-insert。
 export function overlayMountedNames(text) {
   const names = new Set()
-  for (const block of text.split(/(?=^\s*-\s)/m)) {
+  const cleaned = stripYamlConfigBlocks(text)
+  for (const block of cleaned.split(/(?=^\s*-\s)/m)) {
     const live = block.split('\n').filter((line) => !/^\s*#/.test(line)).join('\n')
     if (!/^\s*-\s/.test(live)) continue
     const header = live.split('\n').slice(0, 5).join('\n')

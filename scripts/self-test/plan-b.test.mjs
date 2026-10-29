@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { test, tmpPluginDir } from './harness.mjs'
-import { auditPlugin, peerPatchFor } from '../plugin-audit.mjs'
+import { auditPlugin, peerPatchFor, compatPatchFor } from '../plugin-audit.mjs'
 
 const SCRIPTS = path.resolve(import.meta.dirname, '..')
 
@@ -137,4 +137,110 @@ test('方案 B 环境自适应：支持从工作区目录向上回溯探测本�
   const found = findGlobalDsh(subPlugin)
   assert.strictEqual(found?.version, '0.2.2-local')
   assert.strictEqual(found?.source, 'local-ancestor-node_modules')
+})
+
+test('方案 1 & 2 修复：verified=present 枚举对齐与浏览器端 PLATFORM_MODULES 免误报', () => {
+  const dir = tmpPluginDir('plan-b-client-primitives')
+  fs.writeFileSync(
+    path.join(dir, 'package.json'),
+    JSON.stringify({
+      name: 't-client-ui',
+      version: '1.0.0',
+      dsh: { client: { platform: 'web', external: ['@deepseek-ai/dsh-client-ui-primitives'] } },
+    }),
+  )
+  fs.mkdirSync(path.join(dir, 'src', 'client'), { recursive: true })
+  fs.writeFileSync(
+    path.join(dir, 'src', 'client', 'panel.tsx'),
+    `import { Button } from '@deepseek-ai/dsh-client-ui-primitives'\nexport const P = () => Button\n`,
+  )
+
+  const mockHostRoot = tmpPluginDir('mock-host-primitives')
+  const hostLocation = path.join(mockHostRoot, 'node_modules', '@deepseek-ai', 'dsh')
+  fs.mkdirSync(hostLocation, { recursive: true })
+  fs.writeFileSync(path.join(hostLocation, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.2.2-alpha.2' }))
+
+  const scanResult = {
+    findingCount: 1,
+    window: { localVersion: '0.2.1-rc.1', targetVersion: '0.2.2-alpha.2' },
+    findings: [
+      {
+        file: 'src/index.ts',
+        line: 1,
+        symbol: '@deepseek-ai/dsh-tools',
+        kind: 'package',
+        verified: 'present',
+        guide: 'v0.2.1-alpha.1/tool-presentation-mode',
+        title: 't',
+      },
+    ],
+  }
+
+  const report = auditPlugin(dir, {
+    scanResult,
+    targetVersion: '0.2.2-alpha.2',
+    hostInfo: { location: hostLocation, version: '0.2.2-alpha.2' },
+  })
+  assert.ok(
+    !report.findings.some((f) => f.severity === 'HIGH'),
+    `浏览器端 PLATFORM_MODULES 与 verified=present 不应产出 HIGH 误报: ${JSON.stringify(report.findings)}`,
+  )
+  assert.strictEqual(report.scores.resilience, 100)
+})
+
+test('方案 2 物理契约门：compatPatchFor 准入账本与已移除 {{cwd}} 提示词变量检测', () => {
+  const pkg = {
+    name: 't-compat',
+    version: '1.0.0',
+    dsh: {
+      compatibility: {
+        dsh: '>=0.2.1-rc.2 <0.3.0',
+        dshReleases: { '0.2.1-rc.4': 'compatible' },
+      },
+    },
+    engines: { dsh: '^0.2.1-rc.2' },
+  }
+  const compatPatches = compatPatchFor(pkg, '0.2.2-alpha.2')
+  assert.strictEqual(compatPatches.length, 3, '应同时识别 dsh.compatibility.dsh、dshReleases 与 engines.dsh 缺口')
+
+  const dir = tmpPluginDir('plan-2-cwd-compat')
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify(pkg))
+  fs.mkdirSync(path.join(dir, 'src'), { recursive: true })
+  fs.writeFileSync(path.join(dir, 'src', 'prompt.js'), `export const tpl = '当前目录: {{cwd}}'\n`)
+
+  const report = auditPlugin(dir, { targetVersion: '0.2.2-alpha.2' })
+  assert.ok(report.findings.some((f) => f.title.includes('{{cwd}}') && f.severity === 'HIGH'), '应检出 {{cwd}} 模板变量风险')
+  assert.ok(report.findings.some((f) => f.title.includes('准入账本')), '应检出 dsh.compatibility 准入账本缺口')
+  assert.strictEqual(report.compatPatch.length, 3)
+})
+
+test('方案 1 & 2 环境层：parsePatchEntries 剥离深层 config 列表与 checkPrefixSplit 前缀分裂检测', async () => {
+  const { parsePatchEntries, checkPrefixSplit } = await import('../env-doctor.mjs')
+  const { overlayMountedNames } = await import('../lib/client-graph.mjs')
+  const patchYml = [
+    '- id: llm',
+    "  name: '@deepseek-ai/dsh-llm'",
+    '  config:',
+    '    providers:',
+    '      - id: deepseek',
+    '        name: DeepSeek',
+    '        models:',
+    '          - id: glm-5.3',
+    '            name: GLM 5.3',
+    '- id: files',
+    "  name: 'dsh-files'",
+    '',
+  ].join('\n')
+
+  const entries = parsePatchEntries(patchYml)
+  assert.ok(entries.some((e) => e.includes('dsh-files')), '顶层插件条目应保留')
+  assert.ok(!entries.some((e) => e.includes('glm-5.3') || e.includes('DeepSeek')), 'config 下的模型与 provider 列表不应混入插件清单')
+
+  const mounted = overlayMountedNames(patchYml)
+  assert.ok(mounted.has('dsh-files'))
+  assert.ok(!mounted.has('glm-5.3') && !mounted.has('DeepSeek'))
+
+  const split = checkPrefixSplit({ version: '0.2.2-alpha.2', location: '/a' }, '0.2.1-rc.4')
+  assert.strictEqual(split?.mismatch, true)
+  assert.strictEqual(checkPrefixSplit({ version: '0.2.2-alpha.2' }, '0.2.2-alpha.2'), null)
 })
