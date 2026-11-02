@@ -40,8 +40,8 @@ try {
 // 只有 --target/--from 带值，其余都是布尔开关。旧实现按「前一个参数不以 -- 开头」
 // 认插件目录，`run.mjs --offline <目录>` 会把目录当成 --offline 的值而报用法错误。
 const VALUE_FLAGS = new Set(['target', 'from'])
-const BOOLEAN_FLAGS = new Set(['offline', 'no-clone', 'no-smoke', 'no-typecheck', 'no-log', 'real-smoke', 'strict', 'help', 'force', 'check-upstream'])
-const USAGE = '用法: node scripts/run.mjs <插件目录> [--target <版本>] [--from <版本>] [--no-clone] [--no-smoke] [--no-typecheck] [--no-log] [--real-smoke] [--offline] [--strict] [--force] [--check-upstream]'
+const BOOLEAN_FLAGS = new Set(['offline', 'no-clone', 'no-smoke', 'no-typecheck', 'no-log', 'real-smoke', 'strict', 'help', 'force', 'check-upstream', 'compact'])
+const USAGE = '用法: node scripts/run.mjs <插件目录> [--target <版本>] [--from <版本>] [--no-clone] [--no-smoke] [--no-typecheck] [--no-log] [--real-smoke] [--offline] [--strict] [--force] [--check-upstream] [--compact]'
 
 function parseArgv(argv) {
   const positional = []
@@ -69,7 +69,9 @@ if (unknown.length) {
 const flag = (name) => parsedFlags[name] === true
 const valueOf = (name) => (VALUE_FLAGS.has(name) ? parsedFlags[name] ?? null : null)
 if (flag('help')) {
-  process.stdout.write(`${USAGE}\n`)
+  // --compact 下 help 也走 stderr，保持 stdout 只有机器可读 JSON
+  const out = flag('compact') ? process.stderr : process.stdout
+  out.write(`${USAGE}\n`)
   process.exit(0)
 }
 const pluginDir = path.resolve(positional[0] || process.cwd())
@@ -289,10 +291,13 @@ if (lastRun && !isCustomRun && hostVersion && pluginPkg?.version) {
 
   if (isHostSame && isPluginSame && isToolSame && isClean) {
     const elapsed = Date.now() - startedAt
-    process.stdout.write(`\n[账本直通] 插件 ${pluginName}@${pluginPkg.version} 在宿主 ${hostVersion} 下已于 ${lastRun.time} 验证通过。\n`)
-    process.stdout.write(`  三元版本账本一致 (Plugin: ${pluginPkg.version}, Host: ${hostVersion}, Skill: ${currentToolVersion})，且源码无修改。\n`)
-    process.stdout.write(`  0 网络 / 0 冗余扫描 / 毫秒级复用上次健康结论 (体检 ${lastRun.auditScore ?? 100}分，无 critical/high)。\n`)
-    process.stdout.write(`  如需强制重新全量编排，可追加 --force 开关。\n\n`)
+    // --compact 是给子 Agent 回传用的机器可读通道，直通提示必须走 stderr，
+    // 否则 JSON 前面会多出人类可读文本，子 Agent 解析直接崩。
+    const out = flag('compact') ? process.stderr : process.stdout
+    out.write(`\n[账本直通] 插件 ${pluginName}@${pluginPkg.version} 在宿主 ${hostVersion} 下已于 ${lastRun.time} 验证通过。\n`)
+    out.write(`  三元版本账本一致 (Plugin: ${pluginPkg.version}, Host: ${hostVersion}, Skill: ${currentToolVersion})，且源码无修改。\n`)
+    out.write(`  0 网络 / 0 冗余扫描 / 毫秒级复用上次健康结论 (体检 ${lastRun.auditScore ?? 100}分，无 critical/high)。\n`)
+    out.write(`  如需强制重新全量编排，可追加 --force 开关。\n\n`)
 
     if (!flag('no-log')) {
       const fastRecord = {
@@ -308,9 +313,26 @@ if (lastRun && !isCustomRun && hostVersion && pluginPkg?.version) {
       }
       writeRunLog(fastRecord, { toolDir: TOOL_DIR })
     }
+    // --compact 下子 Agent 仍需一份机器可读结论，不能只 exit(0) 什么都不给
+    if (flag('compact')) {
+      printJson({
+        success: true,
+        plugin: `${pluginName}@${pluginPkg.version}`,
+        host: hostVersion,
+        window: `${lastRun.window?.local ?? hostVersion} → ${lastRun.window?.target ?? hostVersion}`,
+        overallScore: lastRun.auditScore ?? null,
+        priorityCounts: { P0: 0, P1: 0, P2: 0, P3: 0 },
+        smoke: { success: true, skipped: 'fast-pass' },
+        typecheck: 'skipped',
+        blockers: [],
+        verdict: 'PASS',
+        fastPass: true,
+      })
+    }
     process.exit(0)
   } else if (!isHostSame) {
-    process.stdout.write(`\n[版本跃迁] 检测到宿主从 ${lastRun.hostVersion} 变更为 ${hostVersion}，启动靶向差分分析...\n`)
+    const out = flag('compact') ? process.stderr : process.stdout
+    out.write(`\n[版本跃迁] 检测到宿主从 ${lastRun.hostVersion} 变更为 ${hostVersion}，启动靶向差分分析...\n`)
   }
 }
 
@@ -554,17 +576,14 @@ if (!flag('no-log')) {
   if (logged) verdictLines.push(`日志: ${logged.file}`)
 }
 
-printJson(report)
-process.stderr.write(`\n${verdictLines.join('\n')}\n`)
-
 // 失败即指路：退出码 2 的原因各给一句「下一步」，排障路径从读文档变成读输出
 // --strict 额外把「扫描没跑 / 指南没覆盖到目标版本」当失败；默认不加，
 // 保持既有退出码语义（0 干净、2 命中或构建/真冷启动失败）。
 const scanUnknown = Boolean(report.scan?.skipped) || report.scan?.coverage?.complete === false
 const strictFail = flag('strict') && scanUnknown
 const exitFail = criticalOrHigh > 0 || report.typecheck?.status === 'fail' || realSmoke?.status === 'fail' || strictFail
+const next = []
 if (exitFail) {
-  const next = []
   if (criticalOrHigh > 0) next.push('按 scan.findings 的 migration 逐条清命中（evidence 行原文可核对是否误报）')
   if (report.typecheck?.status === 'fail') next.push('typecheck 红——先修构建（尾部输出在 report.typecheck.tail）')
   if (realSmoke?.status === 'fail') next.push('真冷启动失败——realSmoke.tail 有四类归因')
@@ -573,6 +592,47 @@ if (exitFail) {
       ? '扫描没跑（--strict）——按 scan.reason 修指南来源或网络后重跑'
       : `指南没覆盖到 ${windowTarget}（--strict）——刷新指南或核对 --target`)
   }
+}
+
+if (flag('compact')) {
+  const scanFindings = report.scan?.findings || []
+  const auditFindings = report.audit?.findings || []
+  const blockers = [
+    ...scanFindings.filter((f) => f.severity === 'CRITICAL' || f.severity === 'HIGH').map((f) => ({
+      source: 'scan',
+      severity: f.severity,
+      symbol: f.symbol,
+      file: f.file,
+      message: f.message || f.detail,
+    })),
+    ...auditFindings.filter((f) => f.priority === 'P0' || f.priority === 'P1').map((f) => ({
+      source: 'audit',
+      priority: f.priority,
+      dimension: f.dimension,
+      file: f.file,
+      title: f.title,
+    })),
+  ]
+  const compactReport = {
+    success: !exitFail,
+    plugin: `${pluginPkg.name}@${pluginPkg.version}`,
+    host: hostVersion ?? '未知',
+    window: `${windowLocal} → ${windowTarget}`,
+    overallScore: report.audit?.overallScore ?? null,
+    priorityCounts: report.audit?.priorityCounts ?? { P0: 0, P1: 0, P2: 0, P3: 0 },
+    smoke: report.smoke?.success != null ? { success: report.smoke.success, stage: report.smoke.stage, durationMs: report.smoke.durationMs } : { skipped: true },
+    typecheck: report.typecheck?.status ?? 'skipped',
+    realSmoke: realSmoke ? { status: realSmoke.status } : undefined,
+    blockers,
+    verdict: exitFail ? 'FAIL' : 'PASS',
+  }
+  printJson(compactReport)
+} else {
+  printJson(report)
+}
+process.stderr.write(`\n${verdictLines.join('\n')}\n`)
+
+if (exitFail) {
   process.stderr.write(`\n下一步: ${next.join('；')}。修完重跑本命令；装了没生效跑 run-log doctor，宿主起不来跑 log-doctor\n`)
 }
 process.exit(exitFail ? 2 : 0)

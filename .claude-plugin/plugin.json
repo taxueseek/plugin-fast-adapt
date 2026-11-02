@@ -1,7 +1,7 @@
 {
   "name": "plugin-fast-adapt",
   "version": "0.2.2",
-  "description": "DSH 插件升级适配与破坏性变更核查，兼具从零造插件与环境诊断能力",
+  "description": "DSH 插件升级适配与破坏性变更核查，兼具代码审查、从零造插件、环境诊断与原生插件挂载能力",
   "author": {
     "name": "taxueseek"
   },

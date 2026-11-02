@@ -168,6 +168,60 @@ export function auditPlugin(pluginDir, { scanResult = null, targetVersion = null
     report.scores[dimension] = Math.max(min, report.scores[dimension] - points)
   }
 
+  // 核心 peer 依赖防污染检查（吸纳 DSH-0.2.1-J1-01 / J1-18）：
+  // cordis, schemastery, @deepseek-ai/dsh 必须在 peerDependencies 或仅 devDependencies，
+  // 绝不能在 dependencies 中，否则会引发 vendored 多实例污染与符号分裂。
+  if (pluginForm && pkg.dependencies && typeof pkg.dependencies === 'object') {
+    const PEER_ONLY_PKGS = new Set(['cordis', 'schemastery', '@deepseek-ai/dsh', '@deepseek-ai/cordis', '@deepseek-ai/schemastery'])
+    const polluted = Object.keys(pkg.dependencies).filter((d) => PEER_ONLY_PKGS.has(d))
+    if (polluted.length > 0) {
+      report.findings.push({
+        dimension: 'resilience',
+        severity: 'HIGH',
+        priority: 'P0',
+        file: 'package.json',
+        title: `核心 Peer 依赖被错误声明在 dependencies 中 (${polluted.join(', ')})`,
+        detail:
+          'cordis、schemastery 与 @deepseek-ai/dsh 应声明在 peerDependencies（或 devDependencies 用于单测）。' +
+          '声明在 dependencies 会导致包管理器安装私有副本，运行时出现多实例分裂与类型断言失效（DSH-0.2.1-J1-01 / J1-18）。',
+      })
+      deduct('resilience', 50, 20)
+    }
+  }
+
+  // 供应链审计：检查 package.json 是否声明了非标的安装钩子脚本（吸纳 dsh-plugin-security-review / dshscan）
+  if (pluginForm && pkg.scripts && (pkg.scripts.postinstall || pkg.scripts.preinstall)) {
+    const hook = pkg.scripts.postinstall ? 'postinstall' : 'preinstall'
+    report.findings.push({
+      dimension: 'resilience',
+      severity: 'MEDIUM',
+      priority: 'P1',
+      file: 'package.json',
+      title: `检测到 ${hook} 安装脚本钩子 (供应链审计风险)`,
+      detail: 'DSH 插件规范推荐纯静态免脚本安装，外部包安装钩子容易触发安全沙箱拦截或多平台构建失败，建议移入构建阶段。',
+    })
+    deduct('resilience', 70, 10)
+  }
+
+  // 挂载层审计：检查 cordis.patch.yml 是否包含禁止的 !!js 动态表达式
+  const patchFile = path.join(root, 'cordis.patch.yml')
+  if (fs.existsSync(patchFile)) {
+    try {
+      const patchContent = fs.readFileSync(patchFile, 'utf8')
+      if (patchContent.includes('!!js')) {
+        report.findings.push({
+          dimension: 'resilience',
+          severity: 'HIGH',
+          priority: 'P0',
+          file: 'cordis.patch.yml',
+          title: '检测到禁止的 !!js 动态配置表达式',
+          detail: 'DSH 加载器要求 patch 元数据必须保持纯静态字面量；使用 !!js 会导致 disabled 判定异常恒真，且在沙箱环境下被直接拒绝。',
+        })
+        deduct('resilience', 50, 20)
+      }
+    } catch {}
+  }
+
   const roots = pickScanRoots(root)
   const files = roots.flatMap((r) => findSourceFiles(r))
   const hostLibTextResolved = hostLibText !== undefined ? hostLibText : getHostLibText()
@@ -341,11 +395,26 @@ export function auditPlugin(pluginDir, { scanResult = null, targetVersion = null
         report.findings.push({
           dimension: 'lifecycle',
           severity: 'MEDIUM',
+          priority: 'P1',
           file: rel,
           title: '事件监听或定时器未绑定清理逻辑',
           detail: 'Cordis 插件重载时未清理的监听器与定时器会泄漏，建议注册进 ctx.effect 或提供 dispose。',
         })
         deduct('lifecycle', 65, 15)
+      }
+
+      // 维度 4 补强：顶层模块单例状态防泄漏（只对插件入口与插件模块）
+      const topState = source.match(/^(?:let|var)\s+([a-zA-Z0-9_$]+)\s*=\s*(?:null|\[\]|\{\}|new\s+(?:Map|Set)\b)/m)
+      if (topState && !memberNames.has('dispose') && !memberNames.has('off') && !chainNames.has('effect.dispose')) {
+        report.findings.push({
+          dimension: 'lifecycle',
+          severity: 'LOW',
+          priority: 'P2',
+          file: rel,
+          title: `检测到模块顶层单例状态 (${topState[1]})，重载时需防残留`,
+          detail: 'Cordis 插件在宿主热重载或重新激活时不会重新求值模块顶层；若顶层定义了缓存/计数器等可变状态，建议在 dispose 或 apply 时重置。',
+        })
+        deduct('lifecycle', 85, 5)
       }
     }
   }
@@ -478,6 +547,26 @@ export function auditPlugin(pluginDir, { scanResult = null, targetVersion = null
   report.scannedFiles = files.length
   report.peerPatch = peerPatchFor(pkg, targetVersionResolved)
   report.compatPatch = compatPatch
+
+  // 统一计算 priorityCounts 与为缺少 priority 的 finding 补齐默认映射
+  report.priorityCounts = { P0: 0, P1: 0, P2: 0, P3: 0 }
+  for (const f of report.findings) {
+    if (!f.priority) {
+      if (f.severity === 'HIGH' || f.severity === 'CRITICAL') {
+        f.priority = f.title.includes('Shadow') || f.title.includes('准入账本') ? 'P1' : 'P0'
+      } else if (f.severity === 'MEDIUM') {
+        f.priority = 'P1'
+      } else if (f.severity === 'LOW') {
+        f.priority = 'P2'
+      } else {
+        f.priority = 'P3'
+      }
+    }
+    if (report.priorityCounts[f.priority] !== undefined) {
+      report.priorityCounts[f.priority]++
+    }
+  }
+
   return report
 }
 
@@ -485,6 +574,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.met
   const args = process.argv.slice(2)
   const guideFlag = args.indexOf('--guide')
   const peerPatchFlag = args.includes('--peer-patch')
+  const compactFlag = args.includes('--compact')
 
   // --guide 后跟 3 个位置参数（root/local/target），不能算插件目录
   const positional = (list) => list.filter((a) => !a.startsWith('--'))
@@ -499,7 +589,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.met
     const localVersion = args[guideFlag + 2] || null
     const targetVersion = args[guideFlag + 3] || null
     if (!guideRoot || !fs.existsSync(guideRoot)) {
-      process.stderr.write('用法: node plugin-audit.mjs <plugin-dir> [--guide <guide-root> <local-ver> <target-ver>]\n')
+      process.stderr.write('用法: node plugin-audit.mjs <plugin-dir> [--guide <guide-root> <local-ver> <target-ver>] [--compact]\n')
       process.exit(1)
     }
     scanResult = scanPluginFromGuideRoot(targetDir, guideRoot, { localVersion, targetVersion })
@@ -512,18 +602,39 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.met
     process.stderr.write(`执行异常: ${err.message}\n`)
     process.exit(1)
   }
-  printJson(report)
 
-  if (peerPatchFlag) {
-    if (!report.peerPatch.length) {
-      process.stderr.write('\npeer 修补: 无需改动（所有范围都已覆盖目标宿主）\n')
-    } else {
-      process.stderr.write('\npeer 修补（已用 satisfiesRange 自验证，人工确认后改 package.json）:\n')
-      for (const p of report.peerPatch) {
-        process.stderr.write(`  ${p.package}: "${p.from}" → "${p.to}"\n`)
+  if (compactFlag) {
+    // --compact 是机器可读通道：peer 修补建议走 stderr，stdout 只出 JSON
+    if (peerPatchFlag) {
+      if (!report.peerPatch.length) {
+        process.stderr.write('\npeer 修补: 无需改动（所有范围都已覆盖目标宿主）\n')
+      } else {
+        process.stderr.write('\npeer 修补（已用 satisfiesRange 自验证，人工确认后改 package.json）:\n')
+        for (const p of report.peerPatch) {
+          process.stderr.write(`  ${p.package}: "${p.from}" → "${p.to}"\n`)
+        }
       }
     }
+    const compactReport = {
+      plugin: report.plugin,
+      overallScore: report.overallScore,
+      scores: report.scores,
+      priorityCounts: report.priorityCounts,
+      blockers: report.findings.filter((f) => f.priority === 'P0' || f.priority === 'P1').map((f) => ({
+        priority: f.priority,
+        dimension: f.dimension,
+        file: f.file,
+        title: f.title,
+        detail: f.detail,
+      })),
+      peerPatch: report.peerPatch?.length ? report.peerPatch : undefined,
+      compatPatch: report.compatPatch?.length ? report.compatPatch : undefined,
+    }
+    printJson(compactReport)
+    process.exit(0)
   }
+
+  printJson(report)
 
   process.stderr.write(
     `\n插件: ${report.plugin}（扫 ${report.scannedFiles} 个文件）\n` +

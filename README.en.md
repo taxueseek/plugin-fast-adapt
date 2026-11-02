@@ -2,7 +2,7 @@
 
 [简体中文](README.md) | English
 
-[![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D22.13-blue.svg)](package.json) [![Dependencies](https://img.shields.io/badge/dependencies-0-blue.svg)](#dependencies) [![Self-test](https://img.shields.io/badge/self--test-198%20passing-brightgreen.svg)](#dependencies)
+[![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D22.13-blue.svg)](package.json) [![Dependencies](https://img.shields.io/badge/dependencies-0-blue.svg)](#dependencies) [![Self-test](https://img.shields.io/badge/self--test-206%20passing-brightgreen.svg)](#dependencies)
 
 > **Every time DSH ships a new release, existing plugins can stop working.** This skill reads the vendor's official upgrade guide directly, scans your plugin code, and reports which breaking changes you hit together with the vendor's own fix instructions; it also scaffolds a runnable plugin from zero in one command and verifies it. **Now fully adapted for the latest DSH 0.2.2 series (including 0.2.2-alpha.2)**, featuring local environment anchoring, Release Note targeted extraction, and fleet multi-dimensional governance.
 
@@ -18,7 +18,7 @@
 | Verifying one change | 3,600 s real host cold start → millisecond-scale in-memory smoke test (with unbuilt check & host module fallback) |
 | Ghost host | Warns when the disk has new code but the running process still executes the old one (compares process start time, not version strings) |
 | Fake-green check | Warns when `tsconfig` `paths` point at a missing checkout, where TypeScript silently falls back to published types |
-| Self-test | 198 assertions, runs offline |
+| Self-test | 206 assertions, runs offline |
 | External dependencies | 0 (Node built-ins + the `git`/`npm` commands only) |
 | Cross-platform | Native support for macOS, Linux standard paths, Termux Android, and containers (XDG-compliant) |
 | Scaffolding | One command emits a runnable plugin in five forms, verified on creation, then a write gate issues the birth certificate |
@@ -48,32 +48,34 @@ This project takes a different approach: **maintain the method of obtaining know
 - **Cross-platform & container ready**: eliminates hardcoded directory assumptions, supporting Linux standard paths (`/usr/lib/node_modules`), Termux on Android (`$PREFIX/lib/node_modules`), `npm_config_prefix`, `DSH_HOST_PATH` / `DSH_LOCATION` env overrides, and XDG cache specs
 - **Cheap verification**: in-memory Cordis smoke test returns in milliseconds to seconds without a real host cold start; `--real-smoke` provides real-host isolated profile boot verification
 - **Zero external dependencies**: Node built-ins plus `git`/`npm` commands only
-- **Reproducible**: 198 assertions, runs offline; CI runs on ubuntu, macOS, and Windows
+- **Reproducible**: 206 assertions, runs offline; CI runs on ubuntu, macOS, and Windows
 - **More than adaptation**: `scaffold.mjs` emits a runnable plugin in five forms in one command, and `write-gate.mjs` issues a birth certificate
 - **Silent failures have hard evidence**: `ghostHost` compares process start time against disk change time; `falseGreen` catches TypeScript silent fallbacks
 - **Honest about its limits**: passing smoke test ≠ host compatibility, and the tool states this clearly in its output
 
-## Three lanes
+## Four lanes
 
-The main entry only routes. Each lane owns one job, and the agent reads the matching document instead of loading all three:
+The main entry only routes. Each lane owns one job, and the agent reads the matching document instead of loading all four:
 
 ```
 SKILL.md                      main skill: pick a lane + one-shot pipeline + cross-lane discipline
 sub-skills/adapt/SKILL.md     upgrade adaptation: resolve version → fetch guide → scan hits → seams → smoke → audit
 sub-skills/build/SKILL.md     plugin authoring: scaffold five forms + write-gate birth certificate
 sub-skills/diagnose/SKILL.md  environment and boot failures: env-doctor + log-doctor + env-heal
+sub-skills/review/SKILL.md    code review and architecture audit: P0/P1/P2/P3 grading + sub-agent dispatch
 scripts/                      shared toolbox for all lanes, not split per lane
 references/                   noise rules, migration SOP, CI template
 ```
 
-`build` and `diagnose` also ship optional top-level aliases so they can trigger on their own (they are not required — the main skill reads the lane document by intent):
+`build`, `diagnose` and `review` also ship optional top-level aliases so they can trigger on their own (they are not required — the main skill reads the lane document by intent):
 
 ```sh
 ln -s <repo>/sub-skills/build    ~/.agents/skills/dsh-plugin-build
 ln -s <repo>/sub-skills/diagnose ~/.agents/skills/dsh-plugin-diagnose
+ln -s <repo>/sub-skills/review   ~/.agents/skills/dsh-plugin-review
 ```
 
-The aliases exist so "author a plugin" and "installed but not working" each get their own trigger surface instead of competing inside one `description`. Host loaders cap `description` at 1024 characters and drop the whole skill when it overflows (they do not truncate); the self-test now guards that limit.
+The aliases exist so "author a plugin", "installed but not working" and "review this code" each get their own trigger surface instead of competing inside one `description`. Host loaders cap `description` at 1024 characters and drop the whole skill when it overflows (they do not truncate); the self-test now guards that limit.
 
 ## Install
 
@@ -234,7 +236,7 @@ No TypeScript, no AST library, no HTTP client. Runs on Node 22.13+ (`import.meta
 Self-test:
 
 ```sh
-npm test   # node scripts/self-test.mjs, 198 assertions
+npm test   # node scripts/self-test.mjs, 206 assertions
 ```
 
 Contributors should enable the pre-commit gate (one time): `git config core.hooksPath .githooks` — every commit runs the self-test, so a forgotten downstream sync is caught at commit time.

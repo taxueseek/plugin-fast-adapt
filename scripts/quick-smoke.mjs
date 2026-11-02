@@ -66,6 +66,23 @@ class MockContext {
       list: () => Array.from(registeredTools.values()),
     })
 
+    // 斜杠命令服务：插件注册 /fast-adapt、/fast-audit 等命令。
+    // Cordis 的 command() 返回一个可链式 .action() 的命令对象，Mock 必须支持。
+    const registeredCommands = new Map()
+    const makeCommand = (name, description) => {
+      if (typeof name === 'string' && name) registeredCommands.set(name, description ?? '')
+      return {
+        name,
+        description,
+        action: () => makeCommand(name, description),
+      }
+    }
+    this.provide('command', (name, description) => makeCommand(name, description))
+    this.provide('commands', {
+      register: (name, description) => makeCommand(name, description),
+      list: () => Array.from(registeredCommands.entries()).map(([name, description]) => ({ name, description })),
+    })
+
     this.scope = {
       disposables: [],
       isActive: true,

@@ -1,8 +1,13 @@
 {
   "name": "plugin-fast-adapt",
   "version": "0.2.2",
-  "description": "DSH 插件升级适配：主入口加三条车道子技能，直连官方指南，零外部依赖",
+  "description": "DSH 插件升级适配：主入口加四条车道子技能与 DSH 原生插件，直连官方指南，零外部依赖",
   "type": "module",
+  "main": "./lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json"
+  },
   "bin": {
     "plugin-fast-adapt": "scripts/cli.mjs"
   },
@@ -11,10 +16,17 @@
     "README.md",
     "README.en.md",
     "LICENSE",
+    "cordis.patch.yml",
+    "lib/**/*.js",
     "sub-skills/**/*.md",
     "scripts/**/*.mjs",
     "references/**/*.md"
   ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
   "scripts": {
     "test": "node scripts/self-test.mjs",
     "run": "node scripts/run.mjs",

@@ -1,0 +1,5 @@
+# plugin-fast-adapt 挂载层（bundle patch）
+# 支持作为原生 DSH 插件直接挂载进 profile (web/desktop)
+- insert:
+    - id: plugin-fast-adapt
+      name: 'plugin-fast-adapt'

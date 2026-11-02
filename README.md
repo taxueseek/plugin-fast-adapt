@@ -2,7 +2,7 @@
 
 **简体中文** | [English](README.en.md)
 
-[![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D22.13-blue.svg)](package.json) [![外部依赖](https://img.shields.io/badge/外部依赖-0-blue.svg)](#依赖与自检) [![自检](https://img.shields.io/badge/自检-198项断言-brightgreen.svg)](#依赖与自检)
+[![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D22.13-blue.svg)](package.json) [![外部依赖](https://img.shields.io/badge/外部依赖-0-blue.svg)](#依赖与自检) [![自检](https://img.shields.io/badge/自检-206项断言-brightgreen.svg)](#依赖与自检)
 
 > **DSH 每次发新版，老插件就可能启动不了。** 这个技能直连 DeepSeek 官方升级指南，扫你的插件代码，报出踩了哪几条破坏性变更、官方给的修法是什么；还能一条命令从零造出可运行的插件。**现已深度适配 DSH 最新版本（0.2.2 系列，含 0.2.2-alpha.2）**，支持本地环境权威锚定、Release Note 破坏性变更提取与整机集群多维批量治理。
 
@@ -18,7 +18,7 @@
 | 验证一次改动 | 3600 秒真宿主冷启动 → 毫秒级内存冒烟（支持未构建产物硬拦截与宿主模块软链兜底） |
 | 幽灵宿主 | 磁盘已换新、进程还在跑旧代码时报警（比进程启动时间，不读版本号） |
 | 假绿检测 | `tsconfig` 的 `paths` 指向不存在的 checkout 时报警（本地门禁可能全绿而实际已坏） |
-| 自检 | 198 项断言，离线可跑 |
+| 自检 | 206 项断言，离线可跑 |
 | 外部依赖 | 0（只用 Node 内置模块 + `git`/`npm` 命令） |
 | 跨平台 | 原生支持 macOS、Linux 标准路径、Termux 移动端与容器环境（支持 XDG 规范） |
 | 造插件 | 一条命令出五形态可运行插件，生成即验证 |
@@ -48,32 +48,34 @@ DSH（DeepSeek Harness）是一个「所有功能都以插件形式存在」的 
 - **跨平台与容器自适应**：消除绝对路径硬编码，扩展适配 Linux 发行版标准路径（`/usr/lib/node_modules`）、Termux 移动端（`$PREFIX/lib/node_modules`）与 `npm_config_prefix`，支持环境变量 `DSH_HOST_PATH` / `DSH_LOCATION` 直接覆盖，严格遵循 XDG 缓存规范
 - **验证便宜**：内存级 Cordis 冒烟毫秒到秒级出结果，不用真宿主冷启动；需要真证据时 `--real-smoke` 再补干净 profile 真装真启档
 - **零外部依赖**：只用 Node 内置模块加 `git`/`npm` 命令，没有 TypeScript、没有 AST 库、没有网络请求库
-- **可复现**：198 项自检离线可跑；CI 在 push 和 PR 上跑 ubuntu/macOS/Windows 三平台，打 tag 时另跑发布预检
+- **可复现**：206 项自检离线可跑；CI 在 push 和 PR 上跑 ubuntu/macOS/Windows 三平台，打 tag 时另跑发布预检
 - **不止适配**：`scaffold.mjs` 一条命令生成五形态可运行插件（真基类装载验证），`write-gate.mjs` 写完出「出生证」
 - **静默失败有判据**：`ghostHost` 比对进程启动时间与磁盘变更时间，抓「磁盘新版、内存旧版」；`falseGreen` 抓 `tsconfig` 的 `paths` 指向不存在 checkout 时 TypeScript 的静默回落。两条都只报不判，证据写在输出里
 - **边界诚实**：冒烟通过不等于宿主兼容，这句话写在工具输出里；体检的软指标只透传，不替用户说「合格」
 
-## 三条车道
+## 四条车道
 
-主入口只做路由，三条车道各管一件事，按意图读对应文档，不一次把三份都读进来：
+主入口只做路由，四条车道各管一件事，按意图读对应文档，不一次把四份都读进来：
 
 ```
 SKILL.md                      主技能：判断走哪条 + 一键编排 + 跨车道纪律
 sub-skills/adapt/SKILL.md     升级适配：定版本 → 取指南 → 扫命中 → 接缝 → 秒验 → 体检
 sub-skills/build/SKILL.md     造插件：scaffold 五形态 + write-gate 体检门
 sub-skills/diagnose/SKILL.md  环境与启动故障：env-doctor + log-doctor + env-heal
-scripts/                      三条车道共用的工具箱，不随车道分家
+sub-skills/review/SKILL.md    代码审查与架构审核：P0/P1/P2/P3 分级 + 子 Agent 隔离委派
+scripts/                      四条车道共用的工具箱，不随车道分家
 references/                   降噪规则、迁移 SOP、CI 模板
 ```
 
-`build` 与 `diagnose` 还各有一个顶层别名，可以让它们独立响应触发词（不建也能用，主技能会按意图读对应车道文档）：
+`build`、`diagnose` 与 `review` 还各有一个顶层别名，可以让它们独立响应触发词（不建也能用，主技能会按意图读对应车道文档）：
 
 ```sh
 ln -s <repo>/sub-skills/build    ~/.agents/skills/dsh-plugin-build
 ln -s <repo>/sub-skills/diagnose ~/.agents/skills/dsh-plugin-diagnose
+ln -s <repo>/sub-skills/review   ~/.agents/skills/dsh-plugin-review
 ```
 
-别名的作用是让「造插件」和「装了没生效」这两类独立目标有自己的触发面，不必挤在主技能一个 description 里。宿主加载器对 `description` 有 1024 字符硬上限，超了整条技能会被丢弃而不是截断——这条现在由自检门禁守住。
+别名的作用是让「造插件」「装了没生效」和「代码审查」这几类独立目标有自己的触发面，不必挤在主技能一个 description 里。宿主加载器对 `description` 有 1024 字符硬上限，超了整条技能会被丢弃而不是截断——这条现在由自检门禁守住。
 
 ## 安装
 
@@ -230,7 +232,7 @@ node scripts/write-gate.mjs <插件目录>   # 出生证：硬门禁自动判，
 自检：
 
 ```sh
-npm test   # node scripts/self-test.mjs，198 项断言
+npm test   # node scripts/self-test.mjs，206 项断言
 ```
 
 开发者建议启用提交前门禁（一次性）：`git config core.hooksPath .githooks`——commit 时自动跑自检，改完真源忘了 sync-skill 在这一刻被拦。

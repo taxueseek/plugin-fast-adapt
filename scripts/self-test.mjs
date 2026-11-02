@@ -41,6 +41,7 @@ import './self-test/plan-a.test.mjs'
 import './self-test/plan-b.test.mjs'
 import './self-test/plan-c.test.mjs'
 import './self-test/fleet.test.mjs'
+import './self-test/review.test.mjs'
 
 process.stderr.write('plugin-fast-adapt 自检\n\n')
 
