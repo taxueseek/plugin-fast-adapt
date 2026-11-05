@@ -193,7 +193,20 @@ export function apply(ctx) {
     name: '${names.tools[0]}',
     description: '把传入的文本原样回显。用来验证「插件装载 → 工具注册 → 模型调用」整条链路是否通。',
     parameters: {
-      text: { type: 'string', required: true, description: '要回显的文本' },
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: '要回显的文本' },
+      },
+      required: ['text'],
+    },
+    output: {
+      schema: {
+        type: 'object',
+        properties: {
+          text: { type: 'string', description: '回显的文本' },
+        },
+      },
+      render: (data) => data.text,
     },
     async execute(args, exec) {
       // exec.signal 中止时尽快返回；抛错即 isError。

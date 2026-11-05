@@ -22,10 +22,10 @@ DSH 插件升级适配与防御性审核的主入口。四条车道各管一件�
 | --- | --- | --- | --- |
 | npm registry `dist-tags` | 本机在官方通道的哪个位置、目标版本是谁 | `@deepseek-ai/dsh` | `guide-sync` |
 | 仓库 `docs/upgrade-guide/` | **这一版到那一版之间**坏了什么、官方修法是什么 | 每个版本目录一条条目 | `code-scan` |
-| 仓库 `docs/defensive-patterns/` | **任何时候都成立**的硬要求（不随版本变） | 五篇：package-surface / general / client-components / conversation-and-session / remote-and-api | 机械可判的 4 条 `standards-scan`，其余人工 |
+| 仓库 `docs/defensive-patterns/` | **任何时候都成立**的硬要求（不随版本变） | 五篇：package-surface / general / client-components / conversation-and-session / remote-and-api | 机械可判的 5 条 `standards-scan`，其余人工 |
 | 仓库 `docs/persistence-changes/` | 落盘格式变了什么、**旧数据还能不能读** | 每份一条变更 | 暂为人工（缺真实故障样本） |
 
-常设规则那层已经不再全靠人工：`lib/standards.mjs` 里那张表把**照原文读必然得出同一结论**的四条做成了机器检出（模块顶层 await、入口导出面、共享状态无所有者、跨包相对 import），每条都带 `defensive-patterns` 的原文出处；需要意图判断的（dispose 是否真等停稳、回调异常是否隔离、slot 注册物是否稳定）**故意不进**自动扫描，留在 review 车道人工核对——把裁量题伪装成判定题比不判更坏。
+常设规则那层已经不再全靠人工：`lib/standards.mjs` 里那张表把**照原文读必然得出同一结论**的五条做成了机器检出（模块顶层 await、入口导出面、共享状态无所有者、跨包相对 import、外部生命周期资源未配对注销），每条都带 `defensive-patterns` 的原文出处；需要意图判断的（dispose 是否真等停稳、回调异常是否隔离、slot 注册物是否稳定）**故意不进**自动扫描，留在 review 车道人工核对——把裁量题伪装成判定题比不判更坏。确定性违规可由 `codemod.mjs` 一键修复。
 
 前两类管「时间轴上的破坏性变更」，后两类管「不随版本变的常设契约」。二者不可互替：一份插件通过了全部升级指南扫描，仍可能违反常设要求；反过来，一条常设要求也不会出现在任何一版的 upgrade-guide 里。**只扫升级指南，等于只查了一半。**
 
@@ -91,7 +91,7 @@ node scripts/sync-skill.mjs --dest <下游技能目录>            # 同步
 npm test
 ```
 
-226 项断言，覆盖扫描器不误报（注释和字符串里的同名词不算命中）、不漏报、版本窗口与 real semver 判定、目标形态判定、指南出处锚点、指南分支快照与覆盖度未知态、三元版本账本直通与变更嗅探、本地宿主接缝契约核对与未构建硬拦截、跨平台与工作区自适应（Termux/Linux/环境变量/祖先依赖）、上游经验吸纳（退出码 143 停机判定/Bundle 遮蔽阴影/准入账本 compatPatch/提示词 {{cwd}} 拦截/全局前缀分裂检测/集群治理 Web-APP 与运行态生命周期多维看板）、Cordis 深度防御性审查（核心 peer 依赖 vendored 污染 P0 拦截/顶层单例状态泄漏 P2 预警/run 与 audit --compact 紧凑模式/DSH 原生插件服务）、Release Note 破坏性变更虚拟指南提取与双语去重、接缝查询双源结论、运行日志与宿主日志交叉核对、一键编排各档位（含 --strict）、冒烟验证（含 Config 默认值解析、宿主 node_modules 兜底、未声明 inject 契约拦截与 exports-only 入口）、四维审计（含 peer 与 compat 准入账本修补）、启用诊断（宿主半与客户端半）、幽灵宿主四态与磁盘时间来源、tsconfig paths 假绿（含 extends 与 JSONC）、环境层三处盲区、创作脚手架与体检门、日志诊断、下游同步、发布预检规则（版本一致/tag/包内容/npm 状态）、跨平台模拟、诊断输出瘦身、CLI 帮助与未知参数、宿主凭证擦除留下的残缺 GIT_CONFIG 配置组净化（真实 git 子进程回归）、链接形态路径的安全删除、文档断言数与技能面 description 长度门禁、扫描性能回归。自检零网络、零外部依赖，任何机器上都能跑。
+232 项断言，覆盖扫描器不误报（注释和字符串里的同名词不算命中）、不漏报、版本窗口与 real semver 判定、目标形态判定、指南出处锚点、指南分支快照与覆盖度未知态、三元版本账本直通与变更嗅探、本地宿主接缝契约核对与未构建硬拦截、跨平台与工作区自适应（Termux/Linux/环境变量/祖先依赖）、上游经验吸纳（退出码 143 停机判定/Bundle 遮蔽阴影/准入账本 compatPatch/提示词 {{cwd}} 拦截/全局前缀分裂检测/集群治理 Web-APP 与运行态生命周期多维看板）、Cordis 深度防御性审查（核心 peer 依赖 vendored 污染 P0 拦截/顶层单例状态泄漏 P2 预警/run 与 audit --compact 紧凑模式/DSH 原生插件服务）、Release Note 破坏性变更虚拟指南提取与双语去重、接缝查询双源结论、运行日志与宿主日志交叉核对、一键编排各档位（含 --strict）、冒烟验证（含 Config 默认值解析、宿主 node_modules 兜底、未声明 inject 契约拦截与 exports-only 入口）、四维审计（含 peer 与 compat 准入账本修补）、启用诊断（宿主半与客户端半）、幽灵宿主四态与磁盘时间来源、tsconfig paths 假绿（含 extends 与 JSONC）、环境层三处盲区、创作脚手架与体检门、日志诊断、下游同步、发布预检规则（版本一致/tag/包内容/npm 状态）、跨平台模拟、诊断输出瘦身、CLI 帮助与未知参数、宿主凭证擦除留下的残缺 GIT_CONFIG 配置组净化（真实 git 子进程回归）、链接形态路径的安全删除、文档断言数与技能面 description 长度门禁、扫描性能回归、生命周期配对检查与确定性 Codemod 自动修补。自检零网络、零外部依赖，任何机器上都能跑。
 
 提交前门禁：`git config core.hooksPath .githooks`（一次性）启用 pre-commit 钩子，commit 时自动跑本自检，改完真源忘了同步在这一刻被拦。
 
@@ -108,7 +108,8 @@ npm test
 | `env-heal.mjs` | 覆盖层旧包自愈（默认 dry-run） |
 | `guide-sync.mjs` | 定目标版本 + 取官方升级指南：默认分支受管快照按 1 小时 TTL 刷新，tag 快照仅在离线兜底并标 frozen |
 | `code-scan.mjs` | 扫描插件代码，匹配官方变更锚点（带指南文件与行号出处） |
-| `standards-scan.mjs` | 上游常设规则检出（4 条机械可判项，带 defensive-patterns 出处）；`--rules` 出规则表 |
+| `standards-scan.mjs` | 上游常设规则检出（5 条机械可判项，含生命周期未注销配对，带 defensive-patterns 出处）；`--rules` 出规则表 |
+| `codemod.mjs` | 确定性代码与包面自动修补：修复 Loader 入口导出面、宿主核心包 peer 依赖、顶层 await；默认 dry-run，`--apply` 才落盘并备份 |
 | `fix-peer-deps.mjs` | 批量把宿主核心包从 dependencies 挪进 peerDependencies；默认 dry-run，`--apply` 才落盘并备份 |
 | `seams.mjs` | 接缝查询：包名或 API 符号在指南锚点表与本机宿主里的双源结论 |
 | `quick-smoke.mjs` | 内存级 Cordis 冒烟，含 Mock 兜底披露 |

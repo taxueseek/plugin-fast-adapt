@@ -56,6 +56,15 @@ export const STANDARDS_RULES = [
     rules: '同包测试用相对 `../src/...` 路径触达内部；伸进**别的包**的 src 会绕过 `exports` 映射与包边界检查（测试 fixture 用相对路径引用其他包同样不合格）。绝对路径 import 则让插件绑死本机布局，换台机器就装不上。',
     note: '机械判据：import 说明符以 `/` 开头，或以 `../` 开头且解析后落在插件根之外。',
   },
+  {
+    id: 'lifecycle-unpaired-resource',
+    title: '外部生命周期资源未闭环注销（未在 dispose 中注销监听或清理定时器）',
+    upstream: 'docs/defensive-patterns/general.zh.md#资源与生命周期',
+    severity: 'HIGH',
+    priority: 'P1',
+    rules: '申请的未受管外部资源（如原生 `setInterval` / `setTimeout`、`process.on`、`emitter.on`）必须在插件 `dispose` 回调中释放。Cordis 插件在热重载或停用时会销毁 Fork，若未注销将导致孤儿监听器常驻、多次重复触发甚至内存泄漏。',
+    note: '机械判据：代码中调用了不受管的 `process.on(...)` / `process.addListener(...)` 或原生 `setInterval(...)`，但在整个模块中未找到配对的 `process.off`/`removeListener` 或 `clearInterval`/`ctx.on(\'dispose\')` 注销逻辑。使用 `ctx.setInterval` 或声明了 dispose 清理逻辑时不计入。',
+  },
 ]
 
 /** 函数插件的四件套导出名。 */
@@ -111,13 +120,19 @@ export function collectEntryExports(code, mask, lineOf) {
     if (inCode(mask, m.index)) values.push({ name: m[1], line: lineOf(m.index) })
   }
 
-  // export { a, b as c }
-  const listRe = /\bexport\s*\{([^}]*)\}/g
+  // export { a, b as c } 与 export { type a, type b as c }
+  const listRe = /\bexport\s*(?:type\s*)?\{([^}]*)\}/g
   while ((m = listRe.exec(code)) !== null) {
     if (!inCode(mask, m.index)) continue
+    const isExportType = /\bexport\s+type\s*\{/.test(m[0])
     for (const raw of m[1].split(',')) {
       const part = raw.trim()
       if (!part) continue
+      if (isExportType || part.startsWith('type ')) {
+        const typeName = part.replace(/^type\s+/, '').split(/\s+as\s+/).pop()?.trim()
+        if (typeName) typeOnly.push(typeName)
+        continue
+      }
       const name = (part.split(/\s+as\s+/).pop() || part).trim()
       if (/^[A-Za-z_$][\w$]*$/.test(name)) values.push({ name, line: lineOf(m.index) })
     }
@@ -198,6 +213,14 @@ export function scanStandards(pluginDir, { files = null, entryFile = null } = {}
       }
     }
 
+    // 规则 5：外部生命周期资源未闭环注销
+    for (const hit of findUnpairedLifecycleResources(code, mask, lineOf)) {
+      push('lifecycle-unpaired-resource', file, hit.line, {
+        evidence: hit.evidence,
+        detail: `${STANDARDS_RULES.find((r) => r.id === 'lifecycle-unpaired-resource').rules} ${hit.why}`,
+      })
+    }
+
     // 规则 2：Loader 入口导出面（只判入口）
     if (entryRel && file === entryRel) {
       const collected = collectEntryExports(code, mask, lineOf)
@@ -208,13 +231,19 @@ export function scanStandards(pluginDir, { files = null, entryFile = null } = {}
         if (collected.hasDefault) {
           push('loader-entry-shape', file, 1, {
             evidence: 'export default',
-            detail: `${STANDARDS_RULES[1].rules} 本次在入口里同时看到具名导出与 \`export default\`，Loader 会按服务插件处理并丢掉具名那半边。`,
+            severity: 'HIGH',
+            priority: 'P0',
+            detail: `${STANDARDS_RULES.find((r) => r.id === 'loader-entry-shape').rules} 本次在入口里同时看到具名导出与 \`export default\`，Loader 会按服务插件处理并丢掉具名那半边。`,
           })
         }
         for (const v of extra) {
+          // 上游 package-surface.zh.md 明确允许导出供外部 extends/throw 的 Service 类、Error 类及 Adapter 类
+          if (/(?:Service|Error|Exception|Adapter)$/.test(v.name)) continue
           push('loader-entry-shape', file, v.line, {
             evidence: `export ${v.name}`,
-            detail: `${STANDARDS_RULES[1].rules} 本次多出的值导出是 \`${v.name}\`。若它只是同包测试要用的便利值，改由测试走相对路径触达内部，不要经入口导出。`,
+            severity: 'LOW',
+            priority: 'P2',
+            detail: `${STANDARDS_RULES.find((r) => r.id === 'loader-entry-shape').rules} 本次多出的值导出是 \`${v.name}\`。若它只是同包测试或辅助逻辑，建议通过子路径导出或内部引用，保持最小包面。`,
           })
         }
       }
@@ -319,4 +348,77 @@ export function standardsScore(findings) {
     else score -= 4
   }
   return Math.max(0, score)
+}
+
+/**
+ * 找外部生命周期资源未成对注销的违规。
+ *
+ * 机械判据：
+ * 1. 原生 `process.on(...)` / `process.addListener(...)`：代码区调用，但模块内无 `process.off` / `removeListener` 且无 `dispose`。
+ * 2. 原生 `setInterval(...)`：代码区调用（非 `ctx.setInterval` 等方法），但模块内无 `clearInterval` 且无 `dispose`。
+ * 字符串与注释里的同名调用由词法掩码 mask 自动过滤。
+ * @param {string} code 文本
+ * @param {Uint8Array} mask 掩码
+ * @param {(idx: number) => number} lineOf 行号定位
+ * @returns {Array<{ line: number, evidence: string, why: string }>}
+ */
+export function findUnpairedLifecycleResources(code, mask, lineOf) {
+  const hits = []
+
+  let hasDispose = false
+  let hasProcessOff = false
+  let hasClearInterval = false
+
+  const disposeRe = /\bdispose\b/g
+  let m
+  while ((m = disposeRe.exec(code)) !== null) {
+    if (inCode(mask, m.index)) { hasDispose = true; break }
+  }
+
+  const offRe = /\bprocess\s*\.\s*(?:off|removeListener)\b/g
+  while ((m = offRe.exec(code)) !== null) {
+    if (inCode(mask, m.index)) { hasProcessOff = true; break }
+  }
+
+  const clearRe = /\bclearInterval\b/g
+  while ((m = clearRe.exec(code)) !== null) {
+    if (inCode(mask, m.index)) { hasClearInterval = true; break }
+  }
+
+  // 1. process.on / process.addListener
+  if (!hasDispose && !hasProcessOff) {
+    const procOnRe = /\bprocess\s*\.\s*(?:on|addListener)\s*\(/g
+    while ((m = procOnRe.exec(code)) !== null) {
+      if (inCode(mask, m.index)) {
+        const line = lineOf(m.index)
+        const lineText = code.split('\n')[line - 1]?.trim() || 'process.on(...)'
+        hits.push({
+          line,
+          evidence: lineText,
+          why: '调用了全局 `process.on` / `process.addListener`，但未发现 `process.off`、`removeListener` 或 `dispose` 注销调用。热重载时会导致监听器重复常驻与内存泄漏。',
+        })
+      }
+    }
+  }
+
+  // 2. 原生 setInterval(...)，排除 obj.setInterval (如 ctx.setInterval)
+  if (!hasDispose && !hasClearInterval) {
+    const timerRe = /(?:^|[^.\w$])setInterval\s*\(/g
+    while ((m = timerRe.exec(code)) !== null) {
+      const matchStr = m[0]
+      const offset = matchStr.indexOf('setInterval')
+      const actualIdx = m.index + offset
+      if (inCode(mask, actualIdx)) {
+        const line = lineOf(actualIdx)
+        const lineText = code.split('\n')[line - 1]?.trim() || 'setInterval(...)'
+        hits.push({
+          line,
+          evidence: lineText,
+          why: '调用了原生不受管的 `setInterval`，但未发现 `clearInterval` 或 `dispose` 清理逻辑。改用 `ctx.setInterval` 或在 `ctx.on(\'dispose\')` 中清理。',
+        })
+      }
+    }
+  }
+
+  return hits
 }

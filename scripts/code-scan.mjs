@@ -47,10 +47,14 @@ const SOURCE_ROOTS = ['src', 'client', 'web', 'ui']
 const BUILD_ROOTS = ['lib', 'dist']
 
 export function pickScanRoots(pluginDir) {
-  const sources = SOURCE_ROOTS.map((dir) => path.join(pluginDir, dir)).filter((full) => fs.existsSync(full))
-  if (sources.length > 0) return sources
+  const hasSrc = fs.existsSync(path.join(pluginDir, 'src'))
+  if (hasSrc) {
+    return SOURCE_ROOTS.map((dir) => path.join(pluginDir, dir)).filter((full) => fs.existsSync(full))
+  }
+  const clientSources = ['client', 'web', 'ui'].map((dir) => path.join(pluginDir, dir)).filter((full) => fs.existsSync(full))
   const builds = BUILD_ROOTS.map((dir) => path.join(pluginDir, dir)).filter((full) => fs.existsSync(full))
-  return builds.length > 0 ? builds : [pluginDir]
+  const merged = [...builds, ...clientSources]
+  return merged.length > 0 ? merged : [pluginDir]
 }
 
 // 锚点 a.b 是否匹配插件里的 x.y：

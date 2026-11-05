@@ -42,7 +42,8 @@ function parseArgs(argv) {
  * @returns {Array<{file: string, source: string}>} 源码清单
  */
 export function readPluginSources(dir, { extraRoots = null } = {}) {
-  const files = findSourceFiles(dir, extraRoots || pickScanRoots(dir))
+  const roots = extraRoots || pickScanRoots(dir)
+  const files = roots.flatMap((r) => findSourceFiles(r))
   return files.map((abs) => ({
     file: path.relative(dir, abs).split(path.sep).join('/'),
     source: fs.readFileSync(abs, 'utf8'),
@@ -74,6 +75,8 @@ export function readLoadedModuleGraph(dir, pkg) {
     const mainRel = typeof pkg?.main === 'string' ? pkg.main.replace(/^\.\//, '') : null
     const mainBase = mainRel ? path.basename(mainRel).replace(/\.(?:js|mjs|cjs)$/, '') : 'index'
     const entry =
+      files.find((f) => f.file.startsWith('src/') && (f.file.endsWith(`/${mainBase}.ts`) || f.file.endsWith(`/${mainBase}.tsx`) || f.file === `src/${mainBase}.ts` || f.file === `src/${mainBase}.tsx`))?.file ||
+      files.find((f) => f.file === 'src/index.ts' || f.file === 'src/index.tsx')?.file ||
       files.find((f) => f.file.endsWith(`/${mainBase}.ts`) || f.file.endsWith(`/${mainBase}.tsx`) || f.file === `${mainBase}.ts` || f.file === `${mainBase}.tsx`)?.file ||
       files.find((f) => /(?:^|\/)index\.(?:ts|tsx)$/.test(f.file))?.file ||
       files[0]?.file ||

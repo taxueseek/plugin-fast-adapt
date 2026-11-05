@@ -51,6 +51,7 @@ import './self-test/fleet.test.mjs'
 import './self-test/review.test.mjs'
 import './self-test/proc-env.test.mjs'
 import './self-test/standards.test.mjs'
+import './self-test/codemod.test.mjs'
 
 process.stderr.write('plugin-fast-adapt 自检\n\n')
 

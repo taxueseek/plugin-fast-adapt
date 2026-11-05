@@ -250,13 +250,28 @@ export async function runQuickSmoke(pluginRoot) {
 
     // 与真实 Cordis 宿主及 host-modules.mjs 对齐：若插件导出了 Schemastery Config 构造器，
     // 先以 Config({}) 解析出默认值再传入 apply(ctx, config)，避免插件守卫因空对象 {} 误炸。
+    // 在真宿主 Cordis resolveConfig 中，若导出普通 Object 且无 ~standard.validate，会导致抛错崩溃。
     const ConfigFn = pluginTarget.Config || mod.Config
     let resolvedConfig = {}
-    if (typeof ConfigFn === 'function') {
-      try {
-        const parsed = ConfigFn({})
-        if (parsed && typeof parsed === 'object') resolvedConfig = parsed
-      } catch {}
+    if (ConfigFn !== undefined && ConfigFn !== null) {
+      if (typeof ConfigFn === 'function') {
+        try {
+          const parsed = ConfigFn({})
+          if (parsed && typeof parsed === 'object') resolvedConfig = parsed
+        } catch {}
+      } else if (typeof ConfigFn === 'object') {
+        if (!ConfigFn['~standard'] || typeof ConfigFn['~standard'].validate !== 'function') {
+          return {
+            success: false,
+            stage: 'activation',
+            error: `Config 导出非法：在 DSH/Cordis 宿主中，Config 必须是 Schemastery Schema 实例（含 ~standard.validate 方法）或函数。导出普通 Object 会导致宿主 resolveConfig 抛出 TypeError: Cannot read properties of undefined (reading 'validate')。`,
+          }
+        }
+        try {
+          const res = ConfigFn['~standard'].validate({})
+          if (res && res.value && typeof res.value === 'object') resolvedConfig = res.value
+        } catch {}
+      }
     }
 
     if (typeof pluginTarget.apply === 'function') {
