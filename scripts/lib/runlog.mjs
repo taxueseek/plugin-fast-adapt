@@ -15,6 +15,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
+import { gitChildEnv } from './proc-env.mjs'
 
 // 日志根可注入（DSH_PFA_RUNS_DIR）：self-test 用临时目录，不写真实用户缓存。
 // 默认根走 XDG_STATE 而非 ~/.cache——台账是有保留期的运行史不是可再生缓存，
@@ -52,7 +53,7 @@ function indexFile() {
 
 function toolCommit(toolDir) {
   try {
-    return execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: toolDir, encoding: 'utf8' }).trim()
+    return execFileSync('git', ['rev-parse', '--short', 'HEAD'], { env: gitChildEnv().env, cwd: toolDir, encoding: 'utf8' }).trim()
   } catch {
     return null
   }
@@ -64,7 +65,7 @@ function toolCommit(toolDir) {
 // 非 git 目录返回 null（探测失败不伪造）。
 function toolDirty(toolDir) {
   try {
-    return execFileSync('git', ['status', '--porcelain'], { cwd: toolDir, encoding: 'utf8' }).trim().length > 0
+    return execFileSync('git', ['status', '--porcelain'], { env: gitChildEnv().env, cwd: toolDir, encoding: 'utf8' }).trim().length > 0
   } catch {
     return null
   }

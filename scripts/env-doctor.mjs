@@ -17,6 +17,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
+import { gitChildEnv } from './lib/proc-env.mjs'
 import { printJson, isDshPackage, isPluginForm, packageBase, parseVersion, compareVersions, peerFloor, maskSource, CODE, resolveEntryFile, pickExistingEntry } from './lib/scanner.mjs'
 export { resolveEntryFile, pickExistingEntry }
 import { diagnoseClientHalf, isDeliberateRosterInsert, stripYamlConfigBlocks } from './lib/client-graph.mjs'
@@ -554,7 +555,7 @@ export function isHarnessCheckout(root) {
 
 function gitCheckoutInfo(dir) {
   try {
-    const opts = { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }
+    const opts = { env: gitChildEnv().env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }
     const root = execFileSync('git', ['-C', dir, 'rev-parse', '--show-toplevel'], opts).trim()
     if (!isHarnessCheckout(root)) return null
     const commit = execFileSync('git', ['-C', root, 'log', '-1', '--format=%cI'], opts).trim()

@@ -15,6 +15,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { findGlobalDsh } from '../env-doctor.mjs'
+import { removeDirSafely } from './proc-env.mjs'
 
 // 脚手架生成的插件会 import 这些包；缺哪个就少验哪一形态
 const HOST_MODULES = [
@@ -162,6 +163,6 @@ export async function verifyWithHostModules({ pluginDir, entryFile, form }) {
       error: checks.find((c) => !c.ok)?.detail ?? null,
     }
   } finally {
-    fs.rmSync(tmp, { recursive: true, force: true })
+    removeDirSafely(tmp)
   }
 }

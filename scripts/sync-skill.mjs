@@ -17,6 +17,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
+import { gitChildEnv } from './lib/proc-env.mjs'
 import { fileURLToPath } from 'node:url'
 
 const TOOL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -95,10 +96,10 @@ export function suggestCommitCommand({ srcRoot = TOOL_ROOT, destRoot } = {}) {
     // git 返回的仓根与调用方路径前缀不一致，relative 直接给出跨目录的错路径
     const realDest = fs.realpathSync(destRoot)
     const repoRoot = fs.realpathSync(
-      execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: destRoot, encoding: 'utf8' }).trim()
+      execFileSync('git', ['rev-parse', '--show-toplevel'], { env: gitChildEnv().env, cwd: destRoot, encoding: 'utf8' }).trim()
     )
     const rel = path.relative(repoRoot, realDest)
-    const short = execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: srcRoot, encoding: 'utf8' }).trim()
+    const short = execFileSync('git', ['rev-parse', '--short', 'HEAD'], { env: gitChildEnv().env, cwd: srcRoot, encoding: 'utf8' }).trim()
     return `git -C "${repoRoot}" add "${rel}" && git -C "${repoRoot}" commit -m "chore(fast-adapt): 同步独立仓 ${short}"`
   } catch {
     return null

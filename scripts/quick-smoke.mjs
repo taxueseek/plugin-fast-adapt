@@ -21,6 +21,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { removeDirSafely } from './lib/proc-env.mjs'
 import { printJson, resolveEntryFile, pickExistingEntry } from './lib/scanner.mjs'
 import { findGlobalDsh } from './env-doctor.mjs'
 
@@ -305,7 +306,7 @@ export async function runQuickSmoke(pluginRoot) {
   } finally {
     if (tmpHostFallbackDir) {
       try {
-        fs.rmSync(tmpHostFallbackDir, { recursive: true, force: true })
+        removeDirSafely(tmpHostFallbackDir)
       } catch {}
     }
   }

@@ -12,6 +12,7 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { gitChildEnv } from './lib/proc-env.mjs'
 import { printJson } from './lib/scanner.mjs'
 import {
   PKG_NAME,
@@ -29,7 +30,9 @@ const SPAWN_SHELL = process.platform === 'win32'
 
 function run(cmd, args, { cwd = TOOL_DIR, timeout = 60_000 } = {}) {
   try {
-    const stdout = execFileSync(cmd, args, { cwd, encoding: 'utf8', shell: SPAWN_SHELL, timeout, stdio: 'pipe' })
+    const options = { cwd, encoding: 'utf8', shell: SPAWN_SHELL, timeout, stdio: 'pipe' }
+    // git 子进程要净化残缺的索引式命令行配置组，否则宿主会话里每条 git 都 fatal
+    const stdout = execFileSync(cmd, args, cmd === 'git' ? { ...options, env: gitChildEnv().env } : options)
     return { ok: true, stdout, stderr: '', status: 0 }
   } catch (err) {
     return { ok: false, stdout: String(err.stdout || ''), stderr: String(err.stderr || err.message || ''), status: err.status ?? null }

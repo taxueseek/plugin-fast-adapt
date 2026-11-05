@@ -13,6 +13,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
+import { gitChildEnv, removeDirSafely } from './lib/proc-env.mjs'
 import { printJson, compareVersions } from './lib/scanner.mjs'
 import { listGuideVersions } from './lib/guide-parser.mjs'
 import { findGlobalDsh } from './env-doctor.mjs'
@@ -228,12 +229,12 @@ function writeSnapshotMeta(dir, meta) {
 }
 
 function headCommit(dir) {
-  return execFileSync('git', ['-C', dir, 'rev-parse', 'HEAD'], { encoding: 'utf8', stdio: 'pipe', timeout: 20000 }).trim()
+  return execFileSync('git', ['-C', dir, 'rev-parse', 'HEAD'], { env: gitChildEnv().env, encoding: 'utf8', stdio: 'pipe', timeout: 20000 }).trim()
 }
 
 function headBranch(dir) {
   try {
-    return execFileSync('git', ['-C', dir, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8', stdio: 'pipe', timeout: 20000 }).trim()
+    return execFileSync('git', ['-C', dir, 'rev-parse', '--abbrev-ref', 'HEAD'], { env: gitChildEnv().env, encoding: 'utf8', stdio: 'pipe', timeout: 20000 }).trim()
   } catch {
     return null
   }
@@ -279,8 +280,8 @@ export function syncBranchSnapshot({
     try {
       const fetchArgs = ['-C', dir, 'fetch', '--depth', '1', 'origin']
       if (branch) fetchArgs.push(branch)
-      execFileSync('git', fetchArgs, { stdio: 'pipe', timeout: 120000 })
-      execFileSync('git', ['-C', dir, 'reset', '--hard', 'FETCH_HEAD'], { stdio: 'pipe', timeout: 60000 })
+      execFileSync('git', fetchArgs, { env: gitChildEnv().env, stdio: 'pipe', timeout: 120000 })
+      execFileSync('git', ['-C', dir, 'reset', '--hard', 'FETCH_HEAD'], { env: gitChildEnv().env, stdio: 'pipe', timeout: 60000 })
       const refreshed = { commit: headCommit(dir), fetchedAt: now, branch: headBranch(dir) }
       writeSnapshotMeta(dir, refreshed)
       return snapshotResult(dir, 'branch-snapshot-refresh', refreshed)
@@ -299,36 +300,33 @@ export function syncBranchSnapshot({
   // 上次中断可能留下没有 docs/upgrade-guide 的半成品目录，rename 还会撞名；
   // 受管缓存可再生，先清掉再拉，避免一次失败把后续分支快照永久卡死。
   if (fs.existsSync(dir) && !fs.existsSync(root)) {
-    try {
-      fs.rmSync(dir, { recursive: true, force: true })
-    } catch {}
+    // 受管缓存目录有被用户软链到别处的可能：跟着链接递归删会删掉目标内容
+    removeDirSafely(dir)
   }
 
   fs.mkdirSync(path.dirname(dir), { recursive: true })
   const tmp = `${dir}.tmp-${process.pid}`
   try {
-    fs.rmSync(tmp, { recursive: true, force: true })
+    removeDirSafely(tmp)
     const cloneArgs = ['clone', '--depth', '1', '--filter=blob:none', '--sparse']
     if (branch) cloneArgs.push('--branch', branch)
     cloneArgs.push(HARNESS_REPO, tmp)
-    execFileSync('git', cloneArgs, { stdio: 'pipe', timeout: 120000 })
+    execFileSync('git', cloneArgs, { env: gitChildEnv().env, stdio: 'pipe', timeout: 120000 })
     // HEAD 被稀疏克隆后是 detached；记实际分支名只用于排查
     const created = { commit: headCommit(tmp), fetchedAt: now, branch: headBranch(tmp) }
-    execFileSync('git', ['sparse-checkout', 'set', 'docs/upgrade-guide'], { cwd: tmp, stdio: 'pipe', timeout: 120000 })
+    execFileSync('git', ['sparse-checkout', 'set', 'docs/upgrade-guide'], { env: gitChildEnv().env, cwd: tmp, stdio: 'pipe', timeout: 120000 })
     writeSnapshotMeta(tmp, created)
     try {
       fs.renameSync(tmp, dir)
     } catch (err) {
       // 并发进程先一步建好了同名快照：删掉自己的临时目录，直接用现成的
       if (!fs.existsSync(root)) throw err
-      fs.rmSync(tmp, { recursive: true, force: true })
+      removeDirSafely(tmp)
       return snapshotResult(dir, 'branch-snapshot')
     }
     return snapshotResult(dir, 'branch-snapshot', created)
   } catch (err) {
-    try {
-      fs.rmSync(tmp, { recursive: true, force: true })
-    } catch {}
+    removeDirSafely(tmp)
     return { source: 'unavailable', root: null, versions: [], error: `拉取分支指南失败（${branch || '默认分支'}）：${err.message}` }
   }
 }
@@ -361,15 +359,14 @@ export function cloneGuides(targetVersion, { cacheRoot = CACHE_ROOT } = {}) {
 
   try {
     execFileSync('git', ['clone', '--depth', '1', '--branch', tag, '--filter=blob:none', '--sparse', HARNESS_REPO, tmp], {
+      env: gitChildEnv().env,
       stdio: 'pipe',
       timeout: 120000,
     })
-    execFileSync('git', ['sparse-checkout', 'set', 'docs/upgrade-guide'], { cwd: tmp, stdio: 'pipe' })
+    execFileSync('git', ['sparse-checkout', 'set', 'docs/upgrade-guide'], { env: gitChildEnv().env, cwd: tmp, stdio: 'pipe' })
     fs.renameSync(tmp, dest)
   } catch (err) {
-    try {
-      fs.rmSync(tmp, { recursive: true, force: true })
-    } catch {}
+    removeDirSafely(tmp)
     throw new Error(`拉取官方指南失败（tag ${tag}）：${err.message}`)
   }
 

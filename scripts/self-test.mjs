@@ -12,6 +12,12 @@ import os from 'node:os'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+// 自检要起子进程跑 run.mjs / git。宿主沙箱会给环境注入残缺的 git 索引式命令行配置组
+// （GIT_CONFIG_COUNT 在、GIT_CONFIG_KEY_n 被凭证擦除），不净化的话子进程里每条 git 都
+// fatal: unable to parse command-line config，自检在宿主会话内变成假失败。这里只摘残缺组，
+// 组齐全时一个字节都不动。
+process.env = cleanGitEnv(process.env)
+
 import { scanSource, compareVersions, parseVersion, satisfiesRange, computeWindow, isPluginForm } from './lib/scanner.mjs'
 import { parseGuideMarkdown, extractAnchors, listGuideVersions, loadGuides } from './lib/guide-parser.mjs'
 import { resolveTargetVersion, fetchNpmMetadata, runGuideSync, guideVersionFor, upstreamCheckExit, readMissingTag, recordMissingTag } from './guide-sync.mjs'
@@ -23,6 +29,7 @@ import { readClientDecl, clientExportPath, overlayMountedNames, isDeliberateRost
 import { scaffoldPlugin, projectNames, detectHarnessVersion, UsageError } from './scaffold.mjs'
 import { runWriteGate } from './write-gate.mjs'
 import { listRuns, sanitizeRun, writeRunLog, pruneRuns, migrateLogRoot } from './lib/runlog.mjs'
+import { cleanGitEnv, diagnoseGitConfigGroup } from './lib/proc-env.mjs'
 import { parseStartupLog, parseMessages, diagnoseLogs } from './log-doctor.mjs'
 import { checkSkillSync, syncSkill, suggestCommitCommand } from './sync-skill.mjs'
 import { querySeams } from './seams.mjs'
@@ -42,6 +49,7 @@ import './self-test/plan-b.test.mjs'
 import './self-test/plan-c.test.mjs'
 import './self-test/fleet.test.mjs'
 import './self-test/review.test.mjs'
+import './self-test/proc-env.test.mjs'
 
 process.stderr.write('plugin-fast-adapt 自检\n\n')
 
@@ -1182,7 +1190,7 @@ test('run：离线全链编排产出统一报告并写日志；sanitize 脱敏�
   fs.writeFileSync(path.join(dir, 'src', 'index.js'), 'export function apply() {}\n')
 
   const runsDir = tmpPluginDir('runs')
-  const env = { ...process.env, DSH_PFA_RUNS_DIR: runsDir }
+  const env = cleanGitEnv({ ...process.env, DSH_PFA_RUNS_DIR: runsDir })
   // --target 锁定终点：离线模式下终点默认取本机宿主版本，宿主旧于 peer 下限的
   // 机器上会触发倒挂回退，把本用例变成机器相关；显式给终点让它处处确定
   const out = execFileSync(process.execPath, [path.join(SCRIPTS, 'run.mjs'), dir, '--offline', '--no-smoke', '--target', '0.2.1-rc.3'], { encoding: 'utf8', env })
@@ -1403,7 +1411,7 @@ test('run --real-smoke：桥接 verify-runtime——fail 退出码 2，pass 退�
   fs.writeFileSync(failScript, "console.log('plugin-code: fake failure attribution'); process.exit(1)\n")
   fs.writeFileSync(passScript, "console.log('verify pass'); process.exit(0)\n")
   const base = [path.join(SCRIPTS, 'run.mjs'), dir, '--offline', '--no-smoke', '--no-typecheck', '--no-log', '--real-smoke']
-  const env = { ...process.env, DSH_PFA_RUNS_DIR: path.join(fakeDir, 'runs'), PFA_VERIFY_RUNTIME: failScript }
+  const env = cleanGitEnv({ ...process.env, DSH_PFA_RUNS_DIR: path.join(fakeDir, 'runs'), PFA_VERIFY_RUNTIME: failScript })
   try {
     execFileSync(process.execPath, base, { encoding: 'utf8', env })
     assert.fail('fail 档应退出码 2')
@@ -1459,11 +1467,11 @@ test('sync-skill 提交命令建议：git 仓给只 add 同步路径的命令，
     const mirror = tmpPluginDir('suggest-mirror')
     fs.writeFileSync(path.join(tool, 'a.txt'), 'a')
     fs.writeFileSync(path.join(mirror, 'b.txt'), 'b')
-    const gitInit = (dir) => execFileSync('git', ['init', '-q'], { cwd: dir })
+    const gitInit = (dir) => execFileSync('git', ['init', '-q'], { cwd: dir, env: cleanGitEnv() })
     gitInit(tool)
     gitInit(mirror)
-    execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'add', 'a.txt'], { cwd: tool })
-    execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'init'], { cwd: tool })
+    execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'add', 'a.txt'], { cwd: tool, env: cleanGitEnv() })
+    execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'init'], { cwd: tool, env: cleanGitEnv() })
     const dest = path.join(mirror, 'skills', 'plugin-fast-adapt')
     fs.mkdirSync(dest, { recursive: true })
 
@@ -1600,16 +1608,16 @@ test('runlog 记录工具仓 dirty 标记（版本与 commit 拆对可识别）'
     // git 仓：clean → false，改文件 → true。git 不可用的环境跳过这半段。
     let gitWorks = true
     try {
-      execFileSync('git', ['--version'])
+      execFileSync('git', ['--version'], { env: cleanGitEnv() })
     } catch {
       gitWorks = false
     }
     if (gitWorks) {
       const repo = tmpPluginDir('dirty-repo')
       fs.writeFileSync(path.join(repo, 'a.txt'), 'x')
-      execFileSync('git', ['init', '-q'], { cwd: repo })
-      execFileSync('git', ['add', '-A'], { cwd: repo })
-      execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'x'], { cwd: repo })
+      execFileSync('git', ['init', '-q'], { cwd: repo, env: cleanGitEnv() })
+      execFileSync('git', ['add', '-A'], { cwd: repo, env: cleanGitEnv() })
+      execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'x'], { cwd: repo, env: cleanGitEnv() })
       writeRunLog({ time: new Date().toISOString(), plugin: { name: 't-dirty1' }, tool: {} }, { toolDir: repo })
       assert.strictEqual(listRuns(1)[0].toolDirty, false, '干净树 dirty=false')
       fs.writeFileSync(path.join(repo, 'b.txt'), 'y')
