@@ -15,10 +15,25 @@
 export const PEER_ONLY_PACKAGES = [
   'cordis',
   'schemastery',
+  'cosmokit',
   '@deepseek-ai/dsh',
   '@deepseek-ai/cordis',
   '@deepseek-ai/schemastery',
+  '@deepseek-ai/cosmokit',
 ]
+
+/** 上游 docs/rescope.zh.md 官方 vendored 包改名映射表。 */
+export const VENDOR_RESCOPE_MAP = {
+  'cordis': '@deepseek-ai/cordis',
+  'cosmokit': '@deepseek-ai/cosmokit',
+  'schemastery': '@deepseek-ai/schemastery',
+  '@cordisjs/plugin-loader': '@deepseek-ai/cordis-plugin-loader',
+  '@cordisjs/plugin-include': '@deepseek-ai/cordis-plugin-include',
+  '@cordisjs/plugin-group': '@deepseek-ai/cordis-plugin-group',
+  '@cordisjs/plugin-timer': '@deepseek-ai/cordis-plugin-timer',
+  '@cordisjs/plugin-hmr': '@deepseek-ai/cordis-plugin-hmr',
+  '@cordisjs/plugin-logger-console': '@deepseek-ai/cordis-plugin-logger-console',
+}
 
 /** 本仓内部包的版本写法（上游按包族规定：宿主包 workspace:*，其余 workspace:~）。 */
 function isHostScopePackage(name) {

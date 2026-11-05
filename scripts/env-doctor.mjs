@@ -197,7 +197,8 @@ function scanOverlay(profile, globalVersion) {
 
     if (globalVersion) {
       const shortBase = pkg.name.replace('@deepseek-ai/', '')
-      if (DSH_SUITE_PACKAGES.has(shortBase) || pkg.name === '@deepseek-ai/dsh') {
+      const isSuitePkg = pkg.name.startsWith('@deepseek-ai/dsh') || pkg.name.startsWith('@deepseek-ai/cordis') || DSH_SUITE_PACKAGES.has(shortBase)
+      if (isSuitePkg) {
         const pv = parseVersion(pkg.version)
         const gv = parseVersion(globalVersion)
         if (pv.major !== gv.major || pv.minor !== gv.minor) {

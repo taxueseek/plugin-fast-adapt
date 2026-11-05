@@ -42,8 +42,18 @@ export const SPARSE_DOC_PATHS = [
   'docs/upgrade-guide',
   'docs/defensive-patterns',
   'docs/persistence-changes',
-  // 目录索引不随目录走：这两份在 docs 根下，不单列就取不到
+  // 结构化真源目录与表格（能力接缝、事件矩阵、命名空间改名、Session 状态）
+  'docs/capability-seams.md',
+  'docs/capability-seams.zh.md',
+  'docs/event-producer-consumer.md',
+  'docs/event-producer-consumer.zh.md',
+  'docs/rescope.md',
+  'docs/rescope.zh.md',
+  'docs/session-format-status.md',
+  'docs/session-format-status.zh.md',
+  'docs/dependency-catalog.json',
   'docs/persistence-catalog.md',
+  'docs/persistence-catalog.zh.md',
   'docs/persistence-schema.json',
 ]
 

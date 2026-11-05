@@ -65,6 +65,24 @@ export const STANDARDS_RULES = [
     rules: '申请的未受管外部资源（如原生 `setInterval` / `setTimeout`、`process.on`、`emitter.on`）必须在插件 `dispose` 回调中释放。Cordis 插件在热重载或停用时会销毁 Fork，若未注销将导致孤儿监听器常驻、多次重复触发甚至内存泄漏。',
     note: '机械判据：代码中调用了不受管的 `process.on(...)` / `process.addListener(...)` 或原生 `setInterval(...)`，但在整个模块中未找到配对的 `process.off`/`removeListener` 或 `clearInterval`/`ctx.on(\'dispose\')` 注销逻辑。使用 `ctx.setInterval` 或声明了 dispose 清理逻辑时不计入。',
   },
+  {
+    id: 'vendor-rescope-unscoped',
+    title: '上游 Vendored 依赖未加 @deepseek-ai/ 作用域（裸引用 cordis/schemastery 等）',
+    upstream: 'docs/defensive-patterns/package-surface.zh.md#vendored-包改名',
+    severity: 'HIGH',
+    priority: 'P1',
+    rules: '上游已将 cordis、schemastery、cosmokit 及 @cordisjs/plugin-* 统一收归 @deepseek-ai/ 命名空间。插件源码中的 import 说明符、declare module 声明及 package.json 依赖须使用加了作用域的包名（如 @deepseek-ai/cordis），裸名在目标宿主中会导致模块无法解析或多实例冲突。',
+    note: '机械判据：源码中出现了 from "cordis" / from "schemastery" / from "cosmokit" / from "@cordisjs/plugin-*" 或 declare module "cordis"，以及 package.json 中依赖键包含上述未 rescoped 的包名。',
+  },
+  {
+    id: 'waterfall-missing-next',
+    title: 'Waterfall 事件监听器未调用 next() 透传责任链',
+    upstream: 'docs/defensive-patterns/general.zh.md#waterfall-责任链流水线',
+    severity: 'HIGH',
+    priority: 'P1',
+    rules: 'Waterfall 扩展点（如 tools/pre-execute、tools/execute、agent/pre-step、approval/request 等）属于责任链流水线，监听器入参接收 (...args, next)。监听器执行完毕后必须调用 return next() 或 return await next(...) 将控制权交回流水线。若缺少 next() 调用，将静默切断整条管道，导致后续工具或模型流程失效。',
+    note: '机械判据：代码中出现了 ctx.on("<waterfall-event>", ...) 等 waterfall 扩展点的订阅，但在该监听器作用域内未调用 next()。',
+  },
 ]
 
 /** 函数插件的四件套导出名。 */
@@ -218,6 +236,22 @@ export function scanStandards(pluginDir, { files = null, entryFile = null } = {}
       push('lifecycle-unpaired-resource', file, hit.line, {
         evidence: hit.evidence,
         detail: `${STANDARDS_RULES.find((r) => r.id === 'lifecycle-unpaired-resource').rules} ${hit.why}`,
+      })
+    }
+
+    // 规则 6：上游 Vendored 依赖未加 @deepseek-ai/ 作用域
+    for (const hit of findUnscopedVendorImports(code, mask, lineOf)) {
+      push('vendor-rescope-unscoped', file, hit.line, {
+        evidence: hit.evidence,
+        detail: `${STANDARDS_RULES.find((r) => r.id === 'vendor-rescope-unscoped').rules} 命中未 rescoped 的裸包名 \`${hit.pkg}\`，建议迁移至 \`${hit.target}\`。`,
+      })
+    }
+
+    // 规则 7：Waterfall 事件未调用 next() 透传
+    for (const hit of findBrokenWaterfallListeners(code, mask, lineOf)) {
+      push('waterfall-missing-next', file, hit.line, {
+        evidence: hit.evidence,
+        detail: `${STANDARDS_RULES.find((r) => r.id === 'waterfall-missing-next').rules} 监听了 Waterfall 扩展点 \`${hit.event}\`，但在该监听器作用域内未调用 \`next()\`，会静默阻断后续流水线。`,
       })
     }
 
@@ -420,5 +454,90 @@ export function findUnpairedLifecycleResources(code, mask, lineOf) {
     }
   }
 
+  return hits
+}
+
+export const VENDOR_UNSCOPED_PACKAGES = [
+  'cordis',
+  'cosmokit',
+  'schemastery',
+  '@cordisjs/plugin-loader',
+  '@cordisjs/plugin-include',
+  '@cordisjs/plugin-group',
+  '@cordisjs/plugin-timer',
+  '@cordisjs/plugin-hmr',
+  '@cordisjs/plugin-logger-console',
+]
+
+export const WATERFALL_EVENTS = new Set([
+  'agent/pre-step',
+  'agent/request-error',
+  'approval/request',
+  'compaction/summary-error',
+  'connection/request',
+  'fs/delete-intent',
+  'fs/edit-intent',
+  'fs/write-intent',
+  'llm/stream',
+  'system-prompt/assemble',
+  'tools/execute',
+  'tools/pre-execute',
+  'tools/post-execute',
+])
+
+/**
+ * 找未加 @deepseek-ai/ 前缀的裸 vendor 引用。
+ * @param {string} code 文本
+ * @param {Uint8Array} mask 掩码
+ * @param {(idx: number) => number} lineOf 行号定位
+ * @returns {Array<{ line: number, evidence: string, pkg: string, target: string }>}
+ */
+export function findUnscopedVendorImports(code, mask, lineOf) {
+  const hits = []
+  const importRe = /\bfrom\s*['"]([^'"]+)['"]|\bimport\s*\(\s*['"]([^'"]+)['"]|\bdeclare\s+module\s+['"]([^'"]+)['"]/g
+  let m
+  while ((m = importRe.exec(code)) !== null) {
+    if (!inCode(mask, m.index)) continue
+    const pkg = m[1] || m[2] || m[3]
+    if (VENDOR_UNSCOPED_PACKAGES.includes(pkg)) {
+      const line = lineOf(m.index)
+      hits.push({
+        line,
+        evidence: m[0],
+        pkg,
+        target: `@deepseek-ai/${pkg.replace('@cordisjs/plugin-', 'cordis-plugin-')}`,
+      })
+    }
+  }
+  return hits
+}
+
+/**
+ * 找监听了 Waterfall 扩展点但未调用 next() 的断链隐患。
+ * @param {string} code 文本
+ * @param {Uint8Array} mask 掩码
+ * @param {(idx: number) => number} lineOf 行号定位
+ * @returns {Array<{ line: number, event: string, evidence: string }>}
+ */
+export function findBrokenWaterfallListeners(code, mask, lineOf) {
+  const hits = []
+  const onRe = /\bon\s*\(\s*['"]([^'"]+)['"]\s*,\s*(?:async\s*)?(?:(?:\(([^)]*)\)|([A-Za-z_$][\w$]*))\s*=>|function\s*(?:[A-Za-z_$][\w$]*)?\s*\(([^)]*)\))/g
+  let m
+  while ((m = onRe.exec(code)) !== null) {
+    if (!inCode(mask, m.index)) continue
+    const eventName = m[1]
+    if (!WATERFALL_EVENTS.has(eventName)) continue
+
+    const line = lineOf(m.index)
+    // 检查此监听器后面的函数体是否有 next(
+    const tail = code.slice(m.index, m.index + 800)
+    if (!/\bnext\s*\(/.test(tail)) {
+      hits.push({
+        line,
+        event: eventName,
+        evidence: code.split('\n')[line - 1]?.trim() || `ctx.on('${eventName}', ...)`,
+      })
+    }
+  }
   return hits
 }

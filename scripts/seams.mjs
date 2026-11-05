@@ -187,9 +187,103 @@ function checkSymbolOnHost(query, hostInfo) {
   }
 }
 
+// ── 上游结构化接缝与事件表格解析 ─────────────────────────────────────────────
+
+export function findDocsRoot(guideRoot) {
+  if (guideRoot) {
+    let cur = guideRoot
+    for (let i = 0; i < 3; i++) {
+      if (fs.existsSync(path.join(cur, 'capability-seams.zh.md')) || fs.existsSync(path.join(cur, 'capability-seams.md'))) {
+        return cur
+      }
+      const parent = path.dirname(cur)
+      if (parent === cur) break
+      cur = parent
+    }
+  }
+  try {
+    const names = fs.readdirSync(CACHE_ROOT)
+    for (const name of names) {
+      const p = path.join(CACHE_ROOT, name, 'docs')
+      if (fs.existsSync(path.join(p, 'capability-seams.zh.md')) || fs.existsSync(path.join(p, 'capability-seams.md'))) {
+        return p
+      }
+    }
+  } catch {}
+  return null
+}
+
+export function parseCapabilitySeamsTable(docText) {
+  const seams = []
+  const lines = docText.split('\n')
+  for (const line of lines) {
+    if (!line.startsWith('|') || !line.includes('`ctx.')) continue
+    const parts = line.split('|').map((p) => p.trim())
+    if (parts.length >= 8) {
+      const rawKey = parts[1].replace(/[`\s]/g, '')
+      const role = parts[2].replace(/[`\s]/g, '')
+      const owningPkg = parts[3].replace(/\[`?([^`\]]+)`?\]\([^)]+\)/g, '$1').trim()
+      const providers = parts[4].replace(/\[`?([^`\]]+)`?\]\([^)]+\)/g, '$1').trim()
+      const consumers = parts[5].replace(/\[`?([^`\]]+)`?\]\([^)]+\)/g, '$1').trim()
+      const desc = parts[7] || ''
+      seams.push({
+        key: rawKey,
+        shortKey: rawKey.replace(/^ctx\./, ''),
+        role,
+        owningPkg: owningPkg === '-' ? null : owningPkg,
+        providers: providers === '-' ? [] : providers.split(',').map((s) => s.trim()),
+        consumers: consumers === '-' ? [] : consumers.split(',').map((s) => s.trim()),
+        description: desc,
+      })
+    }
+  }
+  return seams
+}
+
+export function parseEventMatrixTable(docText) {
+  const events = []
+  const lines = docText.split('\n')
+  for (const line of lines) {
+    if (!line.startsWith('|') || !line.includes('`')) continue
+    const parts = line.split('|').map((p) => p.trim())
+    if (parts.length >= 6) {
+      const eventName = parts[1].replace(/[`\s]/g, '')
+      const mode = parts[2].replace(/[`\s]/g, '')
+      if (['emit', 'serial', 'waterfall', 'parallel'].includes(mode)) {
+        const declaredIn = parts[3].replace(/\[`?([^`\]]+)`?\]\([^)]+\)/g, '$1').trim()
+        const dispatchers = parts[4].replace(/\[`?([^`\]]+)`?\]\([^)]+\)/g, '$1').trim()
+        const listeners = parts[5].replace(/\[`?([^`\]]+)`?\]\([^)]+\)/g, '$1').trim()
+        events.push({
+          event: eventName,
+          mode,
+          declaredIn,
+          dispatchers,
+          listeners,
+        })
+      }
+    }
+  }
+  return events
+}
+
 // ── 双源合成 ────────────────────────────────────────────────────────────────
 
-function synthesize(query, guideEvidence, hostEvidence) {
+function synthesize(query, guideEvidence, hostEvidence, seamHit = null, eventHit = null) {
+  if (seamHit) {
+    const roleDesc = seamHit.role === 'core' ? '核心服务' : seamHit.role === 'seam' ? '可替换能力 Seam' : '独立服务'
+    const providerText = seamHit.providers.length > 0 ? `（实现包: ${seamHit.providers.join(', ')}）` : ''
+    return {
+      verdict: 'confirmed-seam',
+      text: `上游 capability-seams 官方目录确认：${seamHit.key} 是由「${seamHit.owningPkg || '宿主'}」拥有的 ${roleDesc}${providerText}。${seamHit.description ? '说明: ' + seamHit.description : ''}`,
+    }
+  }
+  if (eventHit) {
+    const isWaterfall = eventHit.mode === 'waterfall'
+    return {
+      verdict: 'confirmed-event',
+      text: `上游 event-producer-consumer 官方目录确认：事件「${eventHit.event}」派发模式为 ${eventHit.mode}${isWaterfall ? '（责任链模式：监听器必须显式调 next() 透传，否则静默短路宿主）' : ''}。声明位置: ${eventHit.declaredIn}`,
+    }
+  }
   const kinds = new Set(guideEvidence.map((e) => e.kind))
   const removedClaim = kinds.has('removed-package') || kinds.has('changed-member') || kinds.has('changed-constant')
   const introduced = kinds.has('introduced-symbol')
@@ -224,6 +318,29 @@ export function querySeams(query, { guideRoot = undefined, hostInfo = undefined 
   }
   const guideEvidence = searchGuideEvidence(loaded, query)
 
+  // 查结构化接缝表与事件表
+  const docsRoot = findDocsRoot(guideRoot)
+  let seamHit = null
+  let eventHit = null
+  if (docsRoot) {
+    const seamsPath = [path.join(docsRoot, 'capability-seams.zh.md'), path.join(docsRoot, 'capability-seams.md')].find((f) => fs.existsSync(f))
+    if (seamsPath) {
+      try {
+        const text = fs.readFileSync(seamsPath, 'utf8')
+        const allSeams = parseCapabilitySeamsTable(text)
+        seamHit = allSeams.find((s) => s.key === query || s.shortKey === query || s.key === `ctx.${query}`) || null
+      } catch {}
+    }
+    const eventsPath = [path.join(docsRoot, 'event-producer-consumer.zh.md'), path.join(docsRoot, 'event-producer-consumer.md')].find((f) => fs.existsSync(f))
+    if (eventsPath) {
+      try {
+        const text = fs.readFileSync(eventsPath, 'utf8')
+        const allEvents = parseEventMatrixTable(text)
+        eventHit = allEvents.find((e) => e.event === query) || null
+      } catch {}
+    }
+  }
+
   const isPackageLike =
     query.startsWith('@') || query.includes('/') || /^dsh-/.test(query) || guideEvidence.some((e) => e.kind === 'removed-package')
   const resolvedHost = hostInfo === undefined ? findGlobalDsh() : hostInfo
@@ -237,9 +354,11 @@ export function querySeams(query, { guideRoot = undefined, hostInfo = undefined 
     query,
     guideRoot: rootInfo,
     guideEvidence,
+    seamCatalogHit: seamHit,
+    eventCatalogHit: eventHit,
     host: resolvedHost ? { version: resolvedHost.version, source: resolvedHost.source } : null,
     hostEvidence,
-    conclusion: synthesize(query, guideEvidence, hostEvidence),
+    conclusion: synthesize(query, guideEvidence, hostEvidence, seamHit, eventHit),
   }
 }
 

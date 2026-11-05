@@ -255,3 +255,84 @@ test('规则 lifecycle-unpaired-resource：不受管监听与定时器未清理�
   assert.strictEqual(listenerHits.length, 1, 'process.on 未注销应抓到')
   assert.ok(listenerHits[0].evidence.includes('process.on'))
 })
+
+test('规则 vendor-rescope-unscoped：未加 @deepseek-ai/ 前缀的裸 vendor 引用要报警，作用域后不误报', () => {
+  // 正例：使用加了 scope 的包名
+  const safe = scan([
+    {
+      file: 'lib/index.js',
+      source: [
+        'import { Context } from "@deepseek-ai/cordis"',
+        'import Schema from "@deepseek-ai/schemastery"',
+        'declare module "@deepseek-ai/cordis" {}',
+        'export function apply(ctx) {}',
+      ].join('\n'),
+    },
+  ])
+  assert.strictEqual(safe.findings.filter((f) => f.rule === 'vendor-rescope-unscoped').length, 0, '已加作用域的包名不报')
+
+  // 反例：使用裸 cordis / schemastery
+  const leaked = scan([
+    {
+      file: 'lib/index.js',
+      source: [
+        'import { Context } from "cordis"',
+        'import { Schema } from "schemastery"',
+        'declare module "cordis" {}',
+        'export function apply(ctx) {}',
+      ].join('\n'),
+    },
+  ])
+  const hits = leaked.findings.filter((f) => f.rule === 'vendor-rescope-unscoped')
+  assert.strictEqual(hits.length, 3, '3 处裸包引用都要抓到')
+})
+
+test('规则 waterfall-missing-next：waterfall 事件漏调 next() 要报警，透传或非 waterfall 不误报', () => {
+  // 正例 1：调用了 next()
+  const safeWaterfall = scan([
+    {
+      file: 'lib/index.js',
+      source: [
+        'export function apply(ctx) {',
+        '  ctx.on("tools/pre-execute", async (tool, args, next) => {',
+        '    console.log("before")',
+        '    return await next()',
+        '  })',
+        '}',
+      ].join('\n'),
+    },
+  ])
+  assert.strictEqual(safeWaterfall.findings.filter((f) => f.rule === 'waterfall-missing-next').length, 0, '调了 next() 不报')
+
+  // 正例 2：非 waterfall 事件（如 agent/created）不需要 next
+  const safeEmit = scan([
+    {
+      file: 'lib/index.js',
+      source: [
+        'export function apply(ctx) {',
+        '  ctx.on("agent/created", (agent) => {',
+        '    console.log("created", agent.id)',
+        '  })',
+        '}',
+      ].join('\n'),
+    },
+  ])
+  assert.strictEqual(safeEmit.findings.filter((f) => f.rule === 'waterfall-missing-next').length, 0, '非 waterfall 事件不报')
+
+  // 反例：监听了 waterfall 事件但函数体没调 next()
+  const brokenWaterfall = scan([
+    {
+      file: 'lib/index.js',
+      source: [
+        'export function apply(ctx) {',
+        '  ctx.on("tools/pre-execute", (tool, args) => {',
+        '    console.log("intercepted")',
+        '  })',
+        '}',
+      ].join('\n'),
+    },
+  ])
+  const hits = brokenWaterfall.findings.filter((f) => f.rule === 'waterfall-missing-next')
+  assert.strictEqual(hits.length, 1, 'waterfall 漏调 next 应报警')
+  assert.ok(hits[0].evidence.includes('tools/pre-execute'))
+})
