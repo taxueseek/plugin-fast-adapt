@@ -13,11 +13,15 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { prepareLexicalView } from './scanner.mjs'
+import { prepareLexicalView, compareVersions } from './scanner.mjs'
 
 const CACHE_ROOT = path.join(os.homedir(), '.cache', 'dsh-plugin-fast-adapt')
 const SIGNATURES_DIR = path.join(CACHE_ROOT, 'signatures')
-const SYNTHESIZED_GUIDES_DIR = path.join(CACHE_ROOT, 'synthesized-guides')
+// 合成指南按「差分基线版本」命名落盘（<base>.json）：code-scan 消费时只认
+// 「基线 == 扫描窗口起点」的文件。差分从更早的基线算起会包含窗口前的移除
+// （插件按 peer 下限声明根本没用过它们，报了就是误报），从更晚的基线算起会
+// 漏掉窗口内的移除，只有恰好相等才精确。
+export const SYNTHESIZED_GUIDES_DIR = path.join(CACHE_ROOT, 'synthesized-guides')
 
 /**
  * 从单个 .d.ts 或 .ts 源码中提取导出符号表（具名函数、类、接口、类型、常量）。
@@ -309,5 +313,46 @@ export function loadCachedSignature(version) {
     return JSON.parse(fs.readFileSync(file, 'utf8'))
   } catch {
     return null
+  }
+}
+
+/**
+ * 把合成指南按基线版本落盘。同基线重算即覆盖（移除只会累积，新差分是旧差分的超集）；
+ * 不同基线各占一份文件，互不覆盖——code-scan 按窗口起点精确取用。
+ * @param {string} baseVersion 差分基线（扫描窗口起点）
+ * @param {Array<object>} guides synthesizeGuidesFromDiff 产物
+ * @returns {string} 写入的文件路径
+ */
+export function writeSynthesizedGuides(baseVersion, guides) {
+  fs.mkdirSync(SYNTHESIZED_GUIDES_DIR, { recursive: true })
+  const file = path.join(SYNTHESIZED_GUIDES_DIR, `${baseVersion}.json`)
+  const payload = {
+    from: baseVersion,
+    to: guides[0]?.version ?? null,
+    generatedAt: new Date().toISOString(),
+    guides,
+  }
+  fs.writeFileSync(file, JSON.stringify(payload, null, 2), 'utf8')
+  return file
+}
+
+/**
+ * 读取某个基线版本落盘的合成指南。缺文件或内容损坏一律返回空数组——
+ * 消费方（code-scan）不该为合成面的缺失失败，官方指南照常扫。
+ * @param {string|null} baseVersion 差分基线（扫描窗口起点）；null 表示不消费
+ * @param {{ maxVersion?: string|null }} [opts] 只保留 to <= maxVersion 的指南（防降级窗口吃进未来变更）
+ * @returns {Array<object>} 兼容 loadGuides 形状的指南列表
+ */
+export function loadSynthesizedGuides(baseVersion, opts = {}) {
+  if (!baseVersion) return []
+  const file = path.join(SYNTHESIZED_GUIDES_DIR, `${baseVersion}.json`)
+  if (!fs.existsSync(file)) return []
+  try {
+    const payload = JSON.parse(fs.readFileSync(file, 'utf8'))
+    if (!Array.isArray(payload?.guides)) return []
+    if (opts.maxVersion && payload.to && compareVersions(payload.to, opts.maxVersion) > 0) return []
+    return payload.guides
+  } catch {
+    return []
   }
 }

@@ -13,6 +13,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { printJson, scanSource, isDshPackage, compareVersions, packageBase } from './lib/scanner.mjs'
 import { loadGuides, listGuideVersions } from './lib/guide-parser.mjs'
+import { loadSynthesizedGuides } from './lib/types-diff.mjs'
 import { findGlobalDsh } from './env-doctor.mjs'
 import { packageOnHost } from './lib/host-scope.mjs'
 
@@ -272,6 +273,9 @@ export function scanPlugin(pluginDir, guides, { localVersion = null, targetVersi
               guideLine: guide.titleLine ?? null,
               title: guide.title,
               migration: pickMigrationSteps(guide, pkg),
+              // 来源分账：官方指南命中是「文档记了的」，合成指南（types-diff）命中
+              // 是「官方文档没记、包面 diff 出来的」——后者单独计数，就是 doc-gap。
+              source: guide.source || 'official-guide',
             })
           }
         }
@@ -294,6 +298,7 @@ export function scanPlugin(pluginDir, guides, { localVersion = null, targetVersi
               guideLine: guide.titleLine ?? null,
               title: guide.title,
               migration: pickMigrationSteps(guide, hit.name),
+              source: guide.source || 'official-guide',
             })
           }
         }
@@ -315,6 +320,7 @@ export function scanPlugin(pluginDir, guides, { localVersion = null, targetVersi
               guideLine: guide.titleLine ?? null,
               title: guide.title,
               migration: pickMigrationSteps(guide, code),
+              source: guide.source || 'official-guide',
             })
           }
         }
@@ -343,6 +349,10 @@ export function scanPlugin(pluginDir, guides, { localVersion = null, targetVersi
     byGuide.get(f.guide).push(f)
   }
 
+  // doc-gap 分账：来自包面差分合成指南的命中 = 官方文档没记的破坏性变更。
+  // 单独计数给上层报告用，「官方没写」本身就是要显式呈现的事实（#5816 类）。
+  const docGapFindings = hostVerification.findings.filter((f) => f.source === 'types-diff')
+
   return {
     pluginDir: path.resolve(pluginDir),
     scanRoots: roots.map((r) => path.relative(pluginDir, r) || '.'),
@@ -356,6 +366,8 @@ export function scanPlugin(pluginDir, guides, { localVersion = null, targetVersi
       packagesChecked: hostVerification.checked,
       downgradedToInfo: hostVerification.downgraded,
     },
+    docGapCount: docGapFindings.length,
+    docGapSymbols: [...new Set(docGapFindings.map((f) => f.symbol))].sort(),
     findingCount: hostVerification.findings.length,
     bySeverity: Object.entries(
       hostVerification.findings.reduce((acc, f) => ((acc[f.severity] = (acc[f.severity] || 0) + 1), acc), {})
@@ -374,6 +386,12 @@ export function scanPlugin(pluginDir, guides, { localVersion = null, targetVersi
 export function scanPluginFromGuideRoot(pluginDir, guideRoot, options = {}) {
   const versions = listGuideVersions(guideRoot)
   const guides = versions.flatMap((v) => loadGuides(guideRoot, v))
+  // 合成指南消费（opt-in）：只有显式传了 synthesizedDir 才并入。基线必须是
+  // 扫描窗口起点——差分基线比窗口早会把窗口前的移除报进来（插件按 peer 下限
+  // 声明根本没用过），比窗口晚会漏报；都不精确，宁可不用。
+  if (options.synthesizedDir) {
+    guides.push(...loadSynthesizedGuides(options.localVersion, { maxVersion: options.targetVersion }))
+  }
   return scanPlugin(pluginDir, guides, options)
 }
 
@@ -382,14 +400,16 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.met
   const guideRoot = process.argv[3]
   const localVersion = process.argv[4] || null
   const targetVersion = process.argv[5] || null
+  const synthesizedDir = process.argv[6] || null
 
   if (!guideRoot || !fs.existsSync(path.join(guideRoot))) {
-    process.stderr.write('用法: node code-scan.mjs <plugin-dir> <guide-root> [local-version] [target-version]\n')
+    process.stderr.write('用法: node code-scan.mjs <plugin-dir> <guide-root> [local-version] [target-version] [synthesized-dir]\n')
     process.stderr.write('  guide-root 是官方 upgrade-guide 目录，例如 harness clone 里的 docs/upgrade-guide\n')
+    process.stderr.write('  synthesized-dir 是 types-diff 落盘的合成指南目录；给了才会并入包面差分的虚拟指南\n')
     process.exit(1)
   }
 
-  const result = scanPluginFromGuideRoot(pluginDir, guideRoot, { localVersion, targetVersion })
+  const result = scanPluginFromGuideRoot(pluginDir, guideRoot, { localVersion, targetVersion, synthesizedDir })
   printJson(result)
 
   const sev = Object.fromEntries(result.bySeverity.map(([k, v]) => [k, v]))
@@ -398,6 +418,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.met
     `参考指南版本: ${result.guideVersionsAvailable.join(', ') || '无'}\n` +
     `纳入考虑的 guide 条目: ${result.guidesConsidered}\n` +
     `命中: ${result.findingCount} 处（critical(package) ${sev.critical || 0} / high(member) ${sev.high || 0} / medium(code) ${sev.medium || 0} / info ${sev.info || 0}），涉及 ${Object.keys(result.findingsByGuide).length} 条官方变更\n` +
+    `包面差分补报（官方指南没记的 doc-gap）: ${result.docGapCount} 处${result.docGapSymbols.length ? `（${result.docGapSymbols.join('、')}）` : ''}\n` +
     `宿主实测: 核查 ${result.hostVerification.packagesChecked} 个包命中，${result.hostVerification.downgradedToInfo} 个因包仍在宿主降级为 info\n`
   )
 }

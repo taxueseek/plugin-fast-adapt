@@ -22,6 +22,7 @@ import {
   extractHostSignature,
   diffTypeSignatures,
   synthesizeGuidesFromDiff,
+  writeSynthesizedGuides,
   saveCachedSignature,
   loadCachedSignature,
 } from './lib/types-diff.mjs'
@@ -123,12 +124,17 @@ export function runTypesDiffCli(argv = process.argv.slice(2)) {
 
   const diff = diffTypeSignatures(baseSig, targetSig)
   let guides = []
+  let synthFile = null
   if (args.synth) {
     guides = synthesizeGuidesFromDiff(diff)
+    if (guides.length > 0) {
+      // 按基线版本落盘：code-scan 拿窗口起点来取，基线对不上不消费（防跨窗口误报）。
+      synthFile = writeSynthesizedGuides(diff.fromVersion, guides)
+    }
   }
 
   if (args.json) {
-    printJson({ diff, guides })
+    printJson({ diff, guides, synthFile })
     return diff.breakingCount > 0 ? 1 : 0
   }
 
@@ -145,7 +151,8 @@ export function runTypesDiffCli(argv = process.argv.slice(2)) {
   }
 
   if (args.synth && guides.length > 0) {
-    process.stdout.write(`\n🚀 已自动合成 ${guides.length} 条虚拟破坏性指南，可直接注入扫描走廊。\n`)
+    process.stdout.write(`\n🚀 已合成 ${guides.length} 条虚拟破坏性指南并落盘: ${synthFile}\n`)
+    process.stdout.write(`   code-scan 传第五个参数（合成指南目录）后，窗口起点 = ${diff.fromVersion} 的扫描会自动并入这批指南。\n`)
   }
   process.stdout.write('\n')
 

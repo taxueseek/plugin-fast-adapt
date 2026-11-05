@@ -7,6 +7,7 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { test, tmpPluginDir } from './harness.mjs'
 import { STANDARDS_RULES, scanStandards, standardsScore, collectEntryExports, findUnpairedLifecycleResources } from '../lib/standards.mjs'
 import { planPeerFix, PEER_ONLY_PACKAGES } from '../lib/peer-fix.mjs'
@@ -335,4 +336,15 @@ test('规则 waterfall-missing-next：waterfall 事件漏调 next() 要报警，
   const hits = brokenWaterfall.findings.filter((f) => f.rule === 'waterfall-missing-next')
   assert.strictEqual(hits.length, 1, 'waterfall 漏调 next 应报警')
   assert.ok(hits[0].evidence.includes('tools/pre-execute'))
+})
+
+test('SKILL.md 规则枚举与 lib/standards.mjs 规则表双向一致（防文档计数漂移）', () => {
+  const toolRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
+  const skillMd = fs.readFileSync(path.join(toolRoot, 'SKILL.md'), 'utf8')
+  const m = skillMd.match(/机械可判的 (\d+) 条 `standards-scan`（规则 id：([^）]+)）/)
+  assert.ok(m, 'SKILL.md 来源表必须带「机械可判的 N 条（规则 id：…）」清单——这是规则计数的唯一权威写法')
+  assert.strictEqual(Number(m[1]), STANDARDS_RULES.length, `SKILL.md 写的条数 ${m[1]} 与规则表实际 ${STANDARDS_RULES.length} 条不一致`)
+  const docIds = m[2].split('、').map((s) => s.trim()).filter(Boolean).sort()
+  const tableIds = STANDARDS_RULES.map((r) => r.id).sort()
+  assert.deepStrictEqual(docIds, tableIds, 'SKILL.md 枚举的规则 id 集合与规则表不一致——加删规则必须同步这一行（dbea17d 一笔加三条只写「第 5 条」的教训）')
 })

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// run.mjs —— 一键编排：环境 → 定版 → 取指南 → 扫描 → 体检 → 冒烟 → typecheck → 日志。
+// run.mjs —— 一键编排：环境 → 定版 → 取指南 → 签名差分 → 扫描 → 体检 → 冒烟 → typecheck → 日志。
 //
 // 六个步骤此前要手动串（SKILL.md 的四步流程），2026-10-25 的适配实践暴露三个问题：
 //   1. 手动串行容易漏步骤、跑错工具副本（当天就踩了 skills 目录滞后拷贝）；
@@ -25,6 +25,15 @@ import { printJson, computeWindow, compareVersions } from './lib/scanner.mjs'
 import { probeEnvironment } from './env-doctor.mjs'
 import { auditPlugin } from './plugin-audit.mjs'
 import { writeRunLog, getLatestSuccessfulRun, isPluginUnmodifiedSince } from './lib/runlog.mjs'
+import {
+  extractHostSignature,
+  saveCachedSignature,
+  loadCachedSignature,
+  diffTypeSignatures,
+  synthesizeGuidesFromDiff,
+  writeSynthesizedGuides,
+  SYNTHESIZED_GUIDES_DIR,
+} from './lib/types-diff.mjs'
 
 const TOOL_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const SCRIPTS_DIR = path.join(TOOL_DIR, 'scripts')
@@ -419,10 +428,60 @@ if (offline) {
   guideRoot = cloned?.guides?.root ?? null
 }
 
-// 4. 扫描（宿主实测核查内置）
+// 3.5 宿主签名差分（包面真源）：官方指南滞后或漏记时（#5816 类），包面 diff 是
+// 唯一不撒谎的源。把「升级前留快照」从用户纪律变成管道动作：每次都存当前签名，
+// 窗口起点的基线签名在缓存里才算差分、合成虚拟指南落盘给扫描消费；基线缺失
+// 就如实记 skipped——这次运行先留快照，下次运行自愈，不用用户记任何事。
+// --offline 一律跳过（自检零外部状态）。
+let typesDiff = null
+if (offline) {
+  stages.typesDiff = { status: 'skipped', reason: '--offline' }
+} else if (guideRoot && windowLocal && windowTarget && env.globalDsh?.location) {
+  try {
+    const currentSig = extractHostSignature(env.globalDsh.location)
+    saveCachedSignature(currentSig.version, currentSig)
+    if (windowLocal === currentSig.version) {
+      stages.typesDiff = {
+        status: 'skipped',
+        reason: `窗口起点与当前宿主同为 v${currentSig.version}，无可差分区间；本次已留存 v${currentSig.version} 签名快照`,
+      }
+    } else {
+      const baseSig = loadCachedSignature(windowLocal)
+      if (!baseSig) {
+        stages.typesDiff = {
+          status: 'skipped',
+          reason: `基线 v${windowLocal} 签名未缓存（大概率是升级后才第一次跑）。本次已留存 v${currentSig.version} 签名，下次从更早基线起扫即可差分；如需立即补，用 --from 指向旧版宿主目录`,
+        }
+      } else {
+        const diff = diffTypeSignatures(baseSig, currentSig)
+        let synth = null
+        if (diff.changes.length > 0) {
+          const guides = synthesizeGuidesFromDiff(diff)
+          const file = writeSynthesizedGuides(windowLocal, guides)
+          synth = { written: guides.length, file }
+        }
+        stages.typesDiff = {
+          status: 'ok',
+          base: windowLocal,
+          target: currentSig.version,
+          breakingCount: diff.breakingCount,
+          changeCount: diff.changes.length,
+          synth,
+        }
+        typesDiff = stages.typesDiff
+      }
+    }
+  } catch (err) {
+    stages.typesDiff = { status: 'error', error: String(err?.message || err).slice(0, 300) }
+  }
+} else {
+  stages.typesDiff = { status: 'skipped', reason: '无指南根或未检测到宿主安装位置' }
+}
+
+// 4. 扫描（宿主实测核查内置；第五个参数让包面差分合成的虚拟指南并入扫描）
 let scanResult = null
 if (guideRoot && windowLocal && windowTarget) {
-  scanResult = runStep('code-scan.mjs', [pluginDir, guideRoot, windowLocal, windowTarget], 'scan', stages)
+  scanResult = runStep('code-scan.mjs', [pluginDir, guideRoot, windowLocal, windowTarget, SYNTHESIZED_GUIDES_DIR], 'scan', stages)
   if (scanResult) {
     const sev = Object.fromEntries((scanResult.bySeverity || []).map(([k, v]) => [k, v]))
     scanResult.criticalOrHigh = (sev.critical || 0) + (sev.high || 0)
@@ -476,6 +535,7 @@ const report = {
   env: stages.env,
   version: versionResult?.resolution ?? null,
   guides: stages.guides?.output?.guides ?? null,
+  typesDiff: stages.typesDiff ?? null,
   scan: scanResult
     ? {
         findingCount: scanResult.findingCount,
@@ -483,6 +543,10 @@ const report = {
         criticalOrHigh: scanResult.criticalOrHigh,
         hostVerification: scanResult.hostVerification,
         guidesConsidered: scanResult.guidesConsidered,
+        // 官方指南没记、靠包面差分补报的命中（doc-gap）单独分账：
+        // 「官方没写」本身就是要显式呈现的事实，不能混进官方变更里充数。
+        docGapCount: scanResult.docGapCount ?? 0,
+        docGapSymbols: scanResult.docGapSymbols ?? [],
         coverage,
         findings: scanResult.findings,
       }
@@ -554,6 +618,19 @@ if (report.scan?.skipped) {
 }
 if (criticalOrHigh > 0) verdictLines.push(`⚠ critical/high 命中 ${criticalOrHigh} 处——先清零再做优化`)
 else if (report.scan?.findingCount != null) verdictLines.push(`扫描命中 ${report.scan.findingCount} 处（无 critical/high）`)
+if (report.typesDiff?.status === 'ok') {
+  verdictLines.push(
+    `签名差分 v${report.typesDiff.base} → v${report.typesDiff.target}: ${report.typesDiff.changeCount} 处变更（${report.typesDiff.breakingCount} 处 P0）` +
+    `${report.typesDiff.synth ? `，合成 ${report.typesDiff.synth.written} 条虚拟指南已并入扫描` : ''}`
+  )
+} else if (report.typesDiff?.status === 'skipped' && report.typesDiff.reason) {
+  verdictLines.push(`签名差分跳过——${report.typesDiff.reason}`)
+} else if (report.typesDiff?.status === 'error') {
+  verdictLines.push(`签名差分失败（${String(report.typesDiff.error).slice(0, 120)}）——不影响官方指南扫描，已记入报告`)
+}
+if ((report.scan?.docGapCount ?? 0) > 0) {
+  verdictLines.push(`⚠ 其中 ${report.scan.docGapCount} 处是官方指南没记的（${(report.scan.docGapSymbols || []).join('、')}）——包面 diff 补报，官方文档滞后或漏记（#5816 类）`)
+}
 if (report.audit) verdictLines.push(`体检 ${report.audit.overallScore}/100（性能 ${report.audit.scores.performance}/弹性 ${report.audit.scores.resilience}/预算 ${report.audit.scores.contextBudget}/生命周期 ${report.audit.scores.lifecycle}）`)
 if (report.smoke?.status === 'error' || report.smoke?.success === false) {
   verdictLines.push(`⚠ 冒烟阻断（${report.smoke.stage || 'runtime_execution'}）——${String(report.smoke.error || '').split('\n')[0]}`)
