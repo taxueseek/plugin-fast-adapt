@@ -106,3 +106,18 @@ node scripts/plugin-audit.mjs <插件目录> --compact
 上表第 4/5/7 条不是自己编的，出处是上游仓库 `docs/defensive-patterns/`（五篇：package-surface / general / client-components / conversation-and-session / remote-and-api）。那一层是**不随版本变的硬要求**，`docs/upgrade-guide/` 是**随版本变的破坏性变更**，两者互不覆盖：只扫升级指南会漏掉「从来没变过但插件一直违反」的那一半。
 
 读法：先按上表定位到大致类别，再去对应那一篇核对规则原文、判定条件、边界与例外，**以原文为准**；技能里这几条只是指路牌，不是规则的副本——上游改了原文，这里不该跟着漂移。
+
+## 哪些已经自动化，哪些仍要人看
+
+常设规则那层不再全靠人工。`node scripts/standards-scan.mjs <插件目录>` 做掉了照原文读必然得出同一结论的四条，每条都带 `defensive-patterns` 的原文出处（`--rules` 出完整规则表）：
+
+| 规则 | 机械判据 | 没查什么 |
+| --- | --- | --- |
+| `top-level-await` | 缩进为 0 的 `await` | 动态 `import()` 的顶层等待 |
+| `loader-entry-shape` | 入口的值导出集合（`export type` 不计） | 导出物是不是「同一个东西的两种写法」 |
+| `shared-state-no-owner` | `globalThis._X` 赋值；被导出的模块级 `let`/`var` 在函数里被重新赋值 | 容器被写、但从未被重赋值的一类（写一次的标志位）；判据要求「被导出」，所以只在本模块内共享的那种不算 |
+| `cross-package-relative-import` | import 说明符以 `/` 开头，或相对路径解析后跑出包根 | 别名（`@/...`）指向包外——要读 tsconfig 才知道 |
+
+**故意没进自动扫描的**：`dispose 必须达到完全停稳`、`在分发器中隔离回调异常`、`slot 注册物是稳定的 function component`、`Store 用法窄而明确`、`Projection 是唯一的读取与计算路径`。这些要判断意图与边界，静态文本判不出可信结论；报错了只会消耗使用者对整个工具的信任。它们留在本车道的表里人工核对。
+
+同一套规则也进了 `plugin-audit` 的第五维（`standards` 分），所以 `run.mjs` 与 `write-gate` 自动带上，不必单独跑。`write-gate` 里它属于**软指标（透传待裁量）**，不是硬门禁——分数低不等于不能发，要人看过才算。

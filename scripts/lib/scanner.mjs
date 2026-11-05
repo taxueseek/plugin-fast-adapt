@@ -186,6 +186,21 @@ export function lineAt(source, index) {
   return lineAtStarts(buildLineStarts(source), index)
 }
 
+/**
+ * 起一段可共享的词法视图：代码区（注释已抹平）+ 字符掩码 + 行号查询。
+ *
+ * 为什么单独暴露：常设规则检测（lib/standards.mjs）要判「模块顶层」「导出面」
+ * 这类位置语义，纯正则会在注释和字符串里误报——那正是初版扫描器 12 处误报的
+ * 老毛病。这里复用同一份状态机，让新检测器天然带上去噪能力，而不是各写一份。
+ * @param {string} source 源码原文
+ * @returns {{ code: string, mask: Uint8Array, lineOf: (i: number) => number }} 词法视图
+ */
+export function prepareLexicalView(source) {
+  const { code, mask } = splitSource(source)
+  const lineStarts = buildLineStarts(source)
+  return { code, mask, lineOf: (index) => lineAtStarts(lineStarts, index) }
+}
+
 const IMPORT_RE = /\b(?:import|export)\s+(?:[^'"]*?\s+from\s+)?['"]([^'"]+)['"]|\brequire\s*\(\s*['"]([^'"]+)['"]\s*\)/g
 // 完整点链：抓 ctx.subagents.start 整体，而不是拆成 ctx.subagents + start。
 // 拆散的后果是锚点 `ctx.subagents.start` 永远匹配不上。

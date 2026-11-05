@@ -139,6 +139,24 @@ node scripts/plugin-audit.mjs <插件目录> --guide <guide-root> <本机版本>
 
 **peer 修补建议**：对不含目标宿主的 peer 范围，`peerPatch` 给「与目标同三元组的 caret 线」替换写法，每条都先用 `satisfiesRange` 自验证覆盖目标，验证不过的写法不给。只对 `@deepseek-ai/dsh` 及其 `dsh-*` 套件子包生成；同 scope 的库（`@deepseek-ai/schemastery`、`@deepseek-ai/cordis`）有自己的版本线，拿宿主版本套它们的 peer 会给出错到离谱的建议。只生成不自动改包：改用户 `package.json` 是不可逆写，`--peer-patch` 打印后人工确认再落。
 
+## 升级顺带查常设规则（可选）
+
+```sh
+node scripts/standards-scan.mjs <插件目录>        # 4 条机械可判的常设规则，带回溯出处
+node scripts/standards-scan.mjs --rules           # 只看规则表与各自的机械判据
+```
+
+升级适配查的是「随版本变的破坏性变更」，这一条查的是「不随版本变的硬要求」（上游 `docs/defensive-patterns/`）。两者互不覆盖：一份插件可以通过全部升级指南扫描，仍然违反常设要求。同样的规则也作为第五维进了 `plugin-audit`，所以 `run.mjs` 已经带上，这里只是单跑入口。
+
+批量把宿主核心包从 `dependencies` 挪进 `peerDependencies`（上游常设规则：写进 dependencies 会产生 vendored 多实例污染）：
+
+```sh
+node scripts/fix-peer-deps.mjs --installed          # dry-run，只打印计划
+node scripts/fix-peer-deps.mjs --installed --apply  # 落盘，先备份到 <插件>/.pfa-backup/<时间戳>/
+```
+
+默认 dry-run。敢批量做是因为判据纯机械、且搬错位置会让 `npm install` 直接报错而不是静默改坏。
+
 ## 老插件：官方指南覆盖不到时
 
 官方 upgrade-guide 最早只到 dsh-v0.1.7-rc.2。插件更老、目标版本更老，或跨大段历史走廊时，`code-scan` 会报 `guidesConsidered = 0`，这时转 [老插件迁移 SOP](../../references/legacy-migration-sop.md)：用原仓库 [plugin-upgrade skill](https://github.com/oh-my-dsh/dsh-plugin-upgrade-skill/tree/main/skills/plugin-upgrade) 的人工卡片走廊（dsh-v0.1.0-rc.8 起 19 条边加跳版卡）当差异来源，按七阶段 checklist 走：定模式 → 只读准备 → 幽灵宿主检查 → 组装走廊 → 七类触点 → 计划确认 → 六层验证。两套工具的分工速查也在 SOP 里：有 guide 的段用本技能的 `code-scan`，没 guide 的段用原版的 `plan-migration.mjs` 和卡片，运行时验证用原版的 `verify-runtime.mjs`。

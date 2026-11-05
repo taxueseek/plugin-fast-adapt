@@ -110,7 +110,7 @@ export async function runWriteGate(pluginDir, { guideRoot = null, localVersion =
   const audit = auditPlugin(root, scanResult ? { scanResult } : {})
   discretion.push({
     item: 'audit-scores',
-    note: '人工裁量：四维分数与 MEDIUM 清单照抄自 plugin-audit，本脚本不设及格线',
+    note: '人工裁量：五维分数（性能/弹性/上下文预算/生命周期/常设规则）与清单照抄自 plugin-audit，本脚本不设及格线',
     data: { scores: audit.scores, findings: audit.findings },
   })
 

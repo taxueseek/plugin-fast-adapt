@@ -20,6 +20,9 @@ import { printJson, scanSource, satisfiesRange, packageBase, parseVersion, isDsh
 import { findSourceFiles, pickScanRoots, scanPluginFromGuideRoot } from './code-scan.mjs'
 import { findGlobalDsh } from './env-doctor.mjs'
 import { packageOnHost } from './lib/host-scope.mjs'
+import { scanStandards, standardsScore, STANDARDS_RULES } from './lib/standards.mjs'
+
+const STANDARDS_RULES_LENGTH = STANDARDS_RULES.length
 
 // 上游已移除或非核心、不该被普通插件强 import 的包
 const RISKY_IMPORTS = new Set([
@@ -160,7 +163,7 @@ export function auditPlugin(pluginDir, { scanResult = null, targetVersion = null
     plugin: `${pkg.name}@${pkg.version}`,
     root,
     targetForm: pluginForm ? 'plugin' : 'tool',
-    scores: { performance: 100, resilience: 100, contextBudget: 100, lifecycle: 100 },
+    scores: { performance: 100, resilience: 100, contextBudget: 100, lifecycle: 100, standards: 100 },
     findings: [],
   }
 
@@ -232,10 +235,13 @@ export function auditPlugin(pluginDir, { scanResult = null, targetVersion = null
     ...(Array.isArray(pkg.dsh?.client?.inject) ? pkg.dsh.client.inject : []),
   ])
 
+  // 常设规则检测要复用同一批源码，避免第二轮读盘
+  const sourceFiles = []
   for (const file of files) {
     const rel = path.relative(root, file)
     const isClientFile = /(?:^|[\\/])(?:client|web|ui)(?:[\\/]|$)|\.client\.[jt]sx?$|\.tsx$/i.test(rel)
     const source = fs.readFileSync(file, 'utf8')
+    sourceFiles.push({ file: rel.split(path.sep).join('/'), source })
     const scanned = scanSource(source)
 
     const callNames = new Set(scanned.calls.map((c) => c.name))
@@ -541,8 +547,26 @@ export function auditPlugin(pluginDir, { scanResult = null, targetVersion = null
     if (hasRangeMismatch) deduct('resilience', 70, 10)
   }
 
+  // 维度 5：上游常设规则（不随版本变的硬要求）。
+  // 与四维分开算、再一起平均：常设规则的命中不该被性能分稀释，也不该反过来淹没版本命中。
+  // 只跑机械可判的四条（lib/standards.mjs 的表），需要意图判断的一律留给 review 车道人工核对。
+  const standardsResult = scanStandards(root, { files: sourceFiles })
+  report.standards = {
+    entry: standardsResult.entry,
+    exportNames: standardsResult.exportNames,
+    ruleCount: STANDARDS_RULES_LENGTH,
+    findingCount: standardsResult.findings.length,
+  }
+  for (const f of standardsResult.findings) report.findings.push(f)
+  report.scores.standards = standardsScore(standardsResult.findings)
+
   report.overallScore = Math.round(
-    (report.scores.performance + report.scores.resilience + report.scores.contextBudget + report.scores.lifecycle) / 4
+    (report.scores.performance +
+      report.scores.resilience +
+      report.scores.contextBudget +
+      report.scores.lifecycle +
+      report.scores.standards) /
+      5
   )
   report.scannedFiles = files.length
   report.peerPatch = peerPatchFor(pkg, targetVersionResolved)
@@ -638,7 +662,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.met
 
   process.stderr.write(
     `\n插件: ${report.plugin}（扫 ${report.scannedFiles} 个文件）\n` +
-    `总分: ${report.overallScore}/100 — 性能 ${report.scores.performance} / 弹性 ${report.scores.resilience} / 上下文预算 ${report.scores.contextBudget} / 生命周期 ${report.scores.lifecycle}\n` +
+    `总分: ${report.overallScore}/100 — 性能 ${report.scores.performance} / 弹性 ${report.scores.resilience} / 上下文预算 ${report.scores.contextBudget} / 生命周期 ${report.scores.lifecycle} / 常设规则 ${report.scores.standards}\n` +
     (report.targetForm === 'tool' ? '形态: 工具仓（无生态依赖）——生命周期维度按 Cordis 插件语义不适用，未检查\n' : '') +
     `发现: ${report.findings.length} 项\n` +
     (report.versionAdvice ? `版本交叉: ${report.versionAdvice.note}\n` : '')
