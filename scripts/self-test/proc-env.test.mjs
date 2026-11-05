@@ -143,3 +143,22 @@ test('proc-env：removeDirSafely 删链接时绝不跟随进入目标（常设�
     fs.rmSync(base, { recursive: true, force: true })
   }
 })
+
+test('适配：技能引用的上游权威来源都在稀疏面里（防文档里的出处变成死链）', async () => {
+  const { SPARSE_DOC_PATHS, verifyAuthoritySource } = await import('../guide-sync.mjs')
+  // 这三个目录是 SKILL.md 表格里点名的权威来源，缺一个就有引用点不开
+  for (const required of ['docs/upgrade-guide', 'docs/defensive-patterns', 'docs/persistence-changes']) {
+    assert.ok(SPARSE_DOC_PATHS.includes(required), `稀疏面必须包含 ${required}，否则缓存快照里不存在，文档出处变死链`)
+  }
+  // 绝对路径与缺参两种边界：不抛错、不误报「在」
+  assert.strictEqual(verifyAuthoritySource(null, 'docs/upgrade-guide').present, false)
+  assert.strictEqual(verifyAuthoritySource('/nonexistent-root-xyz', 'docs/upgrade-guide').present, false)
+  const dir = tmpPluginDir('authority-source')
+  try {
+    fs.mkdirSync(path.join(dir, 'docs', 'upgrade-guide'), { recursive: true })
+    assert.strictEqual(verifyAuthoritySource(dir, 'docs/upgrade-guide').present, true)
+    assert.strictEqual(verifyAuthoritySource(dir, 'docs/defensive-patterns').present, false)
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})

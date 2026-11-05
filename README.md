@@ -2,23 +2,23 @@
 
 **简体中文** | [English](README.en.md)
 
-[![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D22.13-blue.svg)](package.json) [![外部依赖](https://img.shields.io/badge/外部依赖-0-blue.svg)](#依赖与自检) [![自检](https://img.shields.io/badge/自检-215项断言-brightgreen.svg)](#依赖与自检)
+[![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D22.13-blue.svg)](package.json) [![外部依赖](https://img.shields.io/badge/外部依赖-0-blue.svg)](#依赖与自检) [![自检](https://img.shields.io/badge/自检-216项断言-brightgreen.svg)](#依赖与自检)
 
-> **DSH 每次发新版，老插件就可能启动不了。** 这个技能直连 DeepSeek 官方升级指南，扫你的插件代码，报出踩了哪几条破坏性变更、官方给的修法是什么；还能一条命令从零造出可运行的插件。**现已深度适配 DSH 最新版本（0.2.2 系列，含 0.2.2-alpha.2）**，支持本地环境权威锚定、Release Note 破坏性变更提取与整机集群多维批量治理。
+> **DSH 每次发新版，老插件就可能启动不了。** 这个技能直连 DeepSeek 官方升级指南，扫你的插件代码，报出踩了哪几条破坏性变更、官方给的修法是什么；还能一条命令从零造出可运行的插件。**已适配到 0.2.2-rc.1**：该版官方还没写指南条目，官方 Release Note 被当作虚拟指南一并纳入，因此覆盖度仍判 `complete=true`；再新的版本如果既无指南也无发布说明，账本会明说「不能当查干净」。支持本地环境权威锚定、Release Note 破坏性变更提取与整机集群多维批量治理。
 
 ## 速览
 
 | | |
 | --- | --- |
 | 上游发新版 | 无需任何改动，直接可用（直连官方源与 Release Notes，不维护滞后卡片） |
-| DSH 宿主适配 | **已完整适配最新 DSH 0.2.2 系列**（覆盖 v0.1.7-rc.2 至 0.2.2-alpha.2） |
+| DSH 宿主适配 | 覆盖 v0.1.7-rc.2 至 **0.2.2-rc.1**（该版无官方指南条目，由官方 Release Note 转成虚拟指南补上）；再新的版本若无任何官方来源，覆盖度账本会明说「不能当查干净」 |
 | 集群治理看板 | 一键扫描整机 Web / APP 插件与工作区，按运行态生命周期多维矩阵呈现 |
 | 定版权威 | 默认收敛到本机真实宿主版本（方案 B 零网络请求，防上游频控） |
 | 扫描误报 | 12 处 → 0（四层降噪 + 常量词边界正则 + 虚拟指南去重） |
 | 验证一次改动 | 3600 秒真宿主冷启动 → 毫秒级内存冒烟（支持未构建产物硬拦截与宿主模块软链兜底） |
 | 幽灵宿主 | 磁盘已换新、进程还在跑旧代码时报警（比进程启动时间，不读版本号） |
 | 假绿检测 | `tsconfig` 的 `paths` 指向不存在的 checkout 时报警（本地门禁可能全绿而实际已坏） |
-| 自检 | 215 项断言，离线可跑 |
+| 自检 | 216 项断言，离线可跑 |
 | 外部依赖 | 0（只用 Node 内置模块 + `git`/`npm` 命令） |
 | 跨平台 | 原生支持 macOS、Linux 标准路径、Termux 移动端与容器环境（支持 XDG 规范） |
 | 造插件 | 一条命令出五形态可运行插件，生成即验证 |
@@ -35,7 +35,7 @@ DSH（DeepSeek Harness）是一个「所有功能都以插件形式存在」的 
 
 ### 优势
 
-- **完整适配最新 DSH 0.2.2 系列**：直连官方 `docs/upgrade-guide/` 与 Release Notes，全面纳入 0.2.2-alpha.2 等最新版本的破坏性变更锚点与官方修法，支持虚拟指南自动生成与三元版本账本快速探测
+- **适配到 0.2.2-rc.1**：直连官方 `docs/upgrade-guide/` 与 Release Notes。官方指南只写到 0.2.2-alpha.3，0.2.2-rc.1 由 Release Note 转成虚拟指南补上（该 Release Note 两万七千余字，含完整破坏性变更段），所以覆盖度仍判全覆盖；支持虚拟指南自动生成与三元版本账本快速探测
 - **本地环境权威锚定（零网络依赖）**：默认定版本严格收敛到本机已安装的 DSH 宿主版本（方案 B，零外部网络请求），免除官方源网络波动与 GitHub 频控影响；显式 `--check-upstream` 才核对上游
 - **集群全域多维治理看板**：新增 `fleet-sweep.mjs`，一键扫描整机 Web 插件、APP 桌面端插件、工作区源码与运行中服务，输出五大生命周期矩阵看板，支持 `--apply-compat` 批量安全修补
 - **误报与低级错误硬守卫**：
@@ -48,7 +48,7 @@ DSH（DeepSeek Harness）是一个「所有功能都以插件形式存在」的 
 - **跨平台与容器自适应**：消除绝对路径硬编码，扩展适配 Linux 发行版标准路径（`/usr/lib/node_modules`）、Termux 移动端（`$PREFIX/lib/node_modules`）与 `npm_config_prefix`，支持环境变量 `DSH_HOST_PATH` / `DSH_LOCATION` 直接覆盖，严格遵循 XDG 缓存规范
 - **验证便宜**：内存级 Cordis 冒烟毫秒到秒级出结果，不用真宿主冷启动；需要真证据时 `--real-smoke` 再补干净 profile 真装真启档
 - **零外部依赖**：只用 Node 内置模块加 `git`/`npm` 命令，没有 TypeScript、没有 AST 库、没有网络请求库
-- **可复现**：215 项自检离线可跑；CI 在 push 和 PR 上跑 ubuntu/macOS/Windows 三平台，打 tag 时另跑发布预检
+- **可复现**：216 项自检离线可跑；CI 在 push 和 PR 上跑 ubuntu/macOS/Windows 三平台，打 tag 时另跑发布预检
 - **不止适配**：`scaffold.mjs` 一条命令生成五形态可运行插件（真基类装载验证），`write-gate.mjs` 写完出「出生证」
 - **静默失败有判据**：`ghostHost` 比对进程启动时间与磁盘变更时间，抓「磁盘新版、内存旧版」；`falseGreen` 抓 `tsconfig` 的 `paths` 指向不存在 checkout 时 TypeScript 的静默回落。两条都只报不判，证据写在输出里
 - **边界诚实**：冒烟通过不等于宿主兼容，这句话写在工具输出里；体检的软指标只透传，不替用户说「合格」
@@ -136,7 +136,7 @@ node scripts/fleet-sweep.mjs --workspace       # 仅扫描当前工作区源码�
 node scripts/fleet-sweep.mjs --web             # 仅查看 Web 平台插件
 node scripts/fleet-sweep.mjs --app             # 仅查看 Desktop (APP) 桌面端插件
 node scripts/fleet-sweep.mjs --disabled        # 仅查看被标记 disabled 或未激活的插件清单与原因
-node scripts/fleet-sweep.mjs --target 0.2.2-alpha.2 --apply-compat # 批量修补 0 破坏命中的 package.json
+node scripts/fleet-sweep.mjs --target 0.2.2-rc.1 --apply-compat # 批量修补 0 破坏命中的 package.json
 ```
 
 详细操作 SOP 与多平台实战指引见 [references/user-guide.md](references/user-guide.md)。
@@ -232,7 +232,7 @@ node scripts/write-gate.mjs <插件目录>   # 出生证：硬门禁自动判，
 自检：
 
 ```sh
-npm test   # node scripts/self-test.mjs，215 项断言
+npm test   # node scripts/self-test.mjs，216 项断言
 ```
 
 开发者建议启用提交前门禁（一次性）：`git config core.hooksPath .githooks`——commit 时自动跑自检，改完真源忘了 sync-skill 在这一刻被拦。

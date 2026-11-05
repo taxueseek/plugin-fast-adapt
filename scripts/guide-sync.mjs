@@ -34,6 +34,19 @@ const CACHE_ROOT =
 // DSH_HARNESS_BRANCH 指定。
 const GUIDES_BRANCH = process.env.DSH_HARNESS_BRANCH || null
 
+// 稀疏面 = 技能当权威来源引用的上游文档路径，一处定义两处用（分支快照与 tag 快照）。
+// 原先只取 docs/upgrade-guide，于是 SKILL.md 里引的 docs/defensive-patterns 与
+// docs/persistence-changes 在缓存快照里根本不存在——写进文档的出处点不开，是比
+// 「没写」更坏的一种缺口（2026-11-05 实测发现）。三类目录都不大，一起取。
+export const SPARSE_DOC_PATHS = [
+  'docs/upgrade-guide',
+  'docs/defensive-patterns',
+  'docs/persistence-changes',
+  // 目录索引不随目录走：这两份在 docs 根下，不单列就取不到
+  'docs/persistence-catalog.md',
+  'docs/persistence-schema.json',
+]
+
 // ── A. 版本解析 ────────────────────────────────────────────────────────────
 
 // dist-tags 数天才变一次，没必要每次都打网络。缓存 1 小时；
@@ -314,7 +327,7 @@ export function syncBranchSnapshot({
     execFileSync('git', cloneArgs, { env: gitChildEnv().env, stdio: 'pipe', timeout: 120000 })
     // HEAD 被稀疏克隆后是 detached；记实际分支名只用于排查
     const created = { commit: headCommit(tmp), fetchedAt: now, branch: headBranch(tmp) }
-    execFileSync('git', ['sparse-checkout', 'set', 'docs/upgrade-guide'], { env: gitChildEnv().env, cwd: tmp, stdio: 'pipe', timeout: 120000 })
+    execFileSync('git', ['sparse-checkout', 'set', ...SPARSE_DOC_PATHS], { env: gitChildEnv().env, cwd: tmp, stdio: 'pipe', timeout: 120000 })
     writeSnapshotMeta(tmp, created)
     try {
       fs.renameSync(tmp, dir)
@@ -350,6 +363,22 @@ function localCloneGuides(localClone) {
 }
 
 // 真正拉取（需要网络）。用 sparse clone 只取 docs/upgrade-guide。
+/**
+ * 核对某个上游来源在给定根下真的存在——技能文档里的出处必须点得开。
+ *
+ * 为什么单列一个函数：2026-11-05 发现 SKILL.md 引的三类上游文档里，只有
+ * docs/upgrade-guide 被稀疏克隆取下来，另两类在缓存快照里不存在。这类缺口
+ * 不会报错、不会让测试变红，只是让文档里每个出处都变成死链。所以把它做成
+ * 可断言的判定，由自检与 env-doctor 调用。
+ * @param {string} root 上游仓库根（分支快照 / tag 快照 / 本机 clone）
+ * @param {string} relPath 相对根路径，例如 docs/defensive-patterns
+ * @returns {{ path: string, present: boolean }} 判定结果
+ */
+export function verifyAuthoritySource(root, relPath) {
+  if (!root) return { path: relPath, present: false }
+  return { path: relPath, present: fs.existsSync(path.join(root, relPath)) }
+}
+
 export function cloneGuides(targetVersion, { cacheRoot = CACHE_ROOT } = {}) {
   const tag = `dsh-v${targetVersion}`
   const dest = cacheDirFor(targetVersion, cacheRoot)
@@ -363,7 +392,7 @@ export function cloneGuides(targetVersion, { cacheRoot = CACHE_ROOT } = {}) {
       stdio: 'pipe',
       timeout: 120000,
     })
-    execFileSync('git', ['sparse-checkout', 'set', 'docs/upgrade-guide'], { env: gitChildEnv().env, cwd: tmp, stdio: 'pipe' })
+    execFileSync('git', ['sparse-checkout', 'set', ...SPARSE_DOC_PATHS], { env: gitChildEnv().env, cwd: tmp, stdio: 'pipe' })
     fs.renameSync(tmp, dest)
   } catch (err) {
     removeDirSafely(tmp)

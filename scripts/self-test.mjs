@@ -267,7 +267,9 @@ test('listGuideVersions 对双位数 prerelease 排序正确', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fast-adapt-guidesort-'))
   try {
     for (const v of ['v0.2.1-rc.10', 'v0.2.1-rc.9', 'v0.2.1-rc.2']) {
-      fs.mkdirSync(path.join(dir, v), { recursive: true })
+      // 每个版本目录都要有一个含 guide.md 的主题目录，空目录不算「覆盖到这一版」
+      fs.mkdirSync(path.join(dir, v, 'topic'), { recursive: true })
+      fs.writeFileSync(path.join(dir, v, 'topic', 'guide.md'), '# T\n')
     }
     const versions = listGuideVersions(dir)
     assert.deepStrictEqual(
@@ -754,8 +756,8 @@ test('缓存过期后重新拉网络并落盘', async () => {
 test('runGuideSync 缓存根可注入：合成元数据只落指定根，真实用户缓存不被写', async () => {
   const cacheRoot = tmpPluginDir('guide-cache-root')
   const localClone = tmpPluginDir('guide-local-inject')
-  fs.mkdirSync(path.join(localClone, 'docs', 'upgrade-guide', 'v0.2.1-rc.2'), { recursive: true })
-  fs.writeFileSync(path.join(localClone, 'docs', 'upgrade-guide', 'v0.2.1-rc.2', 'x.md'), '# x\n')
+  fs.mkdirSync(path.join(localClone, 'docs', 'upgrade-guide', 'v0.2.1-rc.2', 'topic'), { recursive: true })
+  fs.writeFileSync(path.join(localClone, 'docs', 'upgrade-guide', 'v0.2.1-rc.2', 'topic', 'guide.md'), '# x\n')
   const distTags = { latest: '0.2.1-rc.2', next: '0.2.1-rc.3', alpha: '0.2.1-alpha.5' }
   const fetcher = async () => ({ ok: true, json: async () => distTags })
   const realCache = path.join(os.homedir(), '.cache', 'dsh-plugin-fast-adapt', 'npm-metadata.json')
@@ -971,8 +973,8 @@ test('guide-sync：guideVersionFor 优先目标版本，空目标退回本机版
 
 test('guide-sync：本机已是通道最新版时仍取本机版本当取版锚点（扫描走廊不空窗）', async () => {
   const localClone = tmpPluginDir('guide-local')
-  fs.mkdirSync(path.join(localClone, 'docs', 'upgrade-guide', 'v0.2.1-rc.2'), { recursive: true })
-  fs.writeFileSync(path.join(localClone, 'docs', 'upgrade-guide', 'v0.2.1-rc.2', 'x.md'), '# x\n')
+  fs.mkdirSync(path.join(localClone, 'docs', 'upgrade-guide', 'v0.2.1-rc.2', 'topic'), { recursive: true })
+  fs.writeFileSync(path.join(localClone, 'docs', 'upgrade-guide', 'v0.2.1-rc.2', 'topic', 'guide.md'), '# x\n')
   const distTags = { latest: '0.2.1-rc.2', next: '0.2.1-rc.3', alpha: '0.2.1-alpha.5' }
   const fetcher = async () => ({ ok: true, json: async () => distTags })
   const result = await runGuideSync('0.2.1-rc.3', { fetcher, localClone, cacheRoot: tmpPluginDir('guide-anchor-cache') })

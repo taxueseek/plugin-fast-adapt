@@ -329,6 +329,20 @@ export function listGuideVersions(guideRoot, { releasesDir = null } = {}) {
       .filter((e) => e.isDirectory())
       .map((e) => e.name)
       .filter((name) => /^v?\d+\.\d+\.\d+/.test(name))
+      // 空目录不算「覆盖到了这一版」。上游会先建版本目录再逐步补条目，
+      // 2026-11-05 实测 v0.2.2-rc.1 目录存在但零条目：按目录名算覆盖度会让
+      // 账本报 complete=true（「已覆盖到 0.2.2-rc.1」），而那一版根本没看过。
+      // 判据取「目录下至少有一个含 guide.md 的主题目录」，与 loadGuides 的口径一致。
+      .filter((name) => {
+        const dir = path.join(guideRoot, name)
+        try {
+          return fs
+            .readdirSync(dir, { withFileTypes: true })
+            .some((t) => t.isDirectory() && fs.existsSync(path.join(dir, t.name, 'guide.md')))
+        } catch {
+          return false
+        }
+      })
     for (const e of entries) versions.add(e)
   }
 

@@ -14,7 +14,9 @@ const SCRIPTS = path.resolve(import.meta.dirname, '..')
 
 function writeSnapshot(cacheRoot, { version = 'v0.2.1-rc.3', fetchedAt = Date.now(), commit = 'abc1234' } = {}) {
   const dir = path.join(cacheRoot, 'harness-guides-branch')
-  fs.mkdirSync(path.join(dir, 'docs', 'upgrade-guide', version), { recursive: true })
+  // 版本目录必须含一个带 guide.md 的主题目录：空目录不算「覆盖到这一版」
+  fs.mkdirSync(path.join(dir, 'docs', 'upgrade-guide', version, 'topic'), { recursive: true })
+  fs.writeFileSync(path.join(dir, 'docs', 'upgrade-guide', version, 'topic', 'guide.md'), '# T\n')
   fs.writeFileSync(path.join(dir, '.pfa-snapshot.json'), JSON.stringify({ commit, fetchedAt, branch: 'master' }))
   return dir
 }
@@ -55,7 +57,8 @@ test('分支快照：没有快照且禁止联网时诚实返回 unavailable', ()
 
 test('runGuideSync：显式目标版本取本机 clone，不再请求官方最新 tag', async () => {
   const clone = tmpPluginDir('local-clone')
-  fs.mkdirSync(path.join(clone, 'docs', 'upgrade-guide', 'v0.2.1-rc.3'), { recursive: true })
+  fs.mkdirSync(path.join(clone, 'docs', 'upgrade-guide', 'v0.2.1-rc.3', 'topic'), { recursive: true })
+  fs.writeFileSync(path.join(clone, 'docs', 'upgrade-guide', 'v0.2.1-rc.3', 'topic', 'guide.md'), '# T\n')
   const cacheRoot = tmpPluginDir('guide-cache')
   const fetcher = async () => ({ ok: true, json: async () => ({ latest: '0.2.1-rc.2', next: '0.2.1-rc.4' }) })
   const result = await runGuideSync('0.2.1-rc.3', { fetcher, localClone: clone, cacheRoot, targetVersion: '0.2.1-rc.3' })

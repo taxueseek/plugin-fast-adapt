@@ -41,7 +41,7 @@ node scripts/plugin-audit.mjs <插件目录> --compact
 
 当审查整个插件仓库或运行全流程适配验证时，主 Agent 应按以下协议委派后台子 Agent：
 
-1. **派发子 Agent**：通过 `invoke_subagent` 或独立终端沙箱唤醒子 Agent，指定只读工作区；
+1. **派发子 Agent**：通过 `subagent`（或需要继承本会话上下文时用 `subagent_fork`）唤醒子 Agent，指定只读工作区；需要长期跟进时给它一个 `name`，后续用名字寻址；
 2. **执行紧凑流水线**：
    ```sh
    node scripts/run.mjs <插件目录> --compact
@@ -51,6 +51,8 @@ node scripts/plugin-audit.mjs <插件目录> --compact
    - **阻断项账本**：仅列出 `P0`（致命阻断）与 `P1`（严重缺陷）条目（文件 + 标题 + 根因）；
    - **下一步行动**：具体的修改建议（如 peer 替换、dispose 补充、模板变量清理）。
 4. **主 Agent 决策**：主会话上下文保持清爽，主 Agent 仅依据紧凑报告决定修改代码或交付用户。
+
+**寻址用名字，不用 Session id（2026-11-05 适配 0.2.2 系列）**：`send_message` 与 `interrupt_agent` 的参数已从 `agent_id` 改为 `agent`，接受名字或 Session id；`list_agents` 的行也从 `kind/id/label/parent/depth` 改成 `{ name, status, description? }`；启动回执是 `started subagent <name>`。旧写法传 `agent_id` 会直接参数校验失败。子 Agent 回传时把「宿主版本、窗口、分维度分」一并带上，是因为这些字段决定了报告该怎么读——脱离版本与窗口的分数没有意义。
 
 ## 第三步：四级严重度标准（Priority Standards）
 

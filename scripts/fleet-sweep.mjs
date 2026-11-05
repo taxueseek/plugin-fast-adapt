@@ -343,7 +343,13 @@ export function inspectPluginItem(
     : rawItem
 
   const dir = item.dir
-  const effectiveTarget = targetVersion || hostInfo?.version || null
+  // 目标版本按平台分派：APP 桌面插件跑的是 APP 自捆的宿主，不是 npm 全局那份。
+  // 两者错开时（2026-11-05 实测：APP 0.2.2-rc.1 vs npm 0.2.1-rc.5）用 npm 版本去判
+  // APP 插件，会把「APP 新版里已移除的套件包」与「APP 新版才加的套件包」一起判错，
+  // 而结论看起来和正常报告一模一样，只有把版本抄出来才看得出。
+  const appHostVersion = envData?.desktopApp?.hostVersion || null
+  const platformTarget = item.platform === 'app' && appHostVersion ? appHostVersion : null
+  const effectiveTarget = targetVersion || platformTarget || hostInfo?.version || null
   let pkg = { name: item.name, version: '0.0.0' }
   if (dir) {
     try {
@@ -352,11 +358,16 @@ export function inspectPluginItem(
   }
 
   const build = dir ? checkBuild(dir) : { ok: true, status: 'N/A' }
+  // 报告里那句「该包在当前本地宿主 (X) 中物理不存在」的 X 要与判定用的版本一致。
+  // 注意诚实边界：宿主实测走的是 hostInfo.location 指向的那棵树（本机是 npm 全局宿主），
+  // APP 自捆宿主的包不在那棵树里，所以 APP 插件的「套件包不存在」只对 npm 树成立——
+  // 版本标对是为了不给人「APP 树也查过了」的错觉。
+  const platformHostInfo = platformTarget && hostInfo ? { ...hostInfo, version: platformTarget } : hostInfo
   let audit = null
   if (dir) {
     try {
       audit = auditPlugin(dir, {
-        hostInfo,
+        hostInfo: platformHostInfo,
         targetVersion: effectiveTarget,
       })
     } catch (err) {
@@ -394,7 +405,7 @@ export function inspectPluginItem(
     if (appliedPatches.updated) {
       // 重跑一次轻量审计，刷新准入账本与 Peer 得分
       try {
-        audit = auditPlugin(dir, { hostInfo, targetVersion: effectiveTarget })
+        audit = auditPlugin(dir, { hostInfo: platformHostInfo, targetVersion: effectiveTarget })
         findings = audit.findings || []
         criticalCount = findings.filter((f) => f.severity === 'CRITICAL').length
         highCount = findings.filter((f) => f.severity === 'HIGH').length
@@ -504,6 +515,9 @@ export function runFleetSweep(argv = process.argv.slice(2)) {
     broken,
     hostVersion: hostInfo?.version || null,
     targetVersion: targetVer,
+    // APP 与 npm 宿主错开时，报告里必须能看出「APP 那批是按哪个版本判的」
+    desktopHostVersion: envData?.desktopApp?.hostVersion || null,
+    targetVersionByPlatform: { app: envData?.desktopApp?.hostVersion || targetVer, web: targetVer },
     activeHostProcesses: (envData.runningProcesses || []).length,
     byPlatform: {
       webCount: byPlatform.web.length,
