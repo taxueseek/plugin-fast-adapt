@@ -338,6 +338,117 @@ test('规则 waterfall-missing-next：waterfall 事件漏调 next() 要报警，
   assert.ok(hits[0].evidence.includes('tools/pre-execute'))
 })
 
+test('规则 waterfall-missing-next：作用域按函数体边界取，不按字符窗口（2026-11-06 假阳性回归）', () => {
+  // 反例（旧实现误报）：next() 写在监听器函数体第 3300 字符处，仍属该监听器
+  const longBody = Array.from({ length: 80 }, (_, i) => `    const pad${i} = '${'x'.repeat(38)}'`).join('\n')
+  const farNext = scan([
+    {
+      file: 'lib/index.js',
+      source: [
+        'export function apply(ctx) {',
+        '  ctx.on("llm/stream", function (options, next) {',
+        longBody,
+        '    return next()',
+        '  })',
+        '}',
+      ].join('\n'),
+    },
+  ])
+  assert.strictEqual(
+    farNext.findings.filter((f) => f.rule === 'waterfall-missing-next').length,
+    0,
+    'next() 写在监听器函数体深处也必须算透传——旧实现的 800 字符窗口会把它报成断链',
+  )
+
+  // 正例：next() 出现在函数体之外（监听器已闭合）不算透传，仍要报
+  const nextOutside = scan([
+    {
+      file: 'lib/index.js',
+      source: [
+        'export function apply(ctx) {',
+        '  ctx.on("tools/execute", async (tool, next) => {',
+        '    console.log("intercepted")',
+        '  })',
+        '  return next()',
+        '}',
+      ].join('\n'),
+    },
+  ])
+  assert.strictEqual(
+    nextOutside.findings.filter((f) => f.rule === 'waterfall-missing-next').length,
+    1,
+    'next() 在监听器函数体外，不能拿来给这个监听器开脱',
+  )
+
+  // 正例：花括号不配平（无法定界）时不报，宁少不滥
+  const unbalanced = scan([
+    {
+      file: 'lib/index.js',
+      source: ['export function apply(ctx) {', '  ctx.on("tools/execute", (tool, next) => {', '    return 1'].join('\n'),
+    },
+  ])
+  assert.strictEqual(
+    unbalanced.findings.filter((f) => f.rule === 'waterfall-missing-next').length,
+    0,
+    '函数体无法定界时放弃判定，不用窗口长度冒充作用域',
+  )
+
+  // 正例：第二个实参是具名引用，不是函数字面量，不判
+  const namedHandler = scan([
+    {
+      file: 'lib/index.js',
+      source: [
+        'export function apply(ctx) {',
+        '  ctx.on("tools/execute", makeHandler())',
+        '}',
+      ].join('\n'),
+    },
+  ])
+  assert.strictEqual(
+    namedHandler.findings.filter((f) => f.rule === 'waterfall-missing-next').length,
+    0,
+    '第二个实参不是函数字面量时不判',
+  )
+})
+
+test('规则 waterfall-missing-next：只认裸 next(，`.next(` 与 `?.next(` 是别人的同名方法', () => {
+  // 反例（真实实录形态）：`?? next()` 是合法透传；集合迭代的 `it.next()` 不是透传
+  const ternaryFallback = scan([
+    {
+      file: 'lib/index.js',
+      source: [
+        'export function apply(ctx) {',
+        "  ctx.on('tools/pre-execute', (exec, next) => refusal({ toolName: String(exec?.name ?? '') }) ?? next())",
+        '}',
+      ].join('\n'),
+    },
+  ])
+  assert.strictEqual(
+    ternaryFallback.findings.filter((f) => f.rule === 'waterfall-missing-next').length,
+    0,
+    '`?? next()` 是透传，不能报（dsh-ops 实测命中）',
+  )
+
+  const memberNext = scan([
+    {
+      file: 'lib/index.js',
+      source: [
+        'export function apply(ctx) {',
+        "  ctx.on('tools/execute', (tool, next) => {",
+        '    const it = cache.keys()',
+        '    while (!it.next().done) { /* … */ }',
+        '  })',
+        '}',
+      ].join('\n'),
+    },
+  ])
+  assert.strictEqual(
+    memberNext.findings.filter((f) => f.rule === 'waterfall-missing-next').length,
+    1,
+    '`it.next()` 是集合迭代，不能拿来给这个监听器开脱',
+  )
+})
+
 test('SKILL.md 规则枚举与 lib/standards.mjs 规则表双向一致（防文档计数漂移）', () => {
   const toolRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
   const skillMd = fs.readFileSync(path.join(toolRoot, 'SKILL.md'), 'utf8')

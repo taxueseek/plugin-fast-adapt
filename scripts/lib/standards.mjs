@@ -81,7 +81,7 @@ export const STANDARDS_RULES = [
     severity: 'HIGH',
     priority: 'P1',
     rules: 'Waterfall 扩展点（如 tools/pre-execute、tools/execute、agent/pre-step、approval/request 等）属于责任链流水线，监听器入参接收 (...args, next)。监听器执行完毕后必须调用 return next() 或 return await next(...) 将控制权交回流水线。若缺少 next() 调用，将静默切断整条管道，导致后续工具或模型流程失效。',
-    note: '机械判据：代码中出现了 ctx.on("<waterfall-event>", ...) 等 waterfall 扩展点的订阅，但在该监听器作用域内未调用 next()。',
+    note: '机械判据：只看 `<ctx>.on("<waterfall 事件>", <函数字面量>)` 这一处，取该监听器函数体的配对花括号区间（不是字符窗口），区间内没有裸 `next(` 才报；形参收没收到 `next` 决定报告措辞。函数体写多长都不影响判定——2026-11-06 实测：旧实现的 800 字符窗口把 `next()` 写在监听器第 3300 字符处的合法透传报成断链。`.next(` 与 `?.next(` 是别人身上的同名方法，不算透传（同批实测：dsh-ops 的 `?? next()` 被漏读，而集合迭代的 `it.next()` 会被误读成透传，两个方向都要挡）。第二个实参不是函数字面量（具名引用、调用表达式）不判；箭头函数是表达式体（`=> next()`）不判。',
   },
 ]
 
@@ -251,7 +251,7 @@ export function scanStandards(pluginDir, { files = null, entryFile = null } = {}
     for (const hit of findBrokenWaterfallListeners(code, mask, lineOf)) {
       push('waterfall-missing-next', file, hit.line, {
         evidence: hit.evidence,
-        detail: `${STANDARDS_RULES.find((r) => r.id === 'waterfall-missing-next').rules} 监听了 Waterfall 扩展点 \`${hit.event}\`，但在该监听器作用域内未调用 \`next()\`，会静默阻断后续流水线。`,
+        detail: `${STANDARDS_RULES.find((r) => r.id === 'waterfall-missing-next').rules} 监听了 Waterfall 扩展点 \`${hit.event}\`。${hit.why}`,
       })
     }
 
@@ -513,15 +513,118 @@ export function findUnscopedVendorImports(code, mask, lineOf) {
 }
 
 /**
+ * 未扫描到的下标一律按代码区处理（掩码只覆盖已扫描的前缀）。
+ * @param {Uint8Array} mask 掩码
+ * @param {number} i 下标
+ * @returns {boolean} 是否代码区
+ */
+function codeAt(mask, i) {
+  return mask[i] === undefined || mask[i] === CODE
+}
+
+/**
+ * 从 `{` 出发取配对的 `}` 下标，字符串与注释里的花括号不参与计数。
+ *
+ * 花括号必须成对，未配对时返回 `null`——调用方据此放弃本处判定，
+ * 宁可不报，也不用窗口长度冒充作用域（那是假阳性的来源）。
+ * @param {string} code 代码区文本
+ * @param {Uint8Array} mask 掩码
+ * @param {number} openIdx `{` 的下标
+ * @returns {number|null} 配对 `}` 的下标
+ */
+function matchingBrace(code, mask, openIdx) {
+  let depth = 0
+  for (let i = openIdx; i < code.length; i += 1) {
+    if (!codeAt(mask, i)) continue
+    const ch = code[i]
+    if (ch === '{') depth += 1
+    else if (ch === '}') {
+      depth -= 1
+      if (depth === 0) return i
+    }
+  }
+  return null
+}
+
+/**
+ * 取参数列表 `(` 的配对 `)` 下标，字符串与注释里的圆括号不参与计数。
+ * @param {string} code 代码区文本
+ * @param {Uint8Array} mask 掩码
+ * @param {number} openIdx `(` 的下标
+ * @returns {number|null} 配对 `)` 的下标
+ */
+function matchingParen(code, mask, openIdx) {
+  let depth = 0
+  for (let i = openIdx; i < code.length; i += 1) {
+    if (!codeAt(mask, i)) continue
+    const ch = code[i]
+    if (ch === '(') depth += 1
+    else if (ch === ')') {
+      depth -= 1
+      if (depth === 0) return i
+    }
+  }
+  return null
+}
+
+/**
+ * 从形参起点取到函数体的 `{` 下标；表达式体（`=> foo()`）与对象字面量体（`=> ({...})`）返回 `null`。
+ *
+ * `function` 形态的 `{` 必然是函数体，见到就返回。箭头形态要区分块体与表达式体：
+ * 箭头表达式体里的对象字面量 `{` 也落在深度 0，靠「它跟着谁」反推——区间后紧跟
+ * `)` 或 `,` 说明这个 `{` 是 `on(...)` 实参列表里的对象字面量，不是函数体。
+ * 2026-11-06 实测：不区分时，`(exec, next) => refusal({...}) ?? next()` 会把对象
+ * 字面量当函数体，函数体外的 `next()` 就看不见了（dsh-ops 假阳性）。
+ * @param {string} code 代码区文本
+ * @param {Uint8Array} mask 掩码
+ * @param {number} from 起始扫描下标
+ * @param {boolean} isArrow 是否箭头形态
+ * @returns {number|null} 函数体 `{` 的下标
+ */
+function bodyOpenBrace(code, mask, from, isArrow = false) {
+  let depth = 0
+  for (let i = from; i < code.length; i += 1) {
+    if (!codeAt(mask, i)) continue
+    const ch = code[i]
+    if (ch === '(' || ch === '[') {
+      depth += 1
+    } else if (ch === '{') {
+      if (depth === 0) {
+        if (!isArrow) return i
+        // 箭头形态从 `=>` 之后起扫，所以这里的 depth 0 是「还没越过 `on(` 的 `)`」：
+        // 对象字面量 `{` 与函数体 `{` 都在这一层。往前看同一逻辑行的开头——
+        // 形如 `... => {` 才是块体，`... => ({` / `... => refusal({` 是表达式体。
+        // 2026-11-06 实测：早前用「配对 `}` 后面跟什么」判会看穿到 `on(` 的外层 `)`，
+        // 把合法块体误判成对象字面量（`(tool, args) => { … }` 这种最常见写法直接漏报）。
+        const lineStart = code.lastIndexOf('\n', i) + 1
+        return /=>\s*$/.test(code.slice(lineStart, i)) ? i : null
+      }
+      depth += 1
+    } else if (ch === ')' || ch === ']' || ch === '}') {
+      depth -= 1
+    } else if (ch === ';' && depth <= 0) {
+      // 深度 0 的分号：箭头函数是表达式体（`=> foo();`），或形参已经结束
+      return null
+    }
+  }
+  return null
+}
+
+/**
  * 找监听了 Waterfall 扩展点但未调用 next() 的断链隐患。
+ *
+ * 作用域按函数体边界取，不按字符窗口：`next()` 出现在监听器自己的函数体里才算透传，
+ * 写在第 3300 个字符处同样算数（旧实现只看监听器后 800 字符，实测把合法透传报成断链）。
+ * 第二个实参不是函数字面量时不判：具名引用（`ctx.on('x', handler)`）连匹配都进不来，
+ * 调用表达式（`ctx.on('x', makeHandler())`）由箭头分支的 `=>` 前瞻挡掉。
  * @param {string} code 文本
  * @param {Uint8Array} mask 掩码
  * @param {(idx: number) => number} lineOf 行号定位
- * @returns {Array<{ line: number, event: string, evidence: string }>}
+ * @returns {Array<{ line: number, event: string, evidence: string, why: string }>}
  */
 export function findBrokenWaterfallListeners(code, mask, lineOf) {
   const hits = []
-  const onRe = /\bon\s*\(\s*['"]([^'"]+)['"]\s*,\s*(?:async\s*)?(?:(?:\(([^)]*)\)|([A-Za-z_$][\w$]*))\s*=>|function\s*(?:[A-Za-z_$][\w$]*)?\s*\(([^)]*)\))/g
+  const onRe = /\bon\s*\(\s*['"]([^'"]+)['"]\s*,\s*(?:async\s+)?(?:(?:\(([^)]*)\)|([A-Za-z_$][\w$]*))\s*=>|function\s*([A-Za-z_$][\w$]*)?\s*\()/g
   let m
   while ((m = onRe.exec(code)) !== null) {
     if (!inCode(mask, m.index)) continue
@@ -529,15 +632,46 @@ export function findBrokenWaterfallListeners(code, mask, lineOf) {
     if (!WATERFALL_EVENTS.has(eventName)) continue
 
     const line = lineOf(m.index)
-    // 检查此监听器后面的函数体是否有 next(
-    const tail = code.slice(m.index, m.index + 800)
-    if (!/\bnext\s*\(/.test(tail)) {
-      hits.push({
-        line,
-        event: eventName,
-        evidence: code.split('\n')[line - 1]?.trim() || `ctx.on('${eventName}', ...)`,
-      })
+    const evidence = code.split('\n')[line - 1]?.trim() || `ctx.on('${eventName}', ...)`
+
+    // 形态由捕获组指认：m[2]/m[3] 有值就是箭头形态（形参已在组里），
+    // 否则是 function 形态（形参还没配平，`(` 落在 m[0] 末尾）。
+    // `=>` 与 `function` 都在各自的备选分支里且是匹配前提，所以
+    // `ctx.on('x', makeHandler())` 这类调用表达式根本进不来。
+    const isArrowForm = m[2] !== undefined || m[3] !== undefined
+    let params
+    let bodyStart
+    if (isArrowForm) {
+      params = m[2] ?? m[3]
+      // 从 `=>` 之后起扫：那个位置 paren 深度为 0，函数体的 `{` 落在自己这一层，
+      // 表达式体则会在 `on(` 的 `)` 上以 depth<0 收场
+      bodyStart = bodyOpenBrace(code, mask, m.index + m[0].lastIndexOf('=>') + 2, true)
+    } else {
+      const openParen = m.index + m[0].length - 1
+      const closeParen = matchingParen(code, mask, openParen)
+      if (closeParen === null) continue
+      params = code.slice(openParen + 1, closeParen)
+      bodyStart = bodyOpenBrace(code, mask, closeParen + 1)
     }
+    // 只有块体才判：箭头函数的表达式体（`=> next()`）必然调了 next
+    if (bodyStart === null) continue
+
+    const bodyEnd = matchingBrace(code, mask, bodyStart)
+    if (bodyEnd === null) continue
+
+    const hasNextParam = /(?:^|[,(\s])next\s*(?:[,)=\s]|$)/.test(params)
+    // 只看裸 `next(`：`.next(` 与 `?.next(` 是别人身上的同名方法，不算透传
+    // （2026-11-06 实测：dsh-ops 的 `?? next()` 被 `\bnext\s*\(` 漏读，
+    //  而对象迭代器的 `it.next()` 会被同一条读成透传——两个方向都得挡）
+    if ([...code.slice(bodyStart + 1, bodyEnd).matchAll(/\bnext\s*\(/g)].some((hit) => {
+      const before = hit.index > 0 ? code.slice(bodyStart + 1 + hit.index - 1, bodyStart + 1 + hit.index) : ''
+      return before !== '.'
+    })) continue
+
+    const why = hasNextParam
+      ? '监听器形参收了 `next`，但函数体内没有调用 `next(`——流水线会在这一步静默停住，后续监听器与宿主默认行为都不再执行。'
+      : '监听器的形参里没有 `next`——waterfall 扩展点的监听器必须接收并调用 `next()`，否则责任链在这里断开。'
+    hits.push({ line, event: eventName, evidence, why })
   }
   return hits
 }

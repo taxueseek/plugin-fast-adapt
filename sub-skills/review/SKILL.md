@@ -109,7 +109,7 @@ node scripts/plugin-audit.mjs <插件目录> --compact
 
 ## 哪些已经自动化，哪些仍要人看
 
-常设规则那层不再全靠人工。`node scripts/standards-scan.mjs <插件目录>` 做掉了照原文读必然得出同一结论的五条，每条都带 `defensive-patterns` 的原文出处（`--rules` 出完整规则表），确定性项可由 `node scripts/codemod.mjs <插件目录> --apply` 自动重构修补：
+常设规则那层不再全靠人工。`node scripts/standards-scan.mjs <插件目录>` 做掉了照原文读必然得出同一结论的七条，每条都带 `defensive-patterns` 的原文出处（`--rules` 出完整规则表），确定性项可由 `node scripts/codemod.mjs <插件目录> --apply` 自动重构修补：
 
 | 规则 | 机械判据 | 没查什么 |
 | --- | --- | --- |
@@ -117,7 +117,9 @@ node scripts/plugin-audit.mjs <插件目录> --compact
 | `loader-entry-shape` | 入口的值导出集合（`export type` 不计） | 导出物是不是「同一个东西的两种写法」 |
 | `shared-state-no-owner` | `globalThis._X` 赋值；被导出的模块级 `let`/`var` 在函数里被重新赋值 | 容器被写、但从未被重赋值的一类（写一次的标志位）；判据要求「被导出」，所以只在本模块内共享的那种不算 |
 | `cross-package-relative-import` | import 说明符以 `/` 开头，或相对路径解析后跑出包根 | 别名（`@/...`）指向包外——要读 tsconfig 才知道 |
-| `lifecycle-unpaired-resource` | 代码区使用了原生 `setInterval` 或 `process.on`，但全模块未见配对的 `clearInterval`/`off` 或 `dispose` 清理 | `ctx.on` 业务事件分发的精细清理时机 |
+| `lifecycle-unpaired-resource` | 代码区使用了原生 `setInterval` 或 `process.on`，但全模块未见配对的 `clearInterval`/`off` 或 `dispose` 清理 | `ctx.on` 业务事件分发的精细清理时机；注册与注销跨文件（a.ts 注册、b.ts dispose）看不到 |
+| `vendor-rescope-unscoped` | `from`/动态 `import()`/`declare module` 的包名命中未 rescope 的裸名清单，或 package.json 依赖键命中同名 | 别名与子路径（`cordis/xxx`）形式；vendored 副本目录里的引用 |
+| `waterfall-missing-next` | 只看 `<ctx>.on("<waterfall 事件>", <函数字面量>)`，取该监听器函数体的配对花括号区间（不是字符窗口），区间内无 `next(` 才报 | 第二个实参是具名引用或调用表达式时不判；`next(` 是否真被 `return` 出去、以及 `Promise.all` 里的顺序语义不判 |
 
 **故意没进自动扫描的**：`dispose 必须达到完全停稳`、`在分发器中隔离回调异常`、`slot 注册物是稳定的 function component`、`Store 用法窄而明确`、`Projection 是唯一的读取与计算路径`。这些要判断意图与边界，静态文本判不出可信结论；报错了只会消耗使用者对整个工具的信任。它们留在本车道的表里人工核对。
 

@@ -79,6 +79,27 @@ test('quick-smoke：exports-only 入口按 Node 语义解析', async () => {
   assert.strictEqual(result.entry, 'dist/main.js', '入口应取 exports 而不是回退 lib/index.js')
 })
 
+test('原生入口的 inject 声明覆盖它访问的每一个宿主服务（自建工具自己过自己的门）', async () => {
+  const toolRoot = path.resolve(import.meta.dirname, '../..')
+  const entry = path.join(toolRoot, 'lib', 'index.js')
+  const source = fs.readFileSync(entry, 'utf8')
+  const declared = new Set(
+    [...source.matchAll(/export\s+const\s+inject\s*=\s*\[([^\]]*)\]/g)]
+      .flatMap((m) => m[1].split(','))
+      .map((s) => s.trim().replace(/^['"]|['"]$/g, ''))
+      .filter(Boolean),
+  )
+  // 只认 `ctx.<name>.method(` 形态（服务访问），`ctx.command(` 是旧式面，另判
+  const accessed = new Set([...source.matchAll(/\bctx\.([A-Za-z_$][\w$]*)\s*[.?]?\./g)].map((m) => m[1]))
+  const missing = [...accessed].filter((n) => !declared.has(n))
+  assert.deepStrictEqual(missing, [], `入口访问了未声明的宿主服务 ${missing.join('、')}——真宿主下这是装载期崩溃（00c981b 的教训）`)
+
+  // 冒烟实证：harness 对未声明 inject 的访问直接抛错，通过了才说明声明与访问对得上
+  const smoke = await runQuickSmoke(toolRoot)
+  assert.ok(smoke.success, `原生入口冒烟应通过: ${smoke.stage || ''} ${smoke.error || ''}`)
+  assert.deepStrictEqual(smoke.undeclaredInjectAccess ?? [], [], '冒烟报告里不得有未声明 inject 访问')
+})
+
 test('env-doctor --brief：patch 原文换计数，进程命令截断', () => {
   const report = {
     globalDsh: { version: '0.2.1-rc.3' },
