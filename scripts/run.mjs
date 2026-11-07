@@ -120,6 +120,32 @@ function runStep(script, scriptArgs, label, stages) {
   }
 }
 
+// 工具链缺失的判据：runner 不在 PATH（ENOENT）或 runner 自己没跑起来。
+// 这类失败与「插件编译不过」是两回事——它只说明本机缺 pnpm/npm，
+// 插件代码可能完全健康（2026-11-07 实录：dsh-files 被报「连编译都过不了」，
+// 实际是 pnpm 不在 PATH，补上 PATH 后同一命令立刻通过）。
+function toolchainMissing(runner, err) {
+  if (err?.code === 'ENOENT') return true
+  const text = `${err?.message || ''}\n${err?.stderr || ''}`.toLowerCase()
+  return text.includes('enoent') || text.includes('not found') || (text.includes('无法将') && text.includes('识别为'))
+}
+
+// 真冷启动「不定论」时，把最高频的环境缺件从 tail 里认出来，直接给补法。
+// 否则使用者只能看到「换 profile 重探还是环境缺件」这种二选一，
+// 而实际原因（dsh 不在 PATH）两个选项都不指向（2026-11-07 实录）。
+function realSmokeEnvGap(tail) {
+  const text = String(tail || '')
+  if (/missing-tools:dsh/i.test(text)) {
+    return 'verify-runtime 找不到 dsh 可执行文件——把 dsh 的 bin 目录加进 PATH 后重跑（macOS 常见：dsh 装在 ~/.local/bin，而 PATH 里只有 /usr/local/bin）'
+  }
+  if (/missing-tools:/i.test(text)) {
+    const m = text.match(/missing-tools:([^\s]+)/i)
+    return `verify-runtime 缺少工具链：${m ? m[1] : '见 tail'}——补齐后重跑`
+  }
+  if (/enoent/i.test(text)) return 'verify-runtime 的子进程因 ENOENT 失败——检查 PATH 是否包含 dsh 与 node'
+  return null
+}
+
 function runTypecheck(pluginRoot, stages) {
   const pkgPath = path.join(pluginRoot, 'package.json')
   let pkg = null
@@ -145,13 +171,25 @@ function runTypecheck(pluginRoot, stages) {
     })
     stages.typecheck = { status: 'ok', runner, durationMs: Date.now() - started, tail: out.split('\n').slice(-5).join('\n') }
   } catch (err) {
-    stages.typecheck = {
-      status: 'fail',
-      runner,
-      durationMs: Date.now() - started,
-      tail: String(err.stdout || err.message || '').split('\n').slice(-12).join('\n'),
-      hint: 'typecheck 红说明插件当前连编译都过不了——适配前先修构建（taxue-dsh-artisan 0.3.1 发布态即红，本轮实测）。',
-    }
+    const missing = toolchainMissing(runner, err)
+    stages.typecheck = missing
+      ? {
+          // 工具链缺失不是插件的问题：单列为 skipped，不判 fail，
+          // 否则「本机没装 pnpm」会被当成「插件编译不过」，把人推去修不存在的构建问题。
+          status: 'skipped',
+          reason: `${runner} 不在 PATH，typecheck 无法执行`,
+          runner,
+          durationMs: Date.now() - started,
+          tail: String(err.stdout || err.message || '').split('\n').slice(-12).join('\n'),
+          hint: `本机找不到 ${runner} 可执行文件——这是环境缺件，不是插件构建失败。把 ${runner} 的 bin 目录加进 PATH（或改用 npm：删掉 pnpm-lock.yaml 后重跑）再验构建。`,
+        }
+      : {
+          status: 'fail',
+          runner,
+          durationMs: Date.now() - started,
+          tail: String(err.stdout || err.message || '').split('\n').slice(-12).join('\n'),
+          hint: 'typecheck 红说明插件当前连编译都过不了——适配前先修构建（taxue-dsh-artisan 0.3.1 发布态即红，本轮实测）。',
+        }
   }
 }
 
@@ -223,7 +261,8 @@ function runRealSmoke(pluginRoot) {
         label === 'fail'
           ? '真冷启动失败——tail 是 verify-runtime 的归因输出，四类归因（插件代码/依赖解析/profile 配置/宿主运行时）以它为准'
           : label === 'inconclusive'
-            ? '真冷启动不定论（exit 2）——看 tail 判断是需要换 profile 重探还是环境缺件'
+            ? (realSmokeEnvGap(String(err.stdout || '')) ??
+              '真冷启动不定论（exit 2）——看 tail 判断是需要换 profile 重探还是环境缺件')
             : null,
     }
   }
@@ -669,6 +708,12 @@ if (exitFail) {
       ? '扫描没跑（--strict）——按 scan.reason 修指南来源或网络后重跑'
       : `指南没覆盖到 ${windowTarget}（--strict）——刷新指南或核对 --target`)
   }
+}
+// 非失败但结论不完整：工具链缺失与真冷启动不定论都要给补法，
+// 否则「退出码 0」会被读成「查干净了」，而实际是没验成。
+if (!exitFail) {
+  if (report.typecheck?.status === 'skipped' && report.typecheck?.hint) next.push(`typecheck 未验成：${report.typecheck.hint}`)
+  if (realSmoke?.status === 'inconclusive' && realSmoke?.hint) next.push(`真冷启动未验成：${realSmoke.hint}`)
 }
 
 if (flag('compact')) {

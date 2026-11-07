@@ -7,6 +7,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { test, tmpPluginDir } from './harness.mjs'
 import { auditPlugin, peerPatchFor, compatPatchFor } from '../plugin-audit.mjs'
+import { cleanGitEnv } from '../lib/proc-env.mjs'
 
 const SCRIPTS = path.resolve(import.meta.dirname, '..')
 
@@ -137,6 +138,68 @@ test('方案 B 环境自适应：支持从工作区目录向上回溯探测本�
   const found = findGlobalDsh(subPlugin)
   assert.strictEqual(found?.version, '0.2.2-local')
   assert.strictEqual(found?.source, 'local-ancestor-node_modules')
+})
+
+test('方案 B 工具链缺失：runner 不在 PATH 判 skipped 而非 fail（2026-11-07 dsh-files 实录）', () => {
+  // 实录：dsh-files 声明了 typecheck script，本机只有 npm 没有 pnpm，
+  // 旧逻辑把它判成「插件连编译都过不了」，把人推去修一个不存在的构建问题；
+  // 实际补上 PATH 后同一命令立刻通过。工具链缺失必须与编译失败分开。
+  const dir = tmpPluginDir('plan-b-toolchain-missing')
+  fs.writeFileSync(
+    path.join(dir, 'package.json'),
+    JSON.stringify({ name: 't-toolchain', version: '1.0.0', scripts: { typecheck: 'node --version' } }),
+  )
+  fs.writeFileSync(path.join(dir, 'pnpm-lock.yaml'), '')
+  fs.writeFileSync(path.join(dir, 'index.js'), 'export function apply() {}\n')
+
+  // 造一个不含 pnpm 的 PATH：只留 node 所在目录与系统基础目录
+  const nodeBin = path.dirname(process.execPath)
+  const env = cleanGitEnv({ ...process.env, PATH: `${nodeBin}:/usr/bin:/bin` })
+  const out = execFileSync(
+    process.execPath,
+    [path.join(SCRIPTS, 'run.mjs'), dir, '--offline', '--no-smoke', '--no-log', '--target', '0.2.1-rc.3'],
+    { encoding: 'utf8', env },
+  )
+  const report = JSON.parse(out.slice(0, out.lastIndexOf('}') + 1))
+  assert.strictEqual(report.typecheck.status, 'skipped', 'runner 缺失应判 skipped，不是 fail')
+  assert.match(report.typecheck.reason, /不在 PATH/)
+  assert.match(report.typecheck.hint, /环境缺件/, '应点明这是环境问题而非构建失败')
+  assert.ok(!report.typecheck.hint.includes('连编译都过不了'), '不得再输出「编译不过」的误导结论')
+})
+
+test('方案 B 真冷启动不定论：tail 里的 missing-tools:dsh 应给出 PATH 补法', () => {
+  // 实录：--real-smoke 首轮报 inconclusive，hint 只说「换 profile 重探还是环境缺件」，
+  // 而真实原因是 dsh 不在 PATH——两个选项都不指向它。
+  if (process.platform === 'win32') {
+    process.stderr.write('  （跳过：--real-smoke 在 win32 直接 skipped）\n')
+    return
+  }
+  const dir = tmpPluginDir('plan-b-realsmoke-envgap')
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 't-envgap', version: '1.0.0' }))
+  fs.writeFileSync(path.join(dir, 'index.js'), 'export function apply() {}\n')
+
+  const fakeDir = tmpPluginDir('verify-envgap')
+  // 复刻 verify-runtime 在找不到 dsh 时的输出形态
+  const script = path.join(fakeDir, 'verify-envgap.mjs')
+  fs.writeFileSync(script, "console.log('verdict: missing-tools:dsh  status: inconclusive'); process.exit(2)\n")
+
+  const env = cleanGitEnv({
+    ...process.env,
+    DSH_PFA_RUNS_DIR: path.join(fakeDir, 'runs'),
+    PFA_VERIFY_RUNTIME: script,
+  })
+  // inconclusive 不进 exitFail（既有语义：只有 fail 才退 2），所以这里应正常返回退出码 0，
+  // 但结论必须带可执行的补法，否则「退出码 0」会被读成「查干净了」。
+  const out = execFileSync(
+    process.execPath,
+    [path.join(SCRIPTS, 'run.mjs'), dir, '--offline', '--no-smoke', '--no-typecheck', '--no-log', '--real-smoke'],
+    { encoding: 'utf8', env },
+  )
+  const report = JSON.parse(out.slice(0, out.lastIndexOf('}') + 1))
+  assert.strictEqual(report.realSmoke.status, 'inconclusive')
+  assert.ok(report.realSmoke.hint, 'inconclusive 档应带 hint')
+  assert.match(report.realSmoke.hint, /PATH/, '应直接给出 PATH 补法，而不是二选一的反问')
+  assert.ok(!report.realSmoke.hint.includes('换 profile 重探'), '认出环境缺件后不应再给无关选项')
 })
 
 test('方案 1 & 2 修复：verified=present 枚举对齐与浏览器端 PLATFORM_MODULES 免误报', () => {
