@@ -31,7 +31,7 @@ import { runWriteGate } from './write-gate.mjs'
 import { listRuns, sanitizeRun, writeRunLog, pruneRuns, migrateLogRoot } from './lib/runlog.mjs'
 import { cleanGitEnv, diagnoseGitConfigGroup } from './lib/proc-env.mjs'
 import { parseStartupLog, parseMessages, diagnoseLogs } from './log-doctor.mjs'
-import { checkSkillSync, syncSkill, suggestCommitCommand } from './sync-skill.mjs'
+import { checkSkillSync, syncSkill, suggestCommitCommand, realPathCanon } from './sync-skill.mjs'
 import { querySeams } from './seams.mjs'
 import { resolveHostModules, verifyWithHostModules } from './lib/host-modules.mjs'
 import { correlateRuns } from './run-log.mjs'
@@ -1457,7 +1457,9 @@ test('sync-skill 提交命令建议：git 仓给只 add 同步路径的命令，
     fs.mkdirSync(dest, { recursive: true })
 
     const cmd = suggestCommitCommand({ srcRoot: tool, destRoot: dest })
-    const realMirror = fs.realpathSync(mirror)
+    // 与生产同口径 canonical 化：Windows 上 JS 版 realpath 不展开 8.3 短名，
+    // 期望值若留在短形会与命令里的长名仓根错开
+    const realMirror = realPathCanon(mirror)
     assert.ok(cmd, `两侧都是 git 仓应给出命令，实际 ${cmd}`)
     // 分隔符归一后比对：Windows 上路径是反斜杠，断言只关心相对路径逻辑；
     // 失败信息带实际命令，下一轮差异直接可见（2026-11-08 Windows CI 实录）

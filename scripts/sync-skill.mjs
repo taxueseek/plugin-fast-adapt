@@ -87,15 +87,29 @@ export function syncSkill({ srcRoot = TOOL_ROOT, destRoot, dryRun = false } = {}
   return { srcRoot, destRoot: dest, written, dryRun }
 }
 
+// 路径 canonical 化：统一到最终形态（软链落到位、Windows 8.3 短名展开成长名）。
+// Node 的 fs.realpathSync 是 JS 实现，不展开 8.3 短名（RUNNER~1 保持短形），而
+// git rev-parse 返回长名——两侧不同形会让 path.relative 爬出仓外再爬回来
+// （2026-11-08 Windows CI 实录：add "../../../../../RUNNER~1/..."）。
+// native 版（uv_fs_realpath）才做最终路径解析；个别环境不支持时退回 JS 版。
+export function realPathCanon(p) {
+  try {
+    return fs.realpathSync.native(p)
+  } catch {
+    return fs.realpathSync(p)
+  }
+}
+
 // 同步后给镜像仓的提交命令建议：add 路径取 dest 相对其 git 仓根（只加同步路径，
 // 防夹带），commit 主题带真源当前 commit——手敲这两处最容易错。不自动提交，
 // git 的控制权留给用户；任一侧不是 git 仓时返回 null 静默跳过。
 export function suggestCommitCommand({ srcRoot = TOOL_ROOT, destRoot } = {}) {
   try {
-    // realpath 两侧再算相对路径：macOS 的 /var → /private/var 一类软链会让
-    // git 返回的仓根与调用方路径前缀不一致，relative 直接给出跨目录的错路径
-    const realDest = fs.realpathSync(destRoot)
-    const repoRoot = fs.realpathSync(
+    // 两侧 canonical 化再算相对路径：macOS 的 /var → /private/var 一类软链、
+    // Windows 的 RUNNER~1 短名，都会让 git 返回的仓根与调用方路径前缀不一致，
+    // relative 直接给出跨目录的错路径
+    const realDest = realPathCanon(destRoot)
+    const repoRoot = realPathCanon(
       execFileSync('git', ['rev-parse', '--show-toplevel'], { env: gitChildEnv().env, cwd: destRoot, encoding: 'utf8' }).trim()
     )
     // git 在 Windows 上也接受 posix 分隔符；建议命令统一 posix，跨平台可复制
