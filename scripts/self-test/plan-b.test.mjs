@@ -103,9 +103,12 @@ test('方案 B 环境自适应：candidateGlobalRoots 包含移动端 Termux PRE
     platform: 'linux',
     env: { PREFIX: '/data/data/com.termux/files/usr', npm_config_prefix: '/opt/custom-npm' },
   })
-  assert.ok(roots.includes('/data/data/com.termux/files/usr/lib/node_modules'), '应包含 Termux 模块路径')
-  assert.ok(roots.includes('/opt/custom-npm/lib/node_modules'), '应包含自定义 npm 前缀路径')
-  assert.ok(roots.includes('/usr/lib/node_modules'), '应包含标准 Linux 发行版路径')
+  // 注入的 Termux 路径本身是 posix 形态；Windows 上 path.join 产出反斜杠，
+  // 断言按 posix 归一后比对（2026-11-08 Windows CI 实录）
+  const posixRoots = roots.map((r) => r.split('\\').join('/'))
+  assert.ok(posixRoots.includes('/data/data/com.termux/files/usr/lib/node_modules'), '应包含 Termux 模块路径')
+  assert.ok(posixRoots.includes('/opt/custom-npm/lib/node_modules'), '应包含自定义 npm 前缀路径')
+  assert.ok(posixRoots.includes('/usr/lib/node_modules'), '应包含标准 Linux 发行版路径')
 })
 
 test('方案 B 环境自适应：DSH_HOST_PATH 环境变量直接覆盖宿主定位', async () => {

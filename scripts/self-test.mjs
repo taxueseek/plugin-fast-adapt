@@ -1194,9 +1194,13 @@ test('run：离线全链编排产出统一报告并写日志；sanitize 脱敏�
       assert.ok(!sanitized.includes(form), `脱敏后不应包含 home 绝对路径（形态 ${form}）`)
     }
     assert.ok(sanitized.includes('~'), 'home 前缀应替换为 ~')
-    // 原始日志在本地保留完整路径（本地分析需要），脱敏只发生在导出时
+    // 原始日志在本地保留完整路径（本地分析需要），脱敏只发生在导出时。
+    // Windows 上 JSON 里的反斜杠是转义形态（\\），两种拼法都要认。
     const raw = fs.readFileSync(runFile, 'utf8')
-    assert.ok(raw.includes(dir), '原始日志保留完整路径供本地复盘')
+    assert.ok(
+      raw.includes(dir) || raw.includes(JSON.stringify(dir).slice(1, -1)),
+      '原始日志保留完整路径供本地复盘',
+    )
   } finally {
     delete process.env.DSH_PFA_RUNS_DIR
   }

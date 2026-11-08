@@ -43,8 +43,10 @@ export function backupStamp(now = new Date()) {
  */
 export function createBackupDir(pluginDir, { now = new Date() } = {}) {
   const root = path.resolve(pluginDir)
-  const rel = path.join(BACKUP_DIR_NAME, backupStamp(now))
-  const backupDir = path.join(root, rel)
+  // backupRel 进报告给人看：统一 posix 分隔符，Windows 上不出现反斜杠；
+  // backupDir 用 path.join 拼，实际落盘仍是原生分隔符。
+  const rel = `${BACKUP_DIR_NAME}/${backupStamp(now)}`
+  const backupDir = path.join(root, BACKUP_DIR_NAME, backupStamp(now))
   fs.mkdirSync(backupDir, { recursive: true })
   return { backupDir, backupRel: rel }
 }

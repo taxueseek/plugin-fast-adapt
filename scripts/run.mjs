@@ -128,7 +128,14 @@ function runStep(script, scriptArgs, label, stages) {
 function toolchainMissing(runner, err) {
   if (err?.code === 'ENOENT') return true
   const text = `${err?.message || ''}\n${err?.stderr || ''}`.toLowerCase()
-  return text.includes('enoent') || text.includes('not found') || (text.includes('无法将') && text.includes('识别为'))
+  // 英文 cmd.exe 的拼法是 "is not recognized as an internal or external
+  // command"（2026-11-08 Windows CI 实录）；「无法将…识别为」是中文 PowerShell。
+  return (
+    text.includes('enoent') ||
+    text.includes('not found') ||
+    text.includes('is not recognized') ||
+    (text.includes('无法将') && text.includes('识别为'))
+  )
 }
 
 // 真冷启动「不定论」时，把最高频的环境缺件从 tail 里认出来，直接给补法。

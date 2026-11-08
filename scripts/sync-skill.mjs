@@ -98,7 +98,8 @@ export function suggestCommitCommand({ srcRoot = TOOL_ROOT, destRoot } = {}) {
     const repoRoot = fs.realpathSync(
       execFileSync('git', ['rev-parse', '--show-toplevel'], { env: gitChildEnv().env, cwd: destRoot, encoding: 'utf8' }).trim()
     )
-    const rel = path.relative(repoRoot, realDest)
+    // git 在 Windows 上也接受 posix 分隔符；建议命令统一 posix，跨平台可复制
+    const rel = path.relative(repoRoot, realDest).split(path.sep).join('/')
     const short = execFileSync('git', ['rev-parse', '--short', 'HEAD'], { env: gitChildEnv().env, cwd: srcRoot, encoding: 'utf8' }).trim()
     return `git -C "${repoRoot}" add "${rel}" && git -C "${repoRoot}" commit -m "chore(fast-adapt): 同步独立仓 ${short}"`
   } catch {
