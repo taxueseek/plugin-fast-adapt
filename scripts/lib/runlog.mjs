@@ -271,24 +271,42 @@ export function resolveRunFile(id) {
   return null
 }
 
+// Windows 上 Temp 等路径常以 8.3 短名出现（RUNNER~1 一类），home 的字面量与
+// realpath 都是长名——日志里的短名路径两个形态都匹配不上，脱敏后仍带真实
+// 用户名前缀。短名要问系统要（GetShortPathName，借 cmd 的 %~sI），拿不到就
+// 放弃（8.3 被禁用时 %~sI 原样返回长名），POSIX 直接跳过。
+function homeShortForm(home) {
+  if (process.platform !== 'win32') return null
+  try {
+    const out = execFileSync(`for %I in ("${home}") do @echo %~sI`, { encoding: 'utf8', shell: true }).trim()
+    return out && out !== home ? out : null
+  } catch {
+    return null
+  }
+}
+
+// home 路径的全部形态：字面量、realpath（macOS /var→/private/var）、Windows
+// 8.3 短名。sanitizeText 与自检共用这一份清单，测试按它逐形态断言。
+export function homePathForms() {
+  const home = os.homedir()
+  const forms = new Set([home])
+  try {
+    forms.add(fs.realpathSync(home))
+  } catch {}
+  const short = homeShortForm(home)
+  if (short) forms.add(short)
+  return [...forms].filter((f) => f && f !== '/')
+}
+
 // 脱敏：替换 home 前缀、用户名、机器名、用户邮箱形态的 token。
 // 规则刻意保守——只动确定是身份信息的部分，目录结构和文件名保留，方便对照。
 export function sanitizeText(text) {
-  const home = os.homedir()
-  const user = path.basename(home)
+  const user = path.basename(os.homedir())
   let out = String(text)
-  // macOS 上 /var 与 /private/var 是同一目录的两种写法，日志里出现哪种取决于
-  // 路径怎么来的（realpath 过的就是 /private 形态）。只替换字面量 home 会漏掉
-  // 另一种，脱敏后仍带真实绝对路径——实测 sanitize('/private' + home) 得到
-  // '/private~/...'，前缀没被吃掉。两种形态都替换。
   // 顺序要紧：realpath 形态（/private/var/...）以字面量 home（/var/...）为后缀，
   // 先替换短的会把长的切成 '/private~'，前缀照样漏出去。按长度降序替换。
-  const homeForms = new Set([home])
-  try {
-    homeForms.add(fs.realpathSync(home))
-  } catch {}
-  for (const form of [...homeForms].sort((a, b) => b.length - a.length)) {
-    if (form && form !== '/') out = out.split(form).join('~')
+  for (const form of homePathForms().sort((a, b) => b.length - a.length)) {
+    out = out.split(form).join('~')
   }
   if (user && user.length > 2) out = out.split(user).join('<user>')
   try {

@@ -136,6 +136,21 @@ test('脱敏：home 的 realpath 形态也被替换（macOS /private 前缀不�
   assert.strictEqual(sanitizeText(`${real}/a/b`), '~/a/b', 'realpath 形态也应替换为 ~（顺序按长度降序，否则被切成 /private~）')
 })
 
+test('脱敏：homePathForms 覆盖的所有形态都不出现在脱敏输出里（Windows 8.3 短名不泄漏）', async () => {
+  const { sanitizeText, homePathForms } = await import('../lib/runlog.mjs')
+  const forms = homePathForms()
+  assert.ok(forms.length >= 1, `至少应有字面量形态，实际 ${forms.length}`)
+  // Windows 上 Temp 常以 8.3 短名出现（RUNNER~1），字面量与 realpath 都是长名；
+  // 少了短名形态，脱敏后仍带真实用户名前缀。CI 的 TEMP 正是短名，真机钉住。
+  assert.ok(process.platform !== 'win32' || forms.length >= 2, `Windows 应把 8.3 短名形态收进清单，实际 ${forms.length}`)
+  const sample = forms.map((f) => path.join(f, 'notes', 'run-1.json')).join('\n')
+  const sanitized = sanitizeText(sample)
+  for (const form of forms) {
+    assert.ok(!sanitized.includes(form), `脱敏后不应包含 home 形态 ${form}`)
+  }
+  assert.ok(sanitized.split('\n').every((l) => l.startsWith('~')), '每个形态都应替换为 ~ 前缀')
+})
+
 test('备份：时间戳目录名不含冒号与点（Windows 非法文件名字符）', () => {
   const stamp = backupStamp(new Date('2026-11-08T10:02:16.123Z'))
   assert.ok(!stamp.includes(':'), `时间戳不该含冒号：${stamp}`)

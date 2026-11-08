@@ -125,17 +125,37 @@ function runStep(script, scriptArgs, label, stages) {
 // 这类失败与「插件编译不过」是两回事——它只说明本机缺 pnpm/npm，
 // 插件代码可能完全健康（2026-11-07 实录：dsh-files 被报「连编译都过不了」，
 // 实际是 pnpm 不在 PATH，补上 PATH 后同一命令立刻通过）。
+// runner 是否能在 PATH 上解析到（Windows 按 PATHEXT 展开探 .cmd/.exe，
+// POSIX 用 X_OK 排除「同名但不可执行」的干扰）。带路径分隔符的按字面路径处理。
+function runnerOnPath(runner) {
+  if (/[\\/]/.test(runner)) {
+    try {
+      fs.accessSync(runner)
+      return true
+    } catch {
+      return false
+    }
+  }
+  const dirs = (process.env.PATH || '').split(path.delimiter).filter(Boolean)
+  const exts = process.platform === 'win32' ? (process.env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';') : ['']
+  for (const dir of dirs) {
+    for (const ext of exts) {
+      try {
+        fs.accessSync(path.join(dir, runner + ext), process.platform === 'win32' ? fs.constants.F_OK : fs.constants.X_OK)
+        return true
+      } catch {}
+    }
+  }
+  return false
+}
+
 function toolchainMissing(runner, err) {
+  // 判据是确定性的 PATH 预检，不再匹配错误文本：文本跨语种不可靠（英文
+  // "is not recognized"、中文「无法将…识别为」之外还有其他 locale），且插件
+  // 构建脚本自己调起缺失二进制时文本里同样有 is not recognized——runner 能
+  // 在 PATH 上解析到，就说明是构建链的问题，不是环境缺件。
   if (err?.code === 'ENOENT') return true
-  const text = `${err?.message || ''}\n${err?.stderr || ''}`.toLowerCase()
-  // 英文 cmd.exe 的拼法是 "is not recognized as an internal or external
-  // command"（2026-11-08 Windows CI 实录）；「无法将…识别为」是中文 PowerShell。
-  return (
-    text.includes('enoent') ||
-    text.includes('not found') ||
-    text.includes('is not recognized') ||
-    (text.includes('无法将') && text.includes('识别为'))
-  )
+  return !runnerOnPath(runner)
 }
 
 // 真冷启动「不定论」时，把最高频的环境缺件从 tail 里认出来，直接给补法。

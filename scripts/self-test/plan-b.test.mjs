@@ -187,6 +187,46 @@ test('方案 B 工具链缺失：runner 不在 PATH 判 skipped 而非 fail（20
   assert.ok(!report.typecheck.hint.includes('连编译都过不了'), '不得再输出「编译不过」的误导结论')
 })
 
+test('方案 B 工具链误判防护：runner 在 PATH 但内层命令缺 → fail 而非 skipped', () => {
+  // 旧实现按错误文本判环境缺件：插件构建脚本自己调起缺失的二进制时，文本里
+  // 同样有 "is not recognized"/"not found"，真构建失败会被吞成 skipped。
+  // 现在判据是 runner 的 PATH 预检——runner 在，构建失败就老实判 fail。
+  const dir = tmpPluginDir('toolchain-inner-missing')
+  fs.writeFileSync(
+    path.join(dir, 'package.json'),
+    JSON.stringify({ name: 't-inner', version: '1.0.0', scripts: { typecheck: 'pnpm typecheck' } }),
+  )
+  fs.writeFileSync(path.join(dir, 'pnpm-lock.yaml'), '')
+  fs.writeFileSync(path.join(dir, 'index.js'), 'export function apply() {}\n')
+
+  const bin = tmpPluginDir('stub-bin')
+  if (process.platform === 'win32') {
+    fs.writeFileSync(
+      path.join(bin, 'pnpm.cmd'),
+      "@echo off\r\necho 'tsc' is not recognized as an internal or external command\r\nexit /b 1\r\n",
+    )
+  } else {
+    const stub = path.join(bin, 'pnpm')
+    fs.writeFileSync(stub, '#!/bin/sh\necho "tsc: not found"\nexit 127\n')
+    fs.chmodSync(stub, 0o755)
+  }
+  const env = cleanGitEnv({ ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH || ''}` })
+  const base = [path.join(SCRIPTS, 'run.mjs'), dir, '--offline', '--no-smoke', '--no-log', '--target', '0.2.1-rc.3']
+  let status = 0
+  let out = ''
+  try {
+    out = execFileSync(process.execPath, base, { encoding: 'utf8', env })
+    assert.fail('typecheck fail 应退出码 2')
+  } catch (err) {
+    status = err.status
+    out = String(err.stdout || '')
+  }
+  assert.strictEqual(status, 2, 'runner 在 PATH 上时构建失败判 fail，退出码 2')
+  const report = JSON.parse(out.slice(0, out.lastIndexOf('}') + 1))
+  assert.strictEqual(report.typecheck.status, 'fail', 'runner 在 PATH 上，失败就是构建失败，不判 skipped')
+  assert.match(report.typecheck.tail, /tsc/, 'tail 应保留内层缺失工具原文，归因不丢失')
+})
+
 test('方案 B 真冷启动不定论：tail 里的 missing-tools:dsh 应给出 PATH 补法', () => {
   // 实录：--real-smoke 首轮报 inconclusive，hint 只说「换 profile 重探还是环境缺件」，
   // 而真实原因是 dsh 不在 PATH——两个选项都不指向它。
