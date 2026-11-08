@@ -125,6 +125,23 @@ test('方案 B 环境自适应：DSH_HOST_PATH 环境变量直接覆盖宿主定
   }
 })
 
+test('上游 #12322：package.json 带 UTF-8 BOM 仍能定位宿主，不静默退化成「找不到」', async () => {
+  const { findGlobalDsh } = await import('../env-doctor.mjs')
+  const dir = tmpPluginDir('env-host-bom')
+  fs.writeFileSync(path.join(dir, 'package.json'), '\uFEFF' + JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.2.9-bom' }))
+
+  const orig = process.env.DSH_HOST_PATH
+  try {
+    process.env.DSH_HOST_PATH = dir
+    const found = findGlobalDsh()
+    assert.strictEqual(found?.version, '0.2.9-bom', 'BOM 不该让 JSON.parse 失败后被吞成 null')
+    assert.strictEqual(found?.source, 'env-override')
+  } finally {
+    if (orig !== undefined) process.env.DSH_HOST_PATH = orig
+    else delete process.env.DSH_HOST_PATH
+  }
+})
+
 test('方案 B 环境自适应：支持从工作区目录向上回溯探测本地依赖宿主', async () => {
   const { findGlobalDsh } = await import('../env-doctor.mjs')
   const workspaceRoot = tmpPluginDir('workspace-monorepo')

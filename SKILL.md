@@ -68,11 +68,11 @@ node scripts/sync-skill.mjs --dest <下游技能目录>            # 同步
 
 ## 安全边界
 
-- **只读为主**：`env-doctor`、`code-scan`、`plugin-audit`、`seams`、`log-doctor`、`run-log` 完全不写文件。
+- **只读为主**：`env-doctor`、`code-scan`、`plugin-audit`、`seams`、`log-doctor` 完全不写文件；`run-log` 默认只读，只有 `sanitize --out <文件>` 会写脱敏结果到指定路径。
 - **`quick-smoke` 与 `write-gate` 会执行插件代码**（动态 import 入口模块）。只对自己或审过的代码跑，不要对来路不明的目录跑。执行面限于 Node 进程内，但插件代码理论上能做任何 Node 能做的事。
 - **自愈默认 dry-run**：`env-heal` 不加 `--apply` 只报告，加了也是移动不删除（进 `~/.dsh/.trash/<日期>/`）。
 - **不改 DSH 本体**，不动 `~/.dsh` 下的配置和 profile 声明。
-- **自动修补只限判据纯机械的三类，先备份后落盘**：`codemod`（Loader 入口导出面、顶层 await）与 `fix-peer-deps`（宿主核心包 peer 挪位）默认 dry-run，`--apply` 才落盘，且原文件先备份到 `<插件目录>/.pfa-backup/<时间戳>/`。除此之外一律只报命中和官方修法；`plugin-audit --peer-patch` 也只打印建议，不写 `package.json`。
+- **自动修补只限判据纯机械的三类，先备份后落盘**：`codemod`（Loader 入口导出面、顶层 await）、`fix-peer-deps`（宿主核心包 peer 挪位）与 `fleet-sweep --apply-compat`（批量写 `package.json` 兼容账本与 Peer 范围）默认 dry-run 或不带 `--apply` 只报，`--apply`/`--apply-compat` 才落盘，且原文件先备份到 `<插件目录>/.pfa-backup/<时间戳>/`。除此之外一律只报命中和官方修法；`plugin-audit --peer-patch` 也只打印建议，不写 `package.json`。
 - **网络只用在「取官方源」这一步**：定版本读 npm 的 dist-tags，取指南 clone 官方仓库。两处都有超时，失败明确报错而非静默跳过；dist-tags 有 1 小时缓存，网络失败降级用旧缓存并标 stale；上游 tag 未打导致的 clone 失败记 1 小时否定缓存（dist-tags 一变即作废），期间不重复拉取；指南优先复用本机已有 clone，`--no-clone` 可跳过。
 - **日志只落本机**，含本地路径与用户名，外发前必须 `sanitize`。
 
@@ -91,7 +91,7 @@ node scripts/sync-skill.mjs --dest <下游技能目录>            # 同步
 npm test
 ```
 
-247 项断言，覆盖扫描器不误报（注释和字符串里的同名词不算命中）、不漏报、版本窗口与 real semver 判定、目标形态判定、指南出处锚点、指南分支快照与覆盖度未知态、三元版本账本直通与变更嗅探、本地宿主接缝契约核对与未构建硬拦截、跨平台与工作区自适应（Termux/Linux/环境变量/祖先依赖）、上游经验吸纳（退出码 143 停机判定/Bundle 遮蔽阴影/准入账本 compatPatch/提示词 {{cwd}} 拦截/全局前缀分裂检测/集群治理 Web-APP 与运行态生命周期多维看板）、Cordis 深度防御性审查（核心 peer 依赖 vendored 污染 P0 拦截/顶层单例状态泄漏 P2 预警/run 与 audit --compact 紧凑模式/DSH 原生插件服务）、Release Note 破坏性变更虚拟指南提取与双语去重、接缝查询双源结论、运行日志与宿主日志交叉核对、一键编排各档位（含 --strict）、冒烟验证（含 Config 默认值解析、宿主 node_modules 兜底、未声明 inject 契约拦截与 exports-only 入口）、四维审计（含 peer 与 compat 准入账本修补）、启用诊断（宿主半与客户端半）、幽灵宿主四态与磁盘时间来源、tsconfig paths 假绿（含 extends 与 JSONC）、环境层三处盲区、创作脚手架与体检门、日志诊断、下游同步、发布预检规则（版本一致/tag/包内容/npm 状态）、跨平台模拟、诊断输出瘦身、CLI 帮助与未知参数、宿主凭证擦除留下的残缺 GIT_CONFIG 配置组净化（真实 git 子进程回归）、链接形态路径的安全删除、文档断言数与技能面 description 长度门禁、扫描性能回归、生命周期配对检查、确定性 Codemod 自动修补、Types-Diff 类型差分自动接缝与 SKILL.md 常设规则枚举双向对账。自检零网络、零外部依赖，任何机器上都能跑。
+250 项断言，覆盖扫描器不误报（注释和字符串里的同名词不算命中）、不漏报、版本窗口与 real semver 判定、目标形态判定、指南出处锚点、指南分支快照与覆盖度未知态、三元版本账本直通与变更嗅探、本地宿主接缝契约核对与未构建硬拦截、跨平台与工作区自适应（Termux/Linux/环境变量/祖先依赖）、上游经验吸纳（退出码 143 停机判定/Bundle 遮蔽阴影/准入账本 compatPatch/提示词 {{cwd}} 拦截/全局前缀分裂检测/集群治理 Web-APP 与运行态生命周期多维看板）、Cordis 深度防御性审查（核心 peer 依赖 vendored 污染 P0 拦截/顶层单例状态泄漏 P2 预警/run 与 audit --compact 紧凑模式/DSH 原生插件服务）、Release Note 破坏性变更虚拟指南提取与双语去重、接缝查询双源结论、运行日志与宿主日志交叉核对、一键编排各档位（含 --strict）、冒烟验证（含 Config 默认值解析、宿主 node_modules 兜底、未声明 inject 契约拦截与 exports-only 入口）、四维审计（含 peer 与 compat 准入账本修补）、启用诊断（宿主半与客户端半）、幽灵宿主四态与磁盘时间来源、tsconfig paths 假绿（含 extends 与 JSONC）、环境层三处盲区、创作脚手架与体检门、日志诊断、下游同步、发布预检规则（版本一致/tag/包内容/npm 状态）、跨平台模拟、诊断输出瘦身、CLI 帮助与未知参数、宿主凭证擦除留下的残缺 GIT_CONFIG 配置组净化（真实 git 子进程回归）、链接形态路径的安全删除、文档断言数与技能面 description 长度门禁、扫描性能回归、生命周期配对检查、确定性 Codemod 自动修补、Types-Diff 类型差分自动接缝与 SKILL.md 常设规则枚举双向对账、合成指南目录参数链（第五个参数不再被静默忽略）。自检零网络、零外部依赖，任何机器上都能跑。
 
 提交前门禁：`git config core.hooksPath .githooks`（一次性）启用 pre-commit 钩子，commit 时自动跑本自检，改完真源忘了同步在这一刻被拦。
 
@@ -122,4 +122,4 @@ npm test
 | `release-check.mjs` | 发布前预检：版本一致、`v<版本>` tag、npm 是否已发布、`npm pack` 必需文件与夹带、自检、工作区；只读，不自动打 tag 或发布 |
 | `cli.mjs` | npm bin 入口（`npx plugin-fast-adapt`），转发到 run.mjs |
 | `self-test.mjs` | 自检 |
-| `lib/` | 扫描器、指南解析、运行日志、客户端半判定、宿主模块探测、发布规则 |
+| `lib/` | 扫描器、指南解析、运行日志、客户端半判定、宿主发现与宿主模块探测、发布规则（宿主发现为独立层，CLI 入口只 re-export，不反向依赖） |

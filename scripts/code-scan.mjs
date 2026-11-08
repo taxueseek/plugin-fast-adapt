@@ -390,7 +390,7 @@ export function scanPluginFromGuideRoot(pluginDir, guideRoot, options = {}) {
   // 扫描窗口起点——差分基线比窗口早会把窗口前的移除报进来（插件按 peer 下限
   // 声明根本没用过），比窗口晚会漏报；都不精确，宁可不用。
   if (options.synthesizedDir) {
-    guides.push(...loadSynthesizedGuides(options.localVersion, { maxVersion: options.targetVersion }))
+    guides.push(...loadSynthesizedGuides(options.localVersion, { maxVersion: options.targetVersion, rootDir: options.synthesizedDir }))
   }
   return scanPlugin(pluginDir, guides, options)
 }

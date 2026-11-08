@@ -88,6 +88,13 @@ export const STANDARDS_RULES = [
 /** 函数插件的四件套导出名。 */
 export const FUNC_PLUGIN_EXPORTS = ['name', 'inject', 'Config', 'apply']
 
+/** 按 id 取规则原文。id 写错直接抛，别让拼错的规则名静默退化成空串/报错位置不明。 */
+function ruleText(id) {
+  const meta = STANDARDS_RULES.find((r) => r.id === id)
+  if (!meta) throw new Error(`未知常设规则 id: ${id}`)
+  return meta.rules
+}
+
 /** 需要剥离的注释与字符串都由词法视图负责，这里只从干净代码区里取行。 */
 function codeLines(code) {
   return code.split('\n')
@@ -214,7 +221,7 @@ export function scanStandards(pluginDir, { files = null, entryFile = null } = {}
     // 2026-11-05 实测：泛化版在 dsh-llm-fallbacks 上 10 命中、dsh-image-gen 上 35 命中，
     // 逐条核对全是常量表与编译后产物，故收窄。
     for (const hit of findSharedStateWithoutOwner(lines, mask)) {
-      push('shared-state-no-owner', file, hit.line, { evidence: hit.evidence, detail: `${STANDARDS_RULES[2].rules} ${hit.why}` })
+      push('shared-state-no-owner', file, hit.line, { evidence: hit.evidence, detail: `${ruleText('shared-state-no-owner')} ${hit.why}` })
     }
 
     // 规则 4：跨包相对 import / 绝对路径 import
@@ -235,7 +242,7 @@ export function scanStandards(pluginDir, { files = null, entryFile = null } = {}
     for (const hit of findUnpairedLifecycleResources(code, mask, lineOf)) {
       push('lifecycle-unpaired-resource', file, hit.line, {
         evidence: hit.evidence,
-        detail: `${STANDARDS_RULES.find((r) => r.id === 'lifecycle-unpaired-resource').rules} ${hit.why}`,
+        detail: `${ruleText('lifecycle-unpaired-resource')} ${hit.why}`,
       })
     }
 
@@ -243,7 +250,7 @@ export function scanStandards(pluginDir, { files = null, entryFile = null } = {}
     for (const hit of findUnscopedVendorImports(code, mask, lineOf)) {
       push('vendor-rescope-unscoped', file, hit.line, {
         evidence: hit.evidence,
-        detail: `${STANDARDS_RULES.find((r) => r.id === 'vendor-rescope-unscoped').rules} 命中未 rescoped 的裸包名 \`${hit.pkg}\`，建议迁移至 \`${hit.target}\`。`,
+        detail: `${ruleText('vendor-rescope-unscoped')} 命中未 rescoped 的裸包名 \`${hit.pkg}\`，建议迁移至 \`${hit.target}\`。`,
       })
     }
 
@@ -251,7 +258,7 @@ export function scanStandards(pluginDir, { files = null, entryFile = null } = {}
     for (const hit of findBrokenWaterfallListeners(code, mask, lineOf)) {
       push('waterfall-missing-next', file, hit.line, {
         evidence: hit.evidence,
-        detail: `${STANDARDS_RULES.find((r) => r.id === 'waterfall-missing-next').rules} 监听了 Waterfall 扩展点 \`${hit.event}\`。${hit.why}`,
+        detail: `${ruleText('waterfall-missing-next')} 监听了 Waterfall 扩展点 \`${hit.event}\`。${hit.why}`,
       })
     }
 
@@ -267,7 +274,7 @@ export function scanStandards(pluginDir, { files = null, entryFile = null } = {}
             evidence: 'export default',
             severity: 'HIGH',
             priority: 'P0',
-            detail: `${STANDARDS_RULES.find((r) => r.id === 'loader-entry-shape').rules} 本次在入口里同时看到具名导出与 \`export default\`，Loader 会按服务插件处理并丢掉具名那半边。`,
+            detail: `${ruleText('loader-entry-shape')} 本次在入口里同时看到具名导出与 \`export default\`，Loader 会按服务插件处理并丢掉具名那半边。`,
           })
         }
         for (const v of extra) {
@@ -277,7 +284,7 @@ export function scanStandards(pluginDir, { files = null, entryFile = null } = {}
             evidence: `export ${v.name}`,
             severity: 'LOW',
             priority: 'P2',
-            detail: `${STANDARDS_RULES.find((r) => r.id === 'loader-entry-shape').rules} 本次多出的值导出是 \`${v.name}\`。若它只是同包测试或辅助逻辑，建议通过子路径导出或内部引用，保持最小包面。`,
+            detail: `${ruleText('loader-entry-shape')} 本次多出的值导出是 \`${v.name}\`。若它只是同包测试或辅助逻辑，建议通过子路径导出或内部引用，保持最小包面。`,
           })
         }
       }

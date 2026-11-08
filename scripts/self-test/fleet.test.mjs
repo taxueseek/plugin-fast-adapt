@@ -171,7 +171,16 @@ test('方案 3 集群自动化适配：resolveInstalledPluginDir 解析真实路
   assert.strictEqual(updatedPkg.dsh.compatibility.dshReleases['0.2.2-alpha.2'], 'compatible')
   assert.ok(updatedPkg.dsh.compatibility.dsh.includes('^0.2.2-alpha.2'))
 
-  // 幂等验证：再次运行不应重复修改
+  // 写用户 package.json 前必须备份，且与 codemod / fix-peer-deps 用同一个
+  // .pfa-backup/<时间戳>/ 约定——批量治理不能是唯一无法回档的自动修补入口。
+  assert.ok(inspected.appliedPatches?.backup, '--apply-compat 落盘应返回备份路径')
+  const backupPath = path.join(realPluginDir, inspected.appliedPatches.backup)
+  assert.ok(fs.existsSync(backupPath), '备份文件应真实存在')
+  const originalPkg = JSON.parse(fs.readFileSync(backupPath, 'utf8'))
+  assert.strictEqual(originalPkg.peerDependencies['@deepseek-ai/dsh'], '^0.2.1-rc.1', '备份应是落盘前的原文')
+
+  // 幂等验证：再次运行不应重复修改，也不该再生成第二份备份
   const second = applyCompatAndPeerPatch(realPluginDir, { targetVersion: '0.2.2-alpha.2' })
   assert.strictEqual(second.updated, false)
+  assert.strictEqual(second.backup, '')
 })

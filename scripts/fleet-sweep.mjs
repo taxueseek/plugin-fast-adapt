@@ -219,9 +219,17 @@ export function applyCompatAndPeerPatch(pluginDir, { targetVersion = null, peerP
   }
 
   if (changes.length > 0) {
+    // 与 codemod / fix-peer-deps 一致：写用户 package.json 属不可逆改动，落盘前
+    // 先备份原文件到 <插件目录>/.pfa-backup/<时间戳>/，不备份就写会让批量治理
+    // 成为唯一无法回档的自动修补入口。
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+    const backupDir = path.join(path.resolve(pluginDir), '.pfa-backup', stamp)
+    fs.mkdirSync(backupDir, { recursive: true })
+    fs.copyFileSync(pkgPath, path.join(backupDir, 'package.json'))
     fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`, 'utf8')
+    return { updated: true, changes, backup: path.join('.pfa-backup', stamp, 'package.json') }
   }
-  return { updated: changes.length > 0, changes }
+  return { updated: false, changes, backup: '' }
 }
 
 // 全域发现：区分来源、平台形态与挂载配置

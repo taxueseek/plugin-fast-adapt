@@ -11,6 +11,7 @@ import {
   synthesizeGuidesFromDiff,
   saveCachedSignature,
   loadCachedSignature,
+  loadSynthesizedGuides,
 } from '../lib/types-diff.mjs'
 
 test('extractSymbolsFromDts：从类型声明中提取导出符号，注释不误报', () => {
@@ -161,5 +162,34 @@ test('签名本地缓存存取闭环', () => {
   } finally {
     const p = path.join(process.env.HOME || '', '.cache', 'dsh-plugin-fast-adapt', 'signatures', `${version}.json`)
     try { fs.rmSync(p, { force: true }) } catch {}
+  }
+})
+
+test('loadSynthesizedGuides：rootDir 生效，第五个参数不再是摆设', () => {
+  // code-scan 的第五个参数（合成指南目录）此前只当布尔开关用，loadSynthesizedGuides
+  // 仍读硬编码的缓存目录——传别的目录会被静默忽略。这里把指南写进自定义目录，
+  // 断言只有显式传 rootDir 才读到，且默认目录读不到，钉死这条参数链。
+  const dir = tmpPluginDir('synth-dir')
+  try {
+    const guides = [{
+      version: '0.9.9',
+      virtual: true,
+      source: 'types-diff',
+      anchors: { packages: [], members: ['legacyRun'], codes: [] },
+    }]
+    // writeSynthesizedGuides 落默认目录；这里手工按同样的文件名格式写进自定义目录
+    fs.writeFileSync(path.join(dir, '0.9.8.json'), JSON.stringify({ from: '0.9.8', to: '0.9.9', guides }), 'utf8')
+
+    const fromCustom = loadSynthesizedGuides('0.9.8', { rootDir: dir })
+    assert.strictEqual(fromCustom.length, 1, '显式 rootDir 应读到自定义目录里的合成指南')
+    assert.strictEqual(fromCustom[0].source, 'types-diff')
+
+    const fromDefault = loadSynthesizedGuides('0.9.8')
+    assert.strictEqual(fromDefault.length, 0, '自定义目录不写进默认缓存时，默认目录不该凭空出现同基线文件')
+
+    // maxVersion 仍生效：to > maxVersion 时整份丢弃
+    assert.strictEqual(loadSynthesizedGuides('0.9.8', { rootDir: dir, maxVersion: '0.9.0' }).length, 0)
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
   }
 })

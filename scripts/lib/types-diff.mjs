@@ -340,12 +340,13 @@ export function writeSynthesizedGuides(baseVersion, guides) {
  * 读取某个基线版本落盘的合成指南。缺文件或内容损坏一律返回空数组——
  * 消费方（code-scan）不该为合成面的缺失失败，官方指南照常扫。
  * @param {string|null} baseVersion 差分基线（扫描窗口起点）；null 表示不消费
- * @param {{ maxVersion?: string|null }} [opts] 只保留 to <= maxVersion 的指南（防降级窗口吃进未来变更）
+ * @param {{ maxVersion?: string|null, rootDir?: string }} [opts] maxVersion 只保留 to <= maxVersion 的指南（防降级窗口吃进未来变更）；rootDir 覆盖落盘根目录（code-scan 的第五个参数传进来的那个目录），默认取 SYNTHESIZED_GUIDES_DIR
  * @returns {Array<object>} 兼容 loadGuides 形状的指南列表
  */
 export function loadSynthesizedGuides(baseVersion, opts = {}) {
   if (!baseVersion) return []
-  const file = path.join(SYNTHESIZED_GUIDES_DIR, `${baseVersion}.json`)
+  const rootDir = opts.rootDir || SYNTHESIZED_GUIDES_DIR
+  const file = path.join(rootDir, `${baseVersion}.json`)
   if (!fs.existsSync(file)) return []
   try {
     const payload = JSON.parse(fs.readFileSync(file, 'utf8'))

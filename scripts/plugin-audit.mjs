@@ -549,7 +549,7 @@ export function auditPlugin(pluginDir, { scanResult = null, targetVersion = null
 
   // 维度 5：上游常设规则（不随版本变的硬要求）。
   // 与四维分开算、再一起平均：常设规则的命中不该被性能分稀释，也不该反过来淹没版本命中。
-  // 只跑机械可判的四条（lib/standards.mjs 的表），需要意图判断的一律留给 review 车道人工核对。
+  // 只跑机械可判的常设规则（lib/standards.mjs 的表，条数以该表为准），需要意图判断的一律留给 review 车道人工核对。
   const standardsResult = scanStandards(root, { files: sourceFiles })
   report.standards = {
     entry: standardsResult.entry,

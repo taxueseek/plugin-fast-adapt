@@ -14,7 +14,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { findGlobalDsh } from '../env-doctor.mjs'
+import { findGlobalDsh } from './host-discovery.mjs'
 import { removeDirSafely } from './proc-env.mjs'
 
 // 脚手架生成的插件会 import 这些包；缺哪个就少验哪一形态

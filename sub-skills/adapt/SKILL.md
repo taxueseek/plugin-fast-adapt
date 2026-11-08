@@ -142,7 +142,7 @@ node scripts/plugin-audit.mjs <插件目录> --guide <guide-root> <本机版本>
 ## 升级顺带查常设规则（可选）
 
 ```sh
-node scripts/standards-scan.mjs <插件目录>        # 4 条机械可判的常设规则，带回溯出处
+node scripts/standards-scan.mjs <插件目录>        # 7 条机械可判的常设规则，带回溯出处
 node scripts/standards-scan.mjs --rules           # 只看规则表与各自的机械判据
 ```
 
@@ -159,7 +159,7 @@ node scripts/fix-peer-deps.mjs --installed --apply  # 落盘，先备份到 <插
 
 ## 老插件：官方指南覆盖不到时
 
-官方 upgrade-guide 最早只到 dsh-v0.1.7-rc.2。插件更老、目标版本更老，或跨大段历史走廊时，`code-scan` 会报 `guidesConsidered = 0`，这时转 [老插件迁移 SOP](../../references/legacy-migration-sop.md)：用原仓库 [plugin-upgrade skill](https://github.com/oh-my-dsh/dsh-plugin-upgrade-skill/tree/main/skills/plugin-upgrade) 的人工卡片走廊（dsh-v0.1.0-rc.8 起 19 条边加跳版卡）当差异来源，按七阶段 checklist 走：定模式 → 只读准备 → 幽灵宿主检查 → 组装走廊 → 七类触点 → 计划确认 → 六层验证。两套工具的分工速查也在 SOP 里：有 guide 的段用本技能的 `code-scan`，没 guide 的段用原版的 `plan-migration.mjs` 和卡片，运行时验证用原版的 `verify-runtime.mjs`。
+官方 upgrade-guide 最早只到 dsh-v0.1.7-rc.2。插件更老、目标版本更老，或跨大段历史走廊时，`code-scan` 会报 `guidesConsidered = 0`，这时转 [老插件迁移 SOP](../../references/legacy-migration-sop.md)：用原仓库 [plugin-upgrade skill](https://github.com/oh-my-dsh/dsh-plugin-upgrade-skill/tree/main/skills/plugin-upgrade) 的人工卡片走廊（dsh-v0.1.0-rc.8 起 19 条边加跳版卡）当差异来源，按八阶段 checklist 走：定模式 → 只读准备 → 幽灵宿主检查 → 组装走廊 → 七类触点 → 计划确认 → 实施 → 六层验证。两套工具的分工速查也在 SOP 里：有 guide 的段用本技能的 `code-scan`，没 guide 的段用原版的 `plan-migration.mjs` 和卡片，运行时验证用原版的 `verify-runtime.mjs`。
 
 ## 怎么读结果
 

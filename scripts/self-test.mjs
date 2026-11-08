@@ -670,21 +670,27 @@ test('车道文档里的命令脚本都在工具根存在，且声明了工具�
   assert.ok(checked >= 10, `应至少核对 10 处命令，实际 ${checked} 处`)
 })
 
-test('主技能脚本清单双向对齐：正文引用的脚本存在，清单不漏脚本', () => {
-  // 上一条只锁三条车道；cli.mjs 曾只存在于 scripts/ 而不在主技能清单里
+test('主技能与两份 README 的脚本清单双向对齐：正文引用的脚本存在，清单不漏脚本', () => {
+  // 上一条只锁三条车道；cli.mjs 曾只存在于 scripts/ 而不在主技能清单里。
+  // 后来两份 README 的清单也各漏 5 个脚本，只因门禁只查 SKILL.md 才没拦住，
+  // 所以把三份文档一起收进这张网：脚本集合只有一份，清单就不该有三套说法。
   const root = path.resolve(import.meta.dirname, '..')
-  const main = fs.readFileSync(path.join(root, 'SKILL.md'), 'utf8')
-  let referenced = 0
-  for (const m of main.matchAll(/node (scripts\/[\w./-]+\.mjs)/g)) {
-    assert.ok(fs.existsSync(path.join(root, m[1])), `SKILL.md 引用的 ${m[1]} 不存在`)
-    referenced++
-  }
-  assert.ok(referenced >= 3, `主技能应至少引用 3 处命令，实际 ${referenced} 处`)
-  const listed = new Set([...main.matchAll(/^\| `([\w-]+\.mjs)` \|/gm)].map((m) => m[1]))
-  assert.ok(listed.size >= 15, `脚本清单表应至少 15 行，实际 ${listed.size}`)
-  for (const f of fs.readdirSync(path.join(root, 'scripts'))) {
-    if (!f.endsWith('.mjs')) continue
-    assert.ok(listed.has(f), `scripts/${f} 未进 SKILL.md 脚本清单表`)
+  const docs = ['SKILL.md', 'README.md', 'README.en.md']
+  const scriptFiles = fs.readdirSync(path.join(root, 'scripts')).filter((f) => f.endsWith('.mjs'))
+  for (const doc of docs) {
+    const text = fs.readFileSync(path.join(root, doc), 'utf8')
+    let referenced = 0
+    for (const m of text.matchAll(/node (scripts\/[\w./-]+\.mjs)/g)) {
+      assert.ok(fs.existsSync(path.join(root, m[1])), `${doc} 引用的 ${m[1]} 不存在`)
+      referenced++
+    }
+    assert.ok(referenced >= 3, `${doc} 应至少引用 3 处命令，实际 ${referenced} 处`)
+    // SKILL.md 写 `run.mjs`，两份 README 写 `scripts/run.mjs`，前缀可省。
+    const listed = new Set([...text.matchAll(/^\| `((?:scripts\/)?[\w-]+\.mjs)` \|/gm)].map((m) => m[1].replace(/^scripts\//, '')))
+    assert.ok(listed.size >= 15, `${doc} 脚本清单表应至少 15 行，实际 ${listed.size}`)
+    for (const f of scriptFiles) {
+      assert.ok(listed.has(f), `scripts/${f} 未进 ${doc} 脚本清单表`)
+    }
   }
 })
 
@@ -707,6 +713,39 @@ test('文档宣称的断言数与实际一致（防手工漂移）', () => {
     checked += numbers.length
   }
   assert.ok(checked >= 5, `应至少核对 5 处断言数，实际 ${checked} 处`)
+})
+
+test('文档安全姿态与常设规则条数对齐代码（防 README 与代码各说各话）', () => {
+  const root = path.resolve(import.meta.dirname, '..')
+  const read = (f) => fs.readFileSync(path.join(root, f), 'utf8')
+  const main = read('SKILL.md')
+  const zh = read('README.md')
+  const en = read('README.en.md')
+  const adapt = read('sub-skills/adapt/SKILL.md')
+
+  // 1. 自动修补已不止两类：codemod / fix-peer-deps 之外还有 fleet-sweep
+  //    --apply-compat 写 package.json（已补备份）。三份文档都不能再宣称「从不改插件代码」。
+  assert.ok(!/不自动改插件代码/.test(zh), 'README.md 仍宣称「不自动改插件代码」，与 codemod/fix-peer-deps/fleet-sweep 的三个写盘入口矛盾')
+  assert.ok(!/Never edits plugin code automatically/.test(en), 'README.en.md 仍宣称从不自动改插件代码')
+  for (const [name, text] of [['SKILL.md', main], ['README.md', zh], ['README.en.md', en]]) {
+    // 只看安全姿态那几行：正文清单表本来就列了 fleet-sweep.mjs，全篇搜会假绿。
+    const safetyLines = text.split('\n').filter((l) => /自动修补|自动改插件代码|Automatic plugin-code edits|三类/.test(l)).join('\n')
+    assert.ok(/fleet-sweep/.test(safetyLines), `${name} 的安全姿态未把 fleet-sweep --apply-compat 列入自动修补边界`)
+  }
+
+  // 2. run-log 的 sanitize --out 会写文件，文档必须如实披露这一例外，不能只写
+  //    「完全只读」。这里锁披露句而非禁掉 run-log 字样——正确的文档本来就要点名它。
+  for (const [name, text] of [['SKILL.md', main], ['README.md', zh], ['README.en.md', en]]) {
+    assert.ok(/sanitize --out/.test(text), `${name} 未披露 run-log 的 sanitize --out 写盘例外`)
+    const line = text.split('\n').find((l) => /完全只读|完全不写文件|strictly read-only/.test(l))
+    assert.ok(line && /sanitize --out/.test(line), `${name} 的只读清单行未在同行披露 run-log 的 sanitize --out 例外`)
+  }
+
+  // 3. 常设规则是 7 条（SKILL.md 与规则表双向对账），sub-skill 的「4 条」是旧文案。
+  const m = main.match(/机械可判的 (\d+) 条 `standards-scan`/)
+  assert.ok(m, 'SKILL.md 来源表缺规则条数')
+  assert.ok(adapt.includes(`${m[1]} 条机械可判的常设规则`), `sub-skills/adapt/SKILL.md 的常设规则条数应与 SKILL.md 的 ${m[1]} 条一致`)
+  assert.ok(!/只跑机械可判的四条/.test(read('scripts/plugin-audit.mjs')), 'plugin-audit.mjs 注释仍写「四条」')
 })
 
 

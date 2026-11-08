@@ -53,7 +53,7 @@ node scripts/run.mjs <插件目录路径> [选项]
 ### 1. 流水线执行阶段
 
 ```
-[环境探测] ──> [版本锚定] ──> [指南提取] ──> [源码扫描] ──> [产物构建核验] ──> [内存冒烟] ──> [四维体检] ──> [落盘日志]
+[环境探测] ──> [版本锚定] ──> [指南提取] ──> [源码扫描] ──> [产物构建核验] ──> [四维体检] ──> [内存冒烟] ──> [typecheck] ──> [落盘日志]
 ```
 
 1. **环境探测**：自动识别插件形态（Tool、Hook、Service、Client Extension、Workspace）。
@@ -61,9 +61,10 @@ node scripts/run.mjs <插件目录路径> [选项]
 3. **指南提取**：优先复用本地缓存指南；如未命中且允许时提取官方分支快照或 Release Note 破坏性变更虚拟指南。
 4. **源码扫描**：精准降噪匹配破坏性变更锚点，报出具体命中代码位置、指南出处与官方修法。
 5. **构建态硬拦截**：针对 TypeScript 插件，物理核查编译产物（如 `lib/index.js`），未编译立即拦截并指引 `pnpm run build`，杜绝未构建代码参与冒烟。
-6. **内存级冒烟（Quick Smoke）**：百毫秒级 Cordis 运行时装载，验证服务依赖注册与契约完整性。
-7. **四维架构审计**：给出性能、弹性、上下文预算、生命周期的量化评分（0-100）。
-8. **本地日志**：生成运行日志留痕，支持后续交叉诊断与脱敏导出。
+6. **四维架构审计**：给出性能、弹性、上下文预算、生命周期的量化评分（0-100），复用扫描结果交叉版本建议。
+7. **内存级冒烟（Quick Smoke）**：百毫秒级 Cordis 运行时装载，验证服务依赖注册与契约完整性。
+8. **typecheck**：执行插件自有的 `typecheck` script，与冒烟同信任级，默认开启，`--no-typecheck` 可跳过。
+9. **本地日志**：生成运行日志留痕，支持后续交叉诊断与脱敏导出（真冷启动 `--real-smoke` 为默认关闭的可选档位）。
 
 ### 2. 常用参数速查
 
@@ -73,7 +74,7 @@ node scripts/run.mjs <插件目录路径> [选项]
 | `--check-upstream` | 显式核对上游官方 npm registry 与最新 tag，提示落差 |
 | `--target <版本>` | 显式指定要适配的目标宿主版本（如 `0.2.2-alpha.2`） |
 | `--from <版本>` | 显式指定适配窗口起点版本（默认取 package.json peerDependencies 下限） |
-| `--real-smoke` | 启用官方真实宿主冷启动验证（在隔离 profile 中真实挂载执行，耗时约 3~5 秒） |
+| `--real-smoke` | 启用官方真实宿主冷启动验证（在隔离 profile 中真实安装并启动宿主，桥接 verify-runtime，耗时远长于毫秒级内存冒烟，默认关闭） |
 | `--strict` | 严格模式：扫描未执行或指南覆盖不全时一律以退出码 2 退出 |
 | `--no-smoke` | 跳过冒烟测试，仅跑扫描与四维体检 |
 | `--offline` | 完全离线模式，禁止任何形式的网络同步尝试 |
@@ -199,9 +200,9 @@ node scripts/fleet-sweep.mjs --workspace --target 0.2.2-alpha.2 --apply-compat
    ```
 
 ### 场景 C：从零开发一个全新形态的插件并验证
-1. 一键生成标准插件脚手架（可选 tool、hook、service、client-ext 等形态）：
+1. 一键生成标准插件脚手架（可选 tool、hook、service、config、llm-adapter 五种形态）：
    ```sh
-   node scripts/scaffold.mjs my-awesome-tool --type tool --dir ./my-plugin
+   node scripts/scaffold.mjs demo/my-awesome-tool --form tool --out ./my-plugin
    ```
 2. 进入目录完成业务逻辑编写与构建：
    ```sh
