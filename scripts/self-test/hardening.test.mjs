@@ -113,7 +113,8 @@ test('备份：三个自动修补入口共用同一形状，没改动时返回 N
 
     const res = backupBeforeWrite(dir, ['package.json', 'missing-file.js'])
     assert.ok(res.backupDir.startsWith(dir), 'backupDir 应是绝对路径')
-    assert.strictEqual(res.backupRel, path.join(BACKUP_DIR_NAME, path.basename(res.backupDir)))
+    // backupRel 是报告字符串，统一 posix 分隔符（Windows 上也不出现反斜杠）
+    assert.strictEqual(res.backupRel, path.posix.join(BACKUP_DIR_NAME, path.basename(res.backupDir)))
     assert.deepStrictEqual(res.backupFiles, ['package.json'], '不存在的源文件跳过，不报错也不进列表')
     assert.ok(fs.existsSync(path.join(res.backupDir, 'package.json')))
 

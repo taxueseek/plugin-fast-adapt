@@ -1458,8 +1458,14 @@ test('sync-skill 提交命令建议：git 仓给只 add 同步路径的命令，
 
     const cmd = suggestCommitCommand({ srcRoot: tool, destRoot: dest })
     const realMirror = fs.realpathSync(mirror)
-    assert.ok(cmd, '两侧都是 git 仓应给出命令')
-    assert.ok(cmd.includes(`git -C "${realMirror}" add "skills/plugin-fast-adapt"`), 'add 路径应为 dest 相对仓根（realpath 后防 /var 软链前缀错位）')
+    assert.ok(cmd, `两侧都是 git 仓应给出命令，实际 ${cmd}`)
+    // 分隔符归一后比对：Windows 上路径是反斜杠，断言只关心相对路径逻辑；
+    // 失败信息带实际命令，下一轮差异直接可见（2026-11-08 Windows CI 实录）
+    const norm = (s) => s.split('\\').join('/')
+    assert.ok(
+      norm(cmd).includes(`${norm(`git -C "${realMirror}"`)} add "skills/plugin-fast-adapt"`),
+      `add 路径应为 dest 相对仓根（realpath 后防 /var 软链前缀错位），实际 ${cmd}`,
+    )
     assert.ok(/同步独立仓 [0-9a-f]{7,}/.test(cmd), 'commit 主题应带真源短 commit')
     fs.rmSync(tool, { recursive: true, force: true })
     fs.rmSync(mirror, { recursive: true, force: true })
