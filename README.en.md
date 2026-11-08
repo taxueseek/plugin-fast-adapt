@@ -18,7 +18,7 @@
 | Verifying one change | 3,600 s real host cold start → millisecond-scale in-memory smoke test (with unbuilt check & host module fallback) |
 | Ghost host | Warns when the disk has new code but the running process still executes the old one (compares process start time, not version strings) |
 | Fake-green check | Warns when `tsconfig` `paths` point at a missing checkout, where TypeScript silently falls back to published types |
-| Self-test | 250 assertions, runs offline |
+| Self-test | 261 assertions, runs offline |
 | External dependencies | 0 (Node built-ins + the `git`/`npm` commands only) |
 | Cross-platform | Native support for macOS, Linux standard paths, Termux Android, and containers (XDG-compliant) |
 | Scaffolding | One command emits a runnable plugin in five forms, verified on creation, then a write gate issues the birth certificate |
@@ -48,7 +48,7 @@ This project takes a different approach: **maintain the method of obtaining know
 - **Cross-platform & container ready**: eliminates hardcoded directory assumptions, supporting Linux standard paths (`/usr/lib/node_modules`), Termux on Android (`$PREFIX/lib/node_modules`), `npm_config_prefix`, `DSH_HOST_PATH` / `DSH_LOCATION` env overrides, and XDG cache specs
 - **Cheap verification**: in-memory Cordis smoke test returns in milliseconds to seconds without a real host cold start; `--real-smoke` provides real-host isolated profile boot verification
 - **Zero external dependencies**: Node built-ins plus `git`/`npm` commands only
-- **Reproducible**: 250 assertions, runs offline; CI runs on ubuntu, macOS, and Windows
+- **Reproducible**: 261 assertions, runs offline; CI runs on ubuntu, macOS, and Windows
 - **More than adaptation**: `scaffold.mjs` emits a runnable plugin in five forms in one command, and `write-gate.mjs` issues a birth certificate
 - **Silent failures have hard evidence**: `ghostHost` compares process start time against disk change time; `falseGreen` catches TypeScript silent fallbacks
 - **Honest about its limits**: passing smoke test ≠ host compatibility, and the tool states this clearly in its output
@@ -236,7 +236,7 @@ No TypeScript, no AST library, no HTTP client. Runs on Node 22.13+ (`import.meta
 Self-test:
 
 ```sh
-npm test   # node scripts/self-test.mjs, 250 assertions
+npm test   # node scripts/self-test.mjs, 261 assertions
 ```
 
 Contributors should enable the pre-commit gate (one time): `git config core.hooksPath .githooks` — every commit runs the self-test, so a forgotten downstream sync is caught at commit time.
@@ -272,7 +272,11 @@ To gate your own plugin's repository at commit time (smoke/typecheck as hard gat
 | `scripts/self-test.mjs` | Self-test |
 | `scripts/lib/scanner.mjs` | Lexical scanner and version comparison (zero-dependency) |
 | `scripts/lib/guide-parser.mjs` | Official guide parsing and anchor extraction |
+| `scripts/lib/runlog.mjs` | Run-log writing, indexing and sanitisation |
 | `scripts/lib/host-modules.mjs` | Resolves the host `@deepseek-ai/*` base classes and runs the real-base-class load check |
+| `scripts/lib/package-json.mjs` | Single source for reading `package.json`: strips UTF-8 BOM, lenient/strict modes, missing/corrupt/ok tri-state |
+| `scripts/lib/cache-root.mjs` | Single source for the cache root (`DSH_PFA_CACHE_DIR` > `DSH_CACHE_DIR` > `XDG_CACHE_HOME` > `~/.cache`); self-test can isolate it |
+| `scripts/lib/backup.mjs` | Shared backup contract for the three autofix entry points: `{ backupDir, backupFiles, backupRel }`, `NO_BACKUP` when nothing changed |
 | `references/user-guide.md` | Comprehensive user guide (local anchoring, cross-platform adaptability, Web/APP fleet governance, guardrails) |
 | `references/legacy-migration-sop.md` | Legacy migration SOP (for ranges the official guide does not cover) |
 | `references/heuristics.md` | Scan noise-reduction rules and the measurements behind them |
@@ -285,6 +289,8 @@ To gate your own plugin's repository at commit time (smoke/typecheck as hard gat
 - `sync-skill` writes to a downstream skill directory explicitly, copying only the fixed skill surface (`SKILL.md`/`README*`/`references`/`scripts`/`sub-skills`); `--check`/`--dry-run` let you inspect first
 - Never modifies DSH itself, nor config or profile declarations under `~/.dsh`
 - Automatic plugin-code edits are limited to three mechanically-decidable classes, always with a backup first: `codemod` (Loader entry exports, top-level await), `fix-peer-deps` (host core package peer relocation) and `fleet-sweep --apply-compat` (batch `package.json` compatibility ledger and peer ranges). All report by default and write only with `--apply`/`--apply-compat`, backing up the original to `<plugin>/.pfa-backup/<timestamp>/`. Everything else reports findings and vendor fixes only; `plugin-audit --peer-patch` also prints rather than applies
+- `.pfa-backup/` is the local snapshot taken before an autofix; it is listed in the release gate's `FORBIDDEN_PACK` and in the `.gitignore` that scaffold generates, because `npm pack` does include it (measured) and the backup holds the pre-edit `package.json`
+- The cache root is injectable (`DSH_PFA_CACHE_DIR` > `DSH_CACHE_DIR` > `XDG_CACHE_HOME` > `~/.cache`); the self-test points it at a temp directory on startup and never writes the real user cache
 - Network is used only for "fetching vendor sources": version resolution reads npm `dist-tags`, guide fetching clones the official repo. Both have timeouts and report failures explicitly instead of silently skipping; `dist-tags` is cached for 1 hour and degrades to the stale cache with a `stale` marker; guides reuse an existing local clone first, and `--no-clone` skips the fetch
 
 ## Legacy plugins

@@ -18,6 +18,7 @@ import path from 'node:path'
 import { scanStandards, standardsScore, STANDARDS_RULES } from './lib/standards.mjs'
 import { findSourceFiles, pickScanRoots } from './code-scan.mjs'
 import { printJson } from './lib/scanner.mjs'
+import { probePackageJson } from './lib/package-json.mjs'
 
 function parseArgs(argv) {
   const out = { dir: null, json: false, compact: false, rules: false, focusRule: null }
@@ -169,10 +170,18 @@ export function runStandardsScan(argv = process.argv.slice(2)) {
     return 1
   }
 
-  let pkg = null
-  try {
-    pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'))
-  } catch {}
+  // 三态：missing 是正常形态（纯脚本目录），corrupt 必须报出来。
+  // 旧实现把 corrupt 吞成 null 继续跑，最后输出「常设规则分 100/100」——
+  // 把「读不出插件元信息」伪装成「查干净了」，比崩溃更坏。
+  const probe = probePackageJson(dir)
+  if (probe.status === 'corrupt') {
+    process.stderr.write(
+      `package.json 解析失败${probe.bom ? '（文件带 UTF-8 BOM）' : ''}：${probe.error}\n` +
+        `  修好再扫；本轮不产出评分，避免把读不出元信息当成查干净。\n`,
+    )
+    return 2
+  }
+  const pkg = probe.pkg
   const graph = readLoadedModuleGraph(dir, pkg)
   // 包面没有任何可加载入口（纯工具仓的极端形态）时退回源码根，避免「零文件零命中」冒充干净
   const sources = graph.files.length ? graph.files : readPluginSources(dir)

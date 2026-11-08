@@ -202,10 +202,6 @@ function normalizeSymbol(raw) {
     .trim()
 }
 
-import os from 'node:os'
-
-const RELEASES_CACHE_DIR = path.join(os.homedir(), '.cache', 'dsh-plugin-fast-adapt', 'releases')
-
 // 从 GitHub Release 文本中抽取出虚拟指南条目
 export function parseReleaseNotesToGuides(releaseText, version) {
   if (!releaseText) return []

@@ -2,7 +2,7 @@
 
 **简体中文** | [English](README.en.md)
 
-[![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D22.13-blue.svg)](package.json) [![外部依赖](https://img.shields.io/badge/外部依赖-0-blue.svg)](#依赖与自检) [![自检](https://img.shields.io/badge/自检-250项断言-brightgreen.svg)](#依赖与自检)
+[![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D22.13-blue.svg)](package.json) [![外部依赖](https://img.shields.io/badge/外部依赖-0-blue.svg)](#依赖与自检) [![自检](https://img.shields.io/badge/自检-261项断言-brightgreen.svg)](#依赖与自检)
 
 > **DSH 每次发新版，老插件就可能启动不了。** 这个技能直连 DeepSeek 官方升级指南，扫你的插件代码，报出踩了哪几条破坏性变更、官方给的修法是什么；还能一条命令从零造出可运行的插件。**已适配到 0.2.2-rc.1**：该版官方还没写指南条目，官方 Release Note 被当作虚拟指南一并纳入，因此覆盖度仍判 `complete=true`；再新的版本如果既无指南也无发布说明，账本会明说「不能当查干净」。支持本地环境权威锚定、Release Note 破坏性变更提取与整机集群多维批量治理。
 
@@ -18,7 +18,7 @@
 | 验证一次改动 | 3600 秒真宿主冷启动 → 毫秒级内存冒烟（支持未构建产物硬拦截与宿主模块软链兜底） |
 | 幽灵宿主 | 磁盘已换新、进程还在跑旧代码时报警（比进程启动时间，不读版本号） |
 | 假绿检测 | `tsconfig` 的 `paths` 指向不存在的 checkout 时报警（本地门禁可能全绿而实际已坏） |
-| 自检 | 250 项断言，离线可跑 |
+| 自检 | 261 项断言，离线可跑 |
 | 外部依赖 | 0（只用 Node 内置模块 + `git`/`npm` 命令） |
 | 跨平台 | 原生支持 macOS、Linux 标准路径、Termux 移动端与容器环境（支持 XDG 规范） |
 | 造插件 | 一条命令出五形态可运行插件，生成即验证 |
@@ -48,7 +48,7 @@ DSH（DeepSeek Harness）是一个「所有功能都以插件形式存在」的 
 - **跨平台与容器自适应**：消除绝对路径硬编码，扩展适配 Linux 发行版标准路径（`/usr/lib/node_modules`）、Termux 移动端（`$PREFIX/lib/node_modules`）与 `npm_config_prefix`，支持环境变量 `DSH_HOST_PATH` / `DSH_LOCATION` 直接覆盖，严格遵循 XDG 缓存规范
 - **验证便宜**：内存级 Cordis 冒烟毫秒到秒级出结果，不用真宿主冷启动；需要真证据时 `--real-smoke` 再补干净 profile 真装真启档
 - **零外部依赖**：只用 Node 内置模块加 `git`/`npm` 命令，没有 TypeScript、没有 AST 库、没有网络请求库
-- **可复现**：250 项自检离线可跑；CI 在 push 和 PR 上跑 ubuntu/macOS/Windows 三平台，打 tag 时另跑发布预检
+- **可复现**：261 项自检离线可跑；CI 在 push 和 PR 上跑 ubuntu/macOS/Windows 三平台，打 tag 时另跑发布预检
 - **不止适配**：`scaffold.mjs` 一条命令生成五形态可运行插件（真基类装载验证），`write-gate.mjs` 写完出「出生证」
 - **静默失败有判据**：`ghostHost` 比对进程启动时间与磁盘变更时间，抓「磁盘新版、内存旧版」；`falseGreen` 抓 `tsconfig` 的 `paths` 指向不存在 checkout 时 TypeScript 的静默回落。两条都只报不判，证据写在输出里
 - **边界诚实**：冒烟通过不等于宿主兼容，这句话写在工具输出里；体检的软指标只透传，不替用户说「合格」
@@ -232,7 +232,7 @@ node scripts/write-gate.mjs <插件目录>   # 出生证：硬门禁自动判，
 自检：
 
 ```sh
-npm test   # node scripts/self-test.mjs，250 项断言
+npm test   # node scripts/self-test.mjs，261 项断言
 ```
 
 开发者建议启用提交前门禁（一次性）：`git config core.hooksPath .githooks`——commit 时自动跑自检，改完真源忘了 sync-skill 在这一刻被拦。
@@ -270,6 +270,9 @@ npm test   # node scripts/self-test.mjs，250 项断言
 | `scripts/lib/guide-parser.mjs` | 官方指南解析与锚点抽取（含移除动词语义门） |
 | `scripts/lib/runlog.mjs` | 运行日志写入、索引与脱敏 |
 | `scripts/lib/host-modules.mjs` | 解析本机宿主的 `@deepseek-ai/*` 基类模块，做真基类装载验证 |
+| `scripts/lib/package-json.mjs` | `package.json` 读取唯一真源：剥 UTF-8 BOM、宽松/严格两档、missing/corrupt/ok 三态 |
+| `scripts/lib/cache-root.mjs` | 缓存根唯一真源（`DSH_PFA_CACHE_DIR` > `DSH_CACHE_DIR` > `XDG_CACHE_HOME` > `~/.cache`），自检可隔离 |
+| `scripts/lib/backup.mjs` | 三个自动修补入口共用的备份约定：`{ backupDir, backupFiles, backupRel }`，没改动返回 `NO_BACKUP` |
 | `references/user-guide.md` | 完整实战指南（本地锚定、跨平台自适应、Web/APP 集群治理矩阵与低级错误守卫） |
 | `references/legacy-migration-sop.md` | 老插件迁移 SOP（官方指南覆盖不到时的对照手册） |
 | `references/heuristics.md` | 扫描降噪规则与实测依据 |
@@ -282,6 +285,8 @@ npm test   # node scripts/self-test.mjs，250 项断言
 - `sync-skill` 显式写下游技能目录，只复制固定技能面（`SKILL.md`/`README*`/`references`/`scripts`/`sub-skills`），`--check`/`--dry-run` 供先确认
 - 不改 DSH 本体，不动 `~/.dsh` 下的配置和 profile 声明
 - 自动改插件代码只限判据纯机械的三类，且先备份后落盘：`codemod`（Loader 入口导出面、顶层 await）、`fix-peer-deps`（宿主核心包 peer 挪位）与 `fleet-sweep --apply-compat`（批量写 `package.json` 兼容账本与 Peer 范围）默认只报，`--apply`/`--apply-compat` 才落盘，原文件先备份到 `<插件目录>/.pfa-backup/<时间戳>/`。除此之外一律只报命中和官方修法；`plugin-audit --peer-patch` 也只打印建议
+- `.pfa-backup/` 是自动修补前的本地现场，已进发布门禁的 `FORBIDDEN_PACK` 与 scaffold 生成的 `.gitignore`：实测 `npm pack` 会把它打进 tarball，而备份里是改动前的 `package.json`
+- 缓存根可注入（`DSH_PFA_CACHE_DIR` > `DSH_CACHE_DIR` > `XDG_CACHE_HOME` > `~/.cache`），自检启动即指向临时目录，不写真实用户缓存
 - 网络只用在「取官方源」这一步：定版本读 npm 的 dist-tags，取指南 clone 官方仓库。两处都有超时，失败明确报错而不是静默跳过；dist-tags 有 1 小时缓存，失败时降级用旧缓存并标 stale；指南优先复用本机已有 clone，`--no-clone` 可跳过
 
 ## 老插件怎么办

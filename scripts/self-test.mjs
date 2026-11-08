@@ -38,6 +38,18 @@ import { correlateRuns } from './run-log.mjs'
 
 const SCRIPTS = path.dirname(fileURLToPath(import.meta.url))
 
+// 缓存根隔离：与 DSH_PFA_RUNS_DIR 同一条纪律——自检不许写真实用户缓存。
+// 此前 types-diff 的 CACHE_ROOT 是模块级常量、无注入点，`签名本地缓存存取闭环`
+// 会去写 ~/.cache，在只读 HOME 或沙箱里直接 EPERM 失败，同一份自检在别的机器上
+// 又是绿的。这里在 import 各节之前就改环境变量，缓存根每次调用时求值。
+const SELF_TEST_CACHE = fs.mkdtempSync(path.join(os.tmpdir(), 'fast-adapt-cache-'))
+process.env.DSH_PFA_CACHE_DIR = SELF_TEST_CACHE
+process.on('exit', () => {
+  try {
+    fs.rmSync(SELF_TEST_CACHE, { recursive: true, force: true })
+  } catch {}
+})
+
 // 用例登记与运行已抽到 scripts/self-test/harness.mjs；章节按节拆到同目录的
 // *.test.mjs，本文件只 import 各节并执行（2200 行体积门禁，见文件末）。
 import { test, tmpPluginDir, runTests, tests } from './self-test/harness.mjs'
@@ -54,6 +66,8 @@ import './self-test/standards.test.mjs'
 import './self-test/codemod.test.mjs'
 import './self-test/types-diff.test.mjs'
 import './self-test/plugin-form.test.mjs'
+import './self-test/hardening.test.mjs'
+import './self-test/docs.test.mjs'
 
 process.stderr.write('plugin-fast-adapt 自检\n\n')
 
@@ -654,99 +668,6 @@ test('三条车道结构完整，主技能有路由表', () => {
   }
 })
 
-test('车道文档里的命令脚本都在工具根存在，且声明了工具根工作目录', () => {
-  // 车道目录以软链别名单独加载时没有 scripts/，旧文档写「在技能根执行」会指向不存在的路径
-  const root = path.resolve(import.meta.dirname, '..')
-  let checked = 0
-  for (const lane of ['adapt', 'build', 'diagnose']) {
-    const text = fs.readFileSync(path.join(root, 'sub-skills', lane, 'SKILL.md'), 'utf8')
-    assert.ok(text.includes('工具根目录执行'), `sub-skills/${lane} 应声明命令在工具根目录执行`)
-    assert.ok(!text.includes('技能根目录执行'), `sub-skills/${lane} 仍写「技能根目录执行」，单独加载时找不到 scripts/`)
-    for (const m of text.matchAll(/node (scripts\/[\w./-]+\.mjs)/g)) {
-      assert.ok(fs.existsSync(path.join(root, m[1])), `sub-skills/${lane} 引用的 ${m[1]} 不存在`)
-      checked++
-    }
-  }
-  assert.ok(checked >= 10, `应至少核对 10 处命令，实际 ${checked} 处`)
-})
-
-test('主技能与两份 README 的脚本清单双向对齐：正文引用的脚本存在，清单不漏脚本', () => {
-  // 上一条只锁三条车道；cli.mjs 曾只存在于 scripts/ 而不在主技能清单里。
-  // 后来两份 README 的清单也各漏 5 个脚本，只因门禁只查 SKILL.md 才没拦住，
-  // 所以把三份文档一起收进这张网：脚本集合只有一份，清单就不该有三套说法。
-  const root = path.resolve(import.meta.dirname, '..')
-  const docs = ['SKILL.md', 'README.md', 'README.en.md']
-  const scriptFiles = fs.readdirSync(path.join(root, 'scripts')).filter((f) => f.endsWith('.mjs'))
-  for (const doc of docs) {
-    const text = fs.readFileSync(path.join(root, doc), 'utf8')
-    let referenced = 0
-    for (const m of text.matchAll(/node (scripts\/[\w./-]+\.mjs)/g)) {
-      assert.ok(fs.existsSync(path.join(root, m[1])), `${doc} 引用的 ${m[1]} 不存在`)
-      referenced++
-    }
-    assert.ok(referenced >= 3, `${doc} 应至少引用 3 处命令，实际 ${referenced} 处`)
-    // SKILL.md 写 `run.mjs`，两份 README 写 `scripts/run.mjs`，前缀可省。
-    const listed = new Set([...text.matchAll(/^\| `((?:scripts\/)?[\w-]+\.mjs)` \|/gm)].map((m) => m[1].replace(/^scripts\//, '')))
-    assert.ok(listed.size >= 15, `${doc} 脚本清单表应至少 15 行，实际 ${listed.size}`)
-    for (const f of scriptFiles) {
-      assert.ok(listed.has(f), `scripts/${f} 未进 ${doc} 脚本清单表`)
-    }
-  }
-})
-
-test('文档宣称的断言数与实际一致（防手工漂移）', () => {
-  // 这个数字已漂过两次（49→50→54 都是事后手补）；现在让自检拦住它
-  const root = path.resolve(import.meta.dirname, '..')
-  const docs = ['SKILL.md', 'README.md', 'README.en.md'].map((f) => path.join(root, f))
-  let checked = 0
-  for (const doc of docs) {
-    const text = fs.readFileSync(doc, 'utf8')
-    const numbers = [
-      ...text.matchAll(/(\d+)\s*项断言/g),
-      ...text.matchAll(/(\d+)\s*项自检/g),
-      ...text.matchAll(/(\d+)\s*assertions/g),
-    ].map((m) => Number(m[1]))
-    assert.ok(numbers.length > 0, `${path.basename(doc)} 应写明断言数，否则本断言失去保护对象`)
-    for (const n of numbers) {
-      assert.strictEqual(n, tests.length, `${path.basename(doc)} 宣称 ${n} 项断言，实际 ${tests.length} 项`)
-    }
-    checked += numbers.length
-  }
-  assert.ok(checked >= 5, `应至少核对 5 处断言数，实际 ${checked} 处`)
-})
-
-test('文档安全姿态与常设规则条数对齐代码（防 README 与代码各说各话）', () => {
-  const root = path.resolve(import.meta.dirname, '..')
-  const read = (f) => fs.readFileSync(path.join(root, f), 'utf8')
-  const main = read('SKILL.md')
-  const zh = read('README.md')
-  const en = read('README.en.md')
-  const adapt = read('sub-skills/adapt/SKILL.md')
-
-  // 1. 自动修补已不止两类：codemod / fix-peer-deps 之外还有 fleet-sweep
-  //    --apply-compat 写 package.json（已补备份）。三份文档都不能再宣称「从不改插件代码」。
-  assert.ok(!/不自动改插件代码/.test(zh), 'README.md 仍宣称「不自动改插件代码」，与 codemod/fix-peer-deps/fleet-sweep 的三个写盘入口矛盾')
-  assert.ok(!/Never edits plugin code automatically/.test(en), 'README.en.md 仍宣称从不自动改插件代码')
-  for (const [name, text] of [['SKILL.md', main], ['README.md', zh], ['README.en.md', en]]) {
-    // 只看安全姿态那几行：正文清单表本来就列了 fleet-sweep.mjs，全篇搜会假绿。
-    const safetyLines = text.split('\n').filter((l) => /自动修补|自动改插件代码|Automatic plugin-code edits|三类/.test(l)).join('\n')
-    assert.ok(/fleet-sweep/.test(safetyLines), `${name} 的安全姿态未把 fleet-sweep --apply-compat 列入自动修补边界`)
-  }
-
-  // 2. run-log 的 sanitize --out 会写文件，文档必须如实披露这一例外，不能只写
-  //    「完全只读」。这里锁披露句而非禁掉 run-log 字样——正确的文档本来就要点名它。
-  for (const [name, text] of [['SKILL.md', main], ['README.md', zh], ['README.en.md', en]]) {
-    assert.ok(/sanitize --out/.test(text), `${name} 未披露 run-log 的 sanitize --out 写盘例外`)
-    const line = text.split('\n').find((l) => /完全只读|完全不写文件|strictly read-only/.test(l))
-    assert.ok(line && /sanitize --out/.test(line), `${name} 的只读清单行未在同行披露 run-log 的 sanitize --out 例外`)
-  }
-
-  // 3. 常设规则是 7 条（SKILL.md 与规则表双向对账），sub-skill 的「4 条」是旧文案。
-  const m = main.match(/机械可判的 (\d+) 条 `standards-scan`/)
-  assert.ok(m, 'SKILL.md 来源表缺规则条数')
-  assert.ok(adapt.includes(`${m[1]} 条机械可判的常设规则`), `sub-skills/adapt/SKILL.md 的常设规则条数应与 SKILL.md 的 ${m[1]} 条一致`)
-  assert.ok(!/只跑机械可判的四条/.test(read('scripts/plugin-audit.mjs')), 'plugin-audit.mjs 注释仍写「四条」')
-})
 
 
 // ── guide-sync dist-tags 缓存 ────────────────────────────────────────────────
@@ -803,7 +724,9 @@ test('runGuideSync 缓存根可注入：合成元数据只落指定根，真实�
   fs.writeFileSync(path.join(localClone, 'docs', 'upgrade-guide', 'v0.2.1-rc.2', 'topic', 'guide.md'), '# x\n')
   const distTags = { latest: '0.2.1-rc.2', next: '0.2.1-rc.3', alpha: '0.2.1-alpha.5' }
   const fetcher = async () => ({ ok: true, json: async () => distTags })
-  const realCache = path.join(os.homedir(), '.cache', 'dsh-plugin-fast-adapt', 'npm-metadata.json')
+  // 真实缓存根现在由 DSH_PFA_CACHE_DIR 指向自检临时目录，这里断言的是
+  // 「注入的 cacheRoot 之外没有任何写入」——用默认根（即自检临时根）做对照。
+  const realCache = path.join(process.env.DSH_PFA_CACHE_DIR, 'npm-metadata.json')
   const realBefore = fs.existsSync(realCache) ? fs.readFileSync(realCache, 'utf8') : null
   const result = await runGuideSync('0.2.1-rc.2', { fetcher, localClone, cacheRoot })
   assert.strictEqual(result.metadataSource, 'network')
@@ -1257,10 +1180,19 @@ test('run：离线全链编排产出统一报告并写日志；sanitize 脱敏�
     assert.strictEqual(runs[0].plugin, 't-run')
     assert.ok(runs[0].toolVersion || runs[0].toolCommit, '索引应记录工具版本或 commit（独立 skill 拷贝无 package.json 时由 commit 兜底）')
 
-    // 脱敏：home 与用户名不出现在脱敏输出里
+    // 脱敏：home 与用户名不出现在脱敏输出里。
+    // macOS 上 /var 与 /private/var 是同一目录的两种写法，日志里出现哪种取决于
+    // 路径怎么来的；只断言字面量 home 会漏掉 realpath 形态（实测脱敏后得到
+    // '/private~/...'，前缀没被吃掉）。
     const runFile = path.join(runsDir, runs[0].file)
     const sanitized = sanitizeRun(runFile)
-    assert.ok(!sanitized.includes(os.homedir()), '脱敏后不应包含 home 绝对路径')
+    const homeForms = [os.homedir()]
+    try {
+      homeForms.push(fs.realpathSync(os.homedir()))
+    } catch {}
+    for (const form of homeForms) {
+      assert.ok(!sanitized.includes(form), `脱敏后不应包含 home 绝对路径（形态 ${form}）`)
+    }
     assert.ok(sanitized.includes('~'), 'home 前缀应替换为 ~')
     // 原始日志在本地保留完整路径（本地分析需要），脱敏只发生在导出时
     const raw = fs.readFileSync(runFile, 'utf8')

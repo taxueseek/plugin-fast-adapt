@@ -28,8 +28,12 @@ import { pickMigrationSteps } from './code-scan.mjs'
 import { syncGuides } from './guide-sync.mjs'
 import { findGlobalDsh } from './env-doctor.mjs'
 import { packageOnHost, symbolSearchRoots } from './lib/host-scope.mjs'
+import { cacheRoot } from './lib/cache-root.mjs'
 
-const CACHE_ROOT = path.join(os.homedir(), '.cache', 'dsh-plugin-fast-adapt')
+// 每次调用时求值：模块级常量在 import 那一刻定死，自检改 DSH_PFA_CACHE_DIR 不生效。
+function cacheRootDir() {
+  return cacheRoot()
+}
 
 // ── 指南根解析（零网络）─────────────────────────────────────────────────────
 
@@ -42,7 +46,7 @@ export function resolveGuideRoot({ explicit = null, hostVersion = null } = {}) {
   // 兜底：缓存目录里最新的 harness-dsh-v*（宿主版本未知/无该版本缓存时）
   let names = []
   try {
-    names = fs.readdirSync(CACHE_ROOT)
+    names = fs.readdirSync(cacheRootDir())
   } catch {
     return { root: null, source: 'none' }
   }
@@ -51,7 +55,7 @@ export function resolveGuideRoot({ explicit = null, hostVersion = null } = {}) {
     .map((n) => n.replace(/^harness-dsh-v/, ''))
     .sort((a, b) => compareVersions(b, a))
   for (const version of candidates) {
-    const root = path.join(CACHE_ROOT, `harness-dsh-v${version}`, 'docs', 'upgrade-guide')
+    const root = path.join(cacheRootDir(), `harness-dsh-v${version}`, 'docs', 'upgrade-guide')
     if (fs.existsSync(root)) return { root, source: 'cache-latest' }
   }
   return { root: null, source: 'none' }
@@ -202,9 +206,9 @@ export function findDocsRoot(guideRoot) {
     }
   }
   try {
-    const names = fs.readdirSync(CACHE_ROOT)
+    const names = fs.readdirSync(cacheRootDir())
     for (const name of names) {
-      const p = path.join(CACHE_ROOT, name, 'docs')
+      const p = path.join(cacheRootDir(), name, 'docs')
       if (fs.existsSync(path.join(p, 'capability-seams.zh.md')) || fs.existsSync(path.join(p, 'capability-seams.md'))) {
         return p
       }

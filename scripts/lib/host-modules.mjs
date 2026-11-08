@@ -16,6 +16,7 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { findGlobalDsh } from './host-discovery.mjs'
 import { removeDirSafely } from './proc-env.mjs'
+import { readPackageJson } from './package-json.mjs'
 
 // 脚手架生成的插件会 import 这些包；缺哪个就少验哪一形态
 const HOST_MODULES = [
@@ -37,7 +38,8 @@ export function resolveHostModules() {
 }
 
 function packageEntry(dir) {
-  const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'))
+  const pkg = readPackageJson(dir)
+  if (!pkg) return null
   const exp = pkg.exports?.['.']
   const rel = typeof exp === 'string' ? exp : exp?.default ?? exp?.import ?? pkg.module ?? pkg.main
   return rel ? path.join(dir, rel) : null

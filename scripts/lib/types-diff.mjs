@@ -14,14 +14,23 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { prepareLexicalView, compareVersions } from './scanner.mjs'
+import { cacheRoot } from './cache-root.mjs'
 
-const CACHE_ROOT = path.join(os.homedir(), '.cache', 'dsh-plugin-fast-adapt')
-const SIGNATURES_DIR = path.join(CACHE_ROOT, 'signatures')
+// 缓存根每次调用时求值（DSH_PFA_CACHE_DIR 可覆盖），自检才能把签名缓存隔离到
+// 临时目录。此前这里是模块级常量，`签名本地缓存存取闭环` 会去写真实 ~/.cache，
+// 在只读 HOME 或沙箱里直接 EPERM 失败——同一份自检里 runlog 早已支持注入，
+// 两套隔离标准让自检结果依赖机器状态。
+function signaturesDir() {
+  return path.join(cacheRoot(), 'signatures')
+}
 // 合成指南按「差分基线版本」命名落盘（<base>.json）：code-scan 消费时只认
 // 「基线 == 扫描窗口起点」的文件。差分从更早的基线算起会包含窗口前的移除
 // （插件按 peer 下限声明根本没用过它们，报了就是误报），从更晚的基线算起会
 // 漏掉窗口内的移除，只有恰好相等才精确。
-export const SYNTHESIZED_GUIDES_DIR = path.join(CACHE_ROOT, 'synthesized-guides')
+export function synthesizedGuidesDir() {
+  return path.join(cacheRoot(), 'synthesized-guides')
+}
+
 
 /**
  * 从单个 .d.ts 或 .ts 源码中提取导出符号表（具名函数、类、接口、类型、常量）。
@@ -295,8 +304,9 @@ export function synthesizeGuidesFromDiff(diff) {
  * @param {object} signature 签名对象
  */
 export function saveCachedSignature(version, signature) {
-  fs.mkdirSync(SIGNATURES_DIR, { recursive: true })
-  const file = path.join(SIGNATURES_DIR, `${version}.json`)
+  const dir = signaturesDir()
+  fs.mkdirSync(dir, { recursive: true })
+  const file = path.join(dir, `${version}.json`)
   fs.writeFileSync(file, JSON.stringify(signature, null, 2), 'utf8')
   return file
 }
@@ -307,7 +317,7 @@ export function saveCachedSignature(version, signature) {
  * @returns {object|null}
  */
 export function loadCachedSignature(version) {
-  const file = path.join(SIGNATURES_DIR, `${version}.json`)
+  const file = path.join(signaturesDir(), `${version}.json`)
   if (!fs.existsSync(file)) return null
   try {
     return JSON.parse(fs.readFileSync(file, 'utf8'))
@@ -323,9 +333,12 @@ export function loadCachedSignature(version) {
  * @param {Array<object>} guides synthesizeGuidesFromDiff 产物
  * @returns {string} 写入的文件路径
  */
-export function writeSynthesizedGuides(baseVersion, guides) {
-  fs.mkdirSync(SYNTHESIZED_GUIDES_DIR, { recursive: true })
-  const file = path.join(SYNTHESIZED_GUIDES_DIR, `${baseVersion}.json`)
+export function writeSynthesizedGuides(baseVersion, guides, opts = {}) {
+  // 写侧与读侧对称：loadSynthesizedGuides 早就支持 rootDir，写侧此前硬编码默认目录，
+  // 于是「能读自定义目录，但没有任何代码路径会往自定义目录写」——参数链只通了半条。
+  const rootDir = opts.rootDir || synthesizedGuidesDir()
+  fs.mkdirSync(rootDir, { recursive: true })
+  const file = path.join(rootDir, `${baseVersion}.json`)
   const payload = {
     from: baseVersion,
     to: guides[0]?.version ?? null,
@@ -345,7 +358,7 @@ export function writeSynthesizedGuides(baseVersion, guides) {
  */
 export function loadSynthesizedGuides(baseVersion, opts = {}) {
   if (!baseVersion) return []
-  const rootDir = opts.rootDir || SYNTHESIZED_GUIDES_DIR
+  const rootDir = opts.rootDir || synthesizedGuidesDir()
   const file = path.join(rootDir, `${baseVersion}.json`)
   if (!fs.existsSync(file)) return []
   try {

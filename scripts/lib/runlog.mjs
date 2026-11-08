@@ -277,7 +277,19 @@ export function sanitizeText(text) {
   const home = os.homedir()
   const user = path.basename(home)
   let out = String(text)
-  out = out.split(home).join('~')
+  // macOS 上 /var 与 /private/var 是同一目录的两种写法，日志里出现哪种取决于
+  // 路径怎么来的（realpath 过的就是 /private 形态）。只替换字面量 home 会漏掉
+  // 另一种，脱敏后仍带真实绝对路径——实测 sanitize('/private' + home) 得到
+  // '/private~/...'，前缀没被吃掉。两种形态都替换。
+  // 顺序要紧：realpath 形态（/private/var/...）以字面量 home（/var/...）为后缀，
+  // 先替换短的会把长的切成 '/private~'，前缀照样漏出去。按长度降序替换。
+  const homeForms = new Set([home])
+  try {
+    homeForms.add(fs.realpathSync(home))
+  } catch {}
+  for (const form of [...homeForms].sort((a, b) => b.length - a.length)) {
+    if (form && form !== '/') out = out.split(form).join('~')
+  }
   if (user && user.length > 2) out = out.split(user).join('<user>')
   try {
     const host = os.hostname()

@@ -17,6 +17,8 @@ import { fileURLToPath } from 'node:url'
 import { printJson, isPluginForm } from './lib/scanner.mjs'
 import { findGlobalDsh, listInstalledPlugins, probeEnvironment } from './env-doctor.mjs'
 import { auditPlugin, peerPatchFor, compatPatchFor } from './plugin-audit.mjs'
+import { readPackageJson, readPackageJsonStrict, probePackageJson } from './lib/package-json.mjs'
+import { NO_BACKUP, backupBeforeWrite } from './lib/backup.mjs'
 
 const TOOL_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -95,14 +97,18 @@ function parseArgs(argv) {
 export { discoverWorkspacePlugins as discoverPlugins, inspectPluginItem as inspectPlugin }
 
 export function checkBuild(pluginRoot) {
-  const pkgPath = path.join(pluginRoot, 'package.json')
-  if (!fs.existsSync(pkgPath)) return { ok: true, status: 'N/A' }
-  let pkg = null
-  try {
-    pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
-  } catch {
-    return { ok: false, status: 'CORRUPTED', reason: 'package.json 解析失败' }
+  // 三态探测：missing 是正常形态（纯脚本目录），corrupt 是必须报出来的故障。
+  // 旧实现把两者都吞成 null，BOM 或语法错误一律显示「解析失败」而不说为什么。
+  const probe = probePackageJson(pluginRoot)
+  if (probe.status === 'missing') return { ok: true, status: 'N/A' }
+  if (probe.status === 'corrupt') {
+    return {
+      ok: false,
+      status: 'CORRUPTED',
+      reason: `package.json 解析失败${probe.bom ? '（文件带 UTF-8 BOM）' : ''}: ${probe.error}`,
+    }
   }
+  const pkg = probe.pkg
   const hasTsConfig = fs.existsSync(path.join(pluginRoot, 'tsconfig.json'))
   const hasSrc = fs.existsSync(path.join(pluginRoot, 'src'))
   if (!hasTsConfig && !hasSrc) return { ok: true, status: 'OK' }
@@ -181,8 +187,8 @@ export function resolveInstalledPluginDir(pkgName, profile, dshHome = null) {
 // 批量应用 package.json 准入账本与 Peer 范围修补（仅用于 0 代码破坏性命中的插件）
 export function applyCompatAndPeerPatch(pluginDir, { targetVersion = null, peerPatch = null, compatPatch = null } = {}) {
   const pkgPath = path.join(path.resolve(pluginDir), 'package.json')
-  if (!fs.existsSync(pkgPath)) return { updated: false, changes: [] }
-  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
+  if (!fs.existsSync(pkgPath)) return { updated: false, changes: [], ...NO_BACKUP }
+  const pkg = readPackageJsonStrict(pluginDir)
   const resolvedPeers = peerPatch ?? (targetVersion ? peerPatchFor(pkg, targetVersion) : [])
   const resolvedCompat = compatPatch ?? (targetVersion ? compatPatchFor(pkg, targetVersion) : [])
   const changes = []
@@ -221,15 +227,12 @@ export function applyCompatAndPeerPatch(pluginDir, { targetVersion = null, peerP
   if (changes.length > 0) {
     // 与 codemod / fix-peer-deps 一致：写用户 package.json 属不可逆改动，落盘前
     // 先备份原文件到 <插件目录>/.pfa-backup/<时间戳>/，不备份就写会让批量治理
-    // 成为唯一无法回档的自动修补入口。
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-    const backupDir = path.join(path.resolve(pluginDir), '.pfa-backup', stamp)
-    fs.mkdirSync(backupDir, { recursive: true })
-    fs.copyFileSync(pkgPath, path.join(backupDir, 'package.json'))
+    // 成为唯一无法回档的自动修补入口。备份形状统一走 lib/backup.mjs。
+    const backup = backupBeforeWrite(pluginDir, ['package.json'])
     fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`, 'utf8')
-    return { updated: true, changes, backup: path.join('.pfa-backup', stamp, 'package.json') }
+    return { updated: true, changes, ...backup }
   }
-  return { updated: false, changes, backup: '' }
+  return { updated: false, changes, ...NO_BACKUP }
 }
 
 // 全域发现：区分来源、平台形态与挂载配置
@@ -306,10 +309,7 @@ export function discoverAllPlugins(
     const wsDirs = discoverWorkspacePlugins(targetDirs.length > 0 ? targetDirs : [process.cwd()])
     for (const dir of wsDirs) {
       seenPaths.add(dir)
-      let pkg = null
-      try {
-        pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'))
-      } catch {}
+      const pkg = readPackageJson(dir)
 
       let platform = 'core'
       if (pkg?.dsh?.client?.platform === 'web' || fs.existsSync(path.join(dir, 'client'))) {
@@ -360,9 +360,7 @@ export function inspectPluginItem(
   const effectiveTarget = targetVersion || platformTarget || hostInfo?.version || null
   let pkg = { name: item.name, version: '0.0.0' }
   if (dir) {
-    try {
-      pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'))
-    } catch {}
+    pkg = readPackageJson(dir) ?? pkg
   }
 
   const build = dir ? checkBuild(dir) : { ok: true, status: 'N/A' }

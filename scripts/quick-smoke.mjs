@@ -24,6 +24,7 @@ import { pathToFileURL } from 'node:url'
 import { removeDirSafely } from './lib/proc-env.mjs'
 import { printJson, resolveEntryFile, pickExistingEntry } from './lib/scanner.mjs'
 import { findGlobalDsh } from './env-doctor.mjs'
+import { readPackageJsonStrict } from './lib/package-json.mjs'
 
 // Cordis 内建 mixin 属性（ReflectService 构造时混入 ctx，无需 inject）：
 // reflect.get/set/provide/accessor/mixin、fiber.runtime/effect、registry.inject/plugin、
@@ -189,7 +190,7 @@ export async function runQuickSmoke(pluginRoot) {
     throw new Error(`找不到 package.json: ${pkgPath}`)
   }
 
-  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
+  const pkg = readPackageJsonStrict(pkgPath)
   // 入口按 Node 语义解析（exports['.'] 优先），与 env-doctor 的产物判定共用一份实现。
   // 旧实现只看 pkg.main，exports-only 的包会被误报「入口不存在」。
   const entryFile = pickExistingEntry(root, pkg, resolveEntryFile(pkg))

@@ -12,6 +12,7 @@ import {
   saveCachedSignature,
   loadCachedSignature,
   loadSynthesizedGuides,
+  writeSynthesizedGuides,
 } from '../lib/types-diff.mjs'
 
 test('extractSymbolsFromDts：从类型声明中提取导出符号，注释不误报', () => {
@@ -177,8 +178,11 @@ test('loadSynthesizedGuides：rootDir 生效，第五个参数不再是摆设', 
       source: 'types-diff',
       anchors: { packages: [], members: ['legacyRun'], codes: [] },
     }]
-    // writeSynthesizedGuides 落默认目录；这里手工按同样的文件名格式写进自定义目录
-    fs.writeFileSync(path.join(dir, '0.9.8.json'), JSON.stringify({ from: '0.9.8', to: '0.9.9', guides }), 'utf8')
+    // 走真实写侧：writeSynthesizedGuides 必须支持 rootDir，与读侧对称。
+    // 旧实现写侧硬编码默认目录，于是「能读自定义目录，但没有任何代码路径会往
+    // 自定义目录写」——参数链只通了半条，测试也只能手工造文件绕过写侧。
+    const written = writeSynthesizedGuides('0.9.8', guides, { rootDir: dir })
+    assert.ok(written.startsWith(dir), `写侧应落进传入的 rootDir，实际 ${written}`)
 
     const fromCustom = loadSynthesizedGuides('0.9.8', { rootDir: dir })
     assert.strictEqual(fromCustom.length, 1, '显式 rootDir 应读到自定义目录里的合成指南')

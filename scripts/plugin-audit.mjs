@@ -21,6 +21,7 @@ import { findSourceFiles, pickScanRoots, scanPluginFromGuideRoot } from './code-
 import { findGlobalDsh } from './env-doctor.mjs'
 import { packageOnHost } from './lib/host-scope.mjs'
 import { scanStandards, standardsScore, STANDARDS_RULES } from './lib/standards.mjs'
+import { readPackageJsonStrict } from './lib/package-json.mjs'
 
 const STANDARDS_RULES_LENGTH = STANDARDS_RULES.length
 
@@ -155,7 +156,9 @@ export function auditPlugin(pluginDir, { scanResult = null, targetVersion = null
     throw new Error(`找不到 package.json: ${pkgPath}`)
   }
 
-  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
+  // 严格读：读不出来就抛，不静默降级。BOM 与语法错误在这里各自有明确报错，
+  // 不再级联成「找不到宿主」或「体检 100 分」这种不指向根因的症状。
+  const pkg = readPackageJsonStrict(pkgPath)
   // 目标形态：插件形态才适用 Cordis 生命周期规则；纯工具仓（如本工具自审）
   // 被 Cordis 规则扫会产出「对普通脚本建议 ctx.effect」一类形态错配的噪音。
   const pluginForm = isPluginForm(pkg)

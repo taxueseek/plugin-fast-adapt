@@ -20,8 +20,18 @@ export const REQUIRED_PACK = [
   'scripts/lib/scanner.mjs',
 ]
 
-// 本机状态、构建残留、发布产物都不该进包
-export const FORBIDDEN_PACK = [/^node_modules\//, /^tmp\//, /^\.git\//, /(^|\/)\.env(\.|$)/, /\.tgz$/]
+// 本机状态、构建残留、发布产物都不该进包。
+// .pfa-backup 是自动修补前的本地现场（codemod / fix-peer-deps / fleet-sweep
+// --apply-compat 三个入口都会写），实测 npm pack 会把它算进 tarball——
+// 备份里是用户改动前的 package.json，打进包等于把旧版本元信息发出去。
+export const FORBIDDEN_PACK = [
+  /^node_modules\//,
+  /^tmp\//,
+  /^\.git\//,
+  /^\.pfa-backup\//,
+  /(^|\/)\.env(\.|$)/,
+  /\.tgz$/,
+]
 
 export function tail(text, max = 300) {
   const s = String(text || '').trim()

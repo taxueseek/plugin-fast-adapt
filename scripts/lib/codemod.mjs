@@ -15,6 +15,7 @@ import path from 'node:path'
 import { prepareLexicalView } from './scanner.mjs'
 import { FUNC_PLUGIN_EXPORTS, collectEntryExports } from './standards.mjs'
 import { planPeerFix } from './peer-fix.mjs'
+import { NO_BACKUP, backupBeforeWrite } from './backup.mjs'
 
 export const CODEMOD_RULES = [
   {
@@ -209,34 +210,27 @@ export function planCodemods(pluginDir, { files = null, pkg = null, rules = null
 
 /**
  * 将修补计划落盘，并生成备份。
+ * 备份形状与 fix-peer-deps、fleet-sweep --apply-compat 统一走 lib/backup.mjs：
+ * { backupDir, backupFiles, backupRel }，没改动时返回 NO_BACKUP（不是 undefined）。
  * @param {string} pluginDir 插件根
  * @param {object} plan planCodemods 的产物
- * @returns {{ backedUpFiles: string[], writtenFiles: string[], backupDir: string }}
+ * @returns {{ backupDir: string, backupFiles: string[], backupRel: string, writtenFiles: string[] }}
  */
 export function applyCodemodPlan(pluginDir, plan) {
   if (!plan.hasChanges || Object.keys(plan.files).length === 0) {
-    return { backedUpFiles: [], writtenFiles: [], backupDir: '' }
+    return { ...NO_BACKUP, writtenFiles: [] }
   }
 
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
-  const backupDir = path.join(pluginDir, '.pfa-backup', timestamp)
-  fs.mkdirSync(backupDir, { recursive: true })
-
-  const backedUpFiles = []
+  const relPaths = Object.keys(plan.files)
+  const backup = backupBeforeWrite(pluginDir, relPaths)
   const writtenFiles = []
 
   for (const [relPath, newContent] of Object.entries(plan.files)) {
     const absPath = path.join(pluginDir, relPath)
-    if (fs.existsSync(absPath)) {
-      const backupPath = path.join(backupDir, relPath)
-      fs.mkdirSync(path.dirname(backupPath), { recursive: true })
-      fs.copyFileSync(absPath, backupPath)
-      backedUpFiles.push(relPath)
-    }
     fs.mkdirSync(path.dirname(absPath), { recursive: true })
     fs.writeFileSync(absPath, newContent, 'utf8')
     writtenFiles.push(relPath)
   }
 
-  return { backedUpFiles, writtenFiles, backupDir }
+  return { ...backup, writtenFiles }
 }

@@ -28,6 +28,7 @@ import {
 } from './lib/types-diff.mjs'
 import { findGlobalDsh } from './env-doctor.mjs'
 import { printJson } from './lib/scanner.mjs'
+import { readPackageJson } from './lib/package-json.mjs'
 
 function parseArgs(argv) {
   const out = { from: null, to: null, current: false, save: false, json: false, synth: false }
@@ -56,7 +57,7 @@ function resolveSig(spec) {
       return extractHostSignature(abs)
     }
     return {
-      version: JSON.parse(fs.readFileSync(path.join(abs, 'package.json'), 'utf8')).version || 'custom',
+      version: readPackageJson(abs)?.version || 'custom',
       packages: { [path.basename(abs)]: extractPackageSignature(abs) },
       timestamp: Date.now(),
     }

@@ -7,9 +7,10 @@ import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { readPackageJson } from './lib/package-json.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
-const pkg = JSON.parse(fs.readFileSync(path.join(here, '..', 'package.json'), 'utf8'))
+const pkg = readPackageJson(path.join(here, '..'))
 const args = process.argv.slice(2)
 
 if (args.length === 0 || args.includes('--help') || args.includes('-h')) {

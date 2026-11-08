@@ -17,6 +17,7 @@ import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { planPeerFix, PEER_ONLY_PACKAGES } from './lib/peer-fix.mjs'
 import { printJson } from './lib/scanner.mjs'
+import { backupBeforeWrite } from './lib/backup.mjs'
 
 function parseArgs(argv) {
   const out = { dirs: [], installed: false, apply: false, json: false }
@@ -111,16 +112,13 @@ export function runFixPeerDeps(argv = process.argv.slice(2)) {
 
   const applied = []
   if (args.apply) {
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
     for (const r of fixable) {
       try {
-        const backupDir = path.join(r.dir, '.pfa-backup', stamp)
-        fs.mkdirSync(backupDir, { recursive: true })
-        fs.copyFileSync(path.join(r.dir, 'package.json'), path.join(backupDir, 'package.json'))
+        const backup = backupBeforeWrite(r.dir, ['package.json'])
         for (const [rel, content] of Object.entries(r.files)) {
           fs.writeFileSync(path.join(r.dir, rel), content)
         }
-        applied.push({ dir: r.dir, name: r.name, moves: r.moves.length, backup: path.relative(r.dir, backupDir) })
+        applied.push({ dir: r.dir, name: r.name, moves: r.moves.length, ...backup })
       } catch (err) {
         applied.push({ dir: r.dir, name: r.name, error: err.message })
       }
@@ -145,7 +143,7 @@ export function runFixPeerDeps(argv = process.argv.slice(2)) {
     }
     for (const r of unreadable) process.stderr.write(`  ! ${r.name}: ${r.error}\n`)
     if (fixable.length) {
-      const backups = applied.filter((a) => a.backup).map((a) => `${a.name} → ${a.backup}`)
+      const backups = applied.filter((a) => a.backupRel).map((a) => `${a.name} → ${a.backupRel}`)
       if (backups.length) process.stderr.write(`\n备份：${backups.join('；')}\n`)
       else process.stderr.write('\n下一步: 复核上面的计划，确认后加 --apply 落盘（会先备份原文件）\n')
     }

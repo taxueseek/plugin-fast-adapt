@@ -173,8 +173,12 @@ test('方案 3 集群自动化适配：resolveInstalledPluginDir 解析真实路
 
   // 写用户 package.json 前必须备份，且与 codemod / fix-peer-deps 用同一个
   // .pfa-backup/<时间戳>/ 约定——批量治理不能是唯一无法回档的自动修补入口。
-  assert.ok(inspected.appliedPatches?.backup, '--apply-compat 落盘应返回备份路径')
-  const backupPath = path.join(realPluginDir, inspected.appliedPatches.backup)
+  // 返回形状与 codemod / fix-peer-deps 统一为 { backupDir, backupFiles, backupRel }。
+  const ap = inspected.appliedPatches
+  assert.ok(ap?.backupDir, '--apply-compat 落盘应返回备份目录（绝对路径）')
+  assert.ok(ap?.backupRel, '--apply-compat 落盘应返回备份目录（相对路径）')
+  assert.deepStrictEqual(ap.backupFiles, ['package.json'], '备份文件列表应含 package.json')
+  const backupPath = path.join(realPluginDir, ap.backupRel, 'package.json')
   assert.ok(fs.existsSync(backupPath), '备份文件应真实存在')
   const originalPkg = JSON.parse(fs.readFileSync(backupPath, 'utf8'))
   assert.strictEqual(originalPkg.peerDependencies['@deepseek-ai/dsh'], '^0.2.1-rc.1', '备份应是落盘前的原文')
@@ -182,5 +186,28 @@ test('方案 3 集群自动化适配：resolveInstalledPluginDir 解析真实路
   // 幂等验证：再次运行不应重复修改，也不该再生成第二份备份
   const second = applyCompatAndPeerPatch(realPluginDir, { targetVersion: '0.2.2-alpha.2' })
   assert.strictEqual(second.updated, false)
-  assert.strictEqual(second.backup, '')
+  assert.strictEqual(second.backupDir, '', '没改动时 backupDir 应是空串而不是 undefined')
+  assert.deepStrictEqual(second.backupFiles, [], '没改动时 backupFiles 应是空数组')
+})
+
+test('checkBuild 三态：缺 package.json 是 N/A，带 BOM 的坏文件报 CORRUPTED 且点明 BOM', () => {
+  const missing = tmpPluginDir('build-missing')
+  try {
+    assert.strictEqual(checkBuild(missing).status, 'N/A', '没有 package.json 是正常形态')
+  } finally {
+    fs.rmSync(missing, { recursive: true, force: true })
+  }
+
+  const bom = tmpPluginDir('build-bom')
+  try {
+    // 带 BOM 且 JSON 本身也坏——这才是「解析失败」的形态；BOM + 合法 JSON 会被
+    // package-json.mjs 剥掉 BOM 后正常读出，不该判 CORRUPTED。
+    fs.writeFileSync(path.join(bom, 'package.json'), '\uFEFF{ not json')
+    const r = checkBuild(bom)
+    assert.strictEqual(r.ok, false)
+    assert.strictEqual(r.status, 'CORRUPTED')
+    assert.ok(/BOM/.test(r.reason), `坏文件的原因要点明 BOM，实际：${r.reason}`)
+  } finally {
+    fs.rmSync(bom, { recursive: true, force: true })
+  }
 })

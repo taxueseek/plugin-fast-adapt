@@ -25,6 +25,7 @@ import { printJson, computeWindow, compareVersions } from './lib/scanner.mjs'
 import { probeEnvironment } from './env-doctor.mjs'
 import { auditPlugin } from './plugin-audit.mjs'
 import { writeRunLog, getLatestSuccessfulRun, isPluginUnmodifiedSince } from './lib/runlog.mjs'
+import { readPackageJson, readPackageJsonStrict } from './lib/package-json.mjs'
 import {
   extractHostSignature,
   saveCachedSignature,
@@ -32,7 +33,7 @@ import {
   diffTypeSignatures,
   synthesizeGuidesFromDiff,
   writeSynthesizedGuides,
-  SYNTHESIZED_GUIDES_DIR,
+  synthesizedGuidesDir,
 } from './lib/types-diff.mjs'
 
 const TOOL_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -41,10 +42,10 @@ const SPAWN_SHELL = process.platform === 'win32'
 
 // 当前工具自身版本号
 let currentToolVersion = '0.2.1'
-try {
-  const toolPkg = JSON.parse(fs.readFileSync(path.join(TOOL_DIR, 'package.json'), 'utf8'))
-  if (toolPkg.version) currentToolVersion = toolPkg.version
-} catch {}
+{
+  const toolPkg = readPackageJson(TOOL_DIR)
+  if (toolPkg?.version) currentToolVersion = toolPkg.version
+}
 
 // 只有 --target/--from 带值，其余都是布尔开关。旧实现按「前一个参数不以 -- 开头」
 // 认插件目录，`run.mjs --offline <目录>` 会把目录当成 --offline 的值而报用法错误。
@@ -147,11 +148,8 @@ function realSmokeEnvGap(tail) {
 }
 
 function runTypecheck(pluginRoot, stages) {
-  const pkgPath = path.join(pluginRoot, 'package.json')
-  let pkg = null
-  try {
-    pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
-  } catch {
+  const pkg = readPackageJson(pluginRoot)
+  if (!pkg) {
     stages.typecheck = { status: 'skipped', reason: 'package.json 不可读' }
     return
   }
@@ -290,13 +288,11 @@ if (!fs.existsSync(path.join(pluginDir, 'package.json'))) {
   process.exit(1)
 }
 
-const pluginPkg = JSON.parse(fs.readFileSync(path.join(pluginDir, 'package.json'), 'utf8'))
+// 严格读：插件自己的 package.json 读不出来必须停，不能带着 null 往下跑。
+const pluginPkg = readPackageJsonStrict(pluginDir)
 // 独立 skill 拷贝（如 dsh-plugin-upgrade-skill/skills/ 下）没有 package.json，
 // 工具版本降级为 commit/目录可观测，不让日志机制反向杀死编排
-let toolPkg = null
-try {
-  toolPkg = JSON.parse(fs.readFileSync(path.join(TOOL_DIR, 'package.json'), 'utf8'))
-} catch {}
+const toolPkg = readPackageJson(TOOL_DIR)
 const toolVersion = toolPkg?.version ?? null
 
 // 1. 环境
@@ -385,14 +381,8 @@ if (lastRun && !isCustomRun && hostVersion && pluginPkg?.version) {
 }
 
 function checkBuildArtifact(pluginRoot) {
-  const pkgPath = path.join(pluginRoot, 'package.json')
-  if (!fs.existsSync(pkgPath)) return { ok: true }
-  let pkg = null
-  try {
-    pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
-  } catch {
-    return { ok: true }
-  }
+  const pkg = readPackageJson(pluginRoot)
+  if (!pkg) return { ok: true }
   const hasTsConfig = fs.existsSync(path.join(pluginRoot, 'tsconfig.json'))
   const hasSrc = fs.existsSync(path.join(pluginRoot, 'src'))
   if (!hasTsConfig && !hasSrc) return { ok: true }
@@ -520,7 +510,7 @@ if (offline) {
 // 4. 扫描（宿主实测核查内置；第五个参数让包面差分合成的虚拟指南并入扫描）
 let scanResult = null
 if (guideRoot && windowLocal && windowTarget) {
-  scanResult = runStep('code-scan.mjs', [pluginDir, guideRoot, windowLocal, windowTarget, SYNTHESIZED_GUIDES_DIR], 'scan', stages)
+  scanResult = runStep('code-scan.mjs', [pluginDir, guideRoot, windowLocal, windowTarget, synthesizedGuidesDir()], 'scan', stages)
   if (scanResult) {
     const sev = Object.fromEntries((scanResult.bySeverity || []).map(([k, v]) => [k, v]))
     scanResult.criticalOrHigh = (sev.critical || 0) + (sev.high || 0)

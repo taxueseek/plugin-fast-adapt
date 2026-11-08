@@ -133,7 +133,7 @@ export function runCodemodCli(argv = process.argv.slice(2)) {
 
   if (args.apply) {
     const res = applyCodemodPlan(targetDir, plan)
-    process.stdout.write(`\n🚀 修补已落盘！已备份 ${res.backedUpFiles.length} 个文件至：\n   ${res.backupDir}\n`)
+    process.stdout.write(`\n🚀 修补已落盘！已备份 ${res.backupFiles.length} 个文件至：\n   ${res.backupDir}\n`)
     process.stdout.write(`   已写入文件: ${res.writtenFiles.join(', ')}\n\n`)
     return 0
   }

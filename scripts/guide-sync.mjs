@@ -17,16 +17,19 @@ import { gitChildEnv, removeDirSafely } from './lib/proc-env.mjs'
 import { printJson, compareVersions } from './lib/scanner.mjs'
 import { listGuideVersions } from './lib/guide-parser.mjs'
 import { findGlobalDsh } from './env-doctor.mjs'
+import { cacheRoot as resolveCacheRoot } from './lib/cache-root.mjs'
 
 // dist-tags 专用端点只回标签对象（实测 67 字节）；全量包文档是 267KB，
 // 而这里只用到 dist-tags，网络、解析、缓存落盘全是白付的。
 const DIST_TAGS_URL = 'https://registry.npmjs.org/-/package/@deepseek-ai/dsh/dist-tags'
 const HARNESS_REPO = 'https://github.com/deepseek-ai/deepseek-harness.git'
-const CACHE_ROOT =
-  process.env.DSH_CACHE_DIR ||
-  (process.env.XDG_CACHE_HOME
-    ? path.join(process.env.XDG_CACHE_HOME, 'dsh-plugin-fast-adapt')
-    : path.join(os.homedir(), '.cache', 'dsh-plugin-fast-adapt'))
+// 缓存根的唯一真源在 lib/cache-root.mjs（DSH_PFA_CACHE_DIR > DSH_CACHE_DIR >
+// XDG_CACHE_HOME > ~/.cache）。此前四个文件各写一遍，只有这里支持覆盖。
+// 默认值一律写成「调用时求值」而不是模块级常量：常量在 import 那一刻就定死，
+// 自检改环境变量后不生效，于是用例写进真实用户缓存。
+function defaultCacheRoot() {
+  return resolveCacheRoot()
+}
 // tag 是冻结快照，官方在发版后还会把同版本的指南补全到默认分支
 // （2026-10-27 实测：dsh-v0.2.1-rc.3 tag 里 v0.2.1-rc.2 只有 1 条变更，
 // 默认分支同一目录 23 条；tag 之后新增的 rc.3 指南只存在于分支上）。
@@ -61,10 +64,15 @@ export const SPARSE_DOC_PATHS = [
 
 // dist-tags 数天才变一次，没必要每次都打网络。缓存 1 小时；
 // 网络失败时有过期缓存也降级用，明确标 stale，绝不静默装作新鲜。
-const METADATA_CACHE = path.join(CACHE_ROOT, 'npm-metadata.json')
+// 每次调用时求值，自检改 DSH_PFA_CACHE_DIR 后立即生效（模块级常量会让
+// 用例写进真实用户缓存，实录：合成 dist-tags 毒化真实 1h TTL 读数）。
+function metadataCachePath() {
+  return path.join(cacheRoot(), 'npm-metadata.json')
+}
 const METADATA_TTL_MS = 60 * 60 * 1000
 
-export async function fetchNpmMetadata({ fetcher = null, maxAgeMs = METADATA_TTL_MS, cachePath = METADATA_CACHE } = {}) {
+export async function fetchNpmMetadata({ fetcher = null, maxAgeMs = METADATA_TTL_MS, cachePath = null } = {}) {
+  cachePath = cachePath || metadataCachePath()
   const cached = readCachedMetadata(cachePath)
   if (cached && Date.now() - cached.fetchedAt < maxAgeMs) {
     return { ...cached.data, _metadataSource: 'cache' }
@@ -88,7 +96,7 @@ export async function fetchNpmMetadata({ fetcher = null, maxAgeMs = METADATA_TTL
   }
 }
 
-function readCachedMetadata(cachePath = METADATA_CACHE) {
+function readCachedMetadata(cachePath = metadataCachePath()) {
   try {
     const raw = JSON.parse(fs.readFileSync(cachePath, 'utf8'))
     if (typeof raw.fetchedAt === 'number' && raw.data?.['dist-tags']) return raw
@@ -164,8 +172,8 @@ export function resolveTargetVersion(localVersion, distTags) {
 
 // ── B. 指南获取 ────────────────────────────────────────────────────────────
 
-function cacheDirFor(version, cacheRoot = CACHE_ROOT) {
-  return path.join(cacheRoot, `harness-dsh-v${version}`)
+function cacheDirFor(version, cacheRoot = null) {
+  return path.join(cacheRoot || defaultCacheRoot(), `harness-dsh-v${version}`)
 }
 
 // 本机可能已有 harness clone，优先复用，省一次网络
@@ -202,7 +210,8 @@ function findLocalClone(startDir = process.cwd()) {
   return null
 }
 
-export function syncGuides(targetVersion, { localClone = null, cacheRoot = CACHE_ROOT } = {}) {
+export function syncGuides(targetVersion, { localClone = null, cacheRoot = null } = {}) {
+  cacheRoot = cacheRoot || defaultCacheRoot()
   const cacheDir = cacheDirFor(targetVersion, cacheRoot)
 
   if (fs.existsSync(path.join(cacheDir, 'docs', 'upgrade-guide'))) {
@@ -282,12 +291,13 @@ function snapshotResult(dir, source, meta = readSnapshotMeta(dir)) {
 //   branch-snapshot-stale   刷新失败，用旧快照并标 stale
 //   unavailable            没有快照且拉取失败（error 带原文）
 export function syncBranchSnapshot({
-  cacheRoot = CACHE_ROOT,
+  cacheRoot = null,
   branch = GUIDES_BRANCH,
   maxAgeMs = SNAPSHOT_TTL_MS,
   now = Date.now(),
   allowRefresh = true,
 } = {}) {
+  cacheRoot = cacheRoot || defaultCacheRoot()
   const dir = snapshotDirFor(cacheRoot)
   const root = path.join(dir, 'docs', 'upgrade-guide')
   const meta = readSnapshotMeta(dir)
@@ -389,7 +399,8 @@ export function verifyAuthoritySource(root, relPath) {
   return { path: relPath, present: fs.existsSync(path.join(root, relPath)) }
 }
 
-export function cloneGuides(targetVersion, { cacheRoot = CACHE_ROOT } = {}) {
+export function cloneGuides(targetVersion, { cacheRoot = null } = {}) {
+  cacheRoot = cacheRoot || defaultCacheRoot()
   const tag = `dsh-v${targetVersion}`
   const dest = cacheDirFor(targetVersion, cacheRoot)
 
@@ -422,7 +433,8 @@ function missingTagCachePath(cacheRoot) {
   return path.join(cacheRoot, 'missing-tags.json')
 }
 
-export function readMissingTag(tag, distTags, { cacheRoot = CACHE_ROOT, maxAgeMs = METADATA_TTL_MS } = {}) {
+export function readMissingTag(tag, distTags, { cacheRoot = null, maxAgeMs = METADATA_TTL_MS } = {}) {
+  cacheRoot = cacheRoot || defaultCacheRoot()
   try {
     const entry = JSON.parse(fs.readFileSync(missingTagCachePath(cacheRoot), 'utf8'))[tag]
     if (!entry || Date.now() - entry.at >= maxAgeMs) return null
@@ -433,7 +445,8 @@ export function readMissingTag(tag, distTags, { cacheRoot = CACHE_ROOT, maxAgeMs
   }
 }
 
-export function recordMissingTag(tag, distTags, error, { cacheRoot = CACHE_ROOT } = {}) {
+export function recordMissingTag(tag, distTags, error, { cacheRoot = null } = {}) {
+  cacheRoot = cacheRoot || defaultCacheRoot()
   if (!MISSING_TAG_RE.test(error)) return false
   const file = missingTagCachePath(cacheRoot)
   let all = {}
@@ -460,7 +473,8 @@ export function upstreamCheckExit(resolution) {
 }
 
 // 靶向获取 Release Note 补全指南真空期
-export function fetchReleaseNoteIfMissing(targetVersion, { cacheRoot = CACHE_ROOT } = {}) {
+export function fetchReleaseNoteIfMissing(targetVersion, { cacheRoot = null } = {}) {
+  cacheRoot = cacheRoot || defaultCacheRoot()
   if (!targetVersion) return null
   const bare = targetVersion.replace(/^v/, '')
   const relDir = path.join(cacheRoot, 'releases')
@@ -488,7 +502,8 @@ export function fetchReleaseNoteIfMissing(targetVersion, { cacheRoot = CACHE_ROO
 // cacheRoot 可注入（默认真实缓存根）：与 runlog 的 DSH_PFA_RUNS_DIR 同一条纪律——
 // 自检直调本函数时不许碰真实用户缓存（2026-10-26 实录：合成 dist-tags 落进真实
 // 缓存，真实 run.mjs 在 1h TTL 内读到的是自检刷进去的版本数据）。
-export async function runGuideSync(localVersion, { clone = false, fetcher = null, localClone = null, cacheRoot = CACHE_ROOT, targetVersion = null, branchSnapshot = false } = {}) {
+export async function runGuideSync(localVersion, { clone = false, fetcher = null, localClone = null, cacheRoot = null, targetVersion = null, branchSnapshot = false } = {}) {
+  cacheRoot = cacheRoot || defaultCacheRoot()
   const metadata = await fetchNpmMetadata({ fetcher, cachePath: path.join(cacheRoot, 'npm-metadata.json') })
   const resolution = resolveTargetVersion(localVersion, metadata['dist-tags'], Object.keys(metadata.versions || {}))
   const guideVersion = guideVersionFor(resolution, localVersion, metadata['dist-tags'], targetVersion)

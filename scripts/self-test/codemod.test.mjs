@@ -126,6 +126,13 @@ test('planCodemods 与 applyCodemodPlan：端到端修补并安全备份', () =>
     assert.ok(fs.existsSync(applyRes.backupDir))
     assert.ok(fs.existsSync(path.join(applyRes.backupDir, 'package.json')))
     assert.ok(fs.existsSync(path.join(applyRes.backupDir, 'lib', 'index.js')))
+    // 三个自动修补入口共用 lib/backup.mjs 的统一形状
+    assert.deepStrictEqual(
+      [...applyRes.backupFiles].sort(),
+      ['lib/index.js', 'package.json'],
+      'backupFiles 应列出实际备份的相对路径',
+    )
+    assert.ok(applyRes.backupRel.startsWith('.pfa-backup/'), `backupRel 应是相对插件根的备份目录，实际 ${applyRes.backupRel}`)
 
     // 4. 修补后重新扫描：应 100% 干净
     const fixedCode = fs.readFileSync(path.join(dir, 'lib', 'index.js'), 'utf8')

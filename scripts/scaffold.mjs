@@ -35,6 +35,7 @@ import { printJson } from './lib/scanner.mjs'
 import { parsePatchEntries, candidateGlobalRoots } from './env-doctor.mjs'
 import { runQuickSmoke } from './quick-smoke.mjs'
 import { verifyWithHostModules } from './lib/host-modules.mjs'
+import { readPackageJson } from './lib/package-json.mjs'
 
 const FORMS = ['tool', 'hook', 'service', 'config', 'llm-adapter']
 
@@ -94,10 +95,8 @@ export class UsageError extends Error {}
 
 export function detectHarnessVersion({ env = process.env, platform = process.platform } = {}) {
   for (const root of candidateGlobalRoots({ env, platform })) {
-    try {
-      const pkg = JSON.parse(fs.readFileSync(path.join(root, '@deepseek-ai', 'dsh', 'package.json'), 'utf8'))
-      if (pkg?.version) return pkg.version
-    } catch {}
+    const pkg = readPackageJson(path.join(root, '@deepseek-ai', 'dsh'))
+    if (pkg?.version) return pkg.version
   }
   return null
 }
@@ -438,7 +437,10 @@ export async function scaffoldPlugin({ coordinate, form, outDir, harnessVersion 
     ['cordis.patch.yml', patchYmlTemplate(names)],
     ['dsh-plugin.naming.json', namingManifestTemplate(names)],
     ['README.md', readmeTemplate(names, form, detected)],
-    ['.gitignore', 'node_modules/\n'],
+    // .pfa-backup 是 codemod / fix-peer-deps / fleet-sweep --apply-compat 落盘前的
+    // 本地现场，不该进版本库；npm pack 也会把它算进 tarball（实测），
+    // release-rules 的 FORBIDDEN_PACK 同步拦一道。
+    ['.gitignore', 'node_modules/\n.pfa-backup/\n'],
   ]
   for (const [rel, content] of files) {
     const abs = path.join(resolvedOut, rel)

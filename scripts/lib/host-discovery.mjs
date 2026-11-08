@@ -11,6 +11,11 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
+import { readPackageJson } from './package-json.mjs'
+
+// readPackageJson 的唯一真源在 lib/package-json.mjs（剥 BOM、三态探测都在那里）。
+// 这里 re-export 是为了让既有调用方（env-doctor 及其十个消费方）继续从本模块取。
+export { readPackageJson }
 
 const HOME = os.homedir()
 const SPAWN_SHELL = process.platform === 'win32'
@@ -60,19 +65,6 @@ export function candidateGlobalRoots({ platform = process.platform, env = proces
   const result = [...new Set(roots.filter(Boolean))]
   if (!simulated) globalRootsCache = result
   return result
-}
-
-export function readPackageJson(dir) {
-  try {
-    // 上游 #12322：package.json 带 UTF-8 BOM 时宿主启动崩溃循环。JSON.parse 不解
-    // BOM，旧实现在这里吞异常返回 null，级联成「找不到宿主」这种完全不指向根因的
-    // 症状。剥掉 BOM 再解，既让本工具在残缺环境里照常工作，也让后续预检有机会
-    // 把 BOM 本身当作事实报出去。
-    const text = fs.readFileSync(path.join(dir, 'package.json'), 'utf8').replace(/^\uFEFF/, '')
-    return JSON.parse(text)
-  } catch {
-    return null
-  }
 }
 
 // 向上查找局部 node_modules 中的宿主（适应 monorepo、独立工作区或本地依赖场景）
