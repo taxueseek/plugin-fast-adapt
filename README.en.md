@@ -18,7 +18,7 @@
 | Verifying one change | 3,600 s real host cold start → millisecond-scale in-memory smoke test (with unbuilt check & host module fallback) |
 | Ghost host | Warns when the disk has new code but the running process still executes the old one (compares process start time, not version strings) |
 | Fake-green check | Warns when `tsconfig` `paths` point at a missing checkout, where TypeScript silently falls back to published types |
-| Self-test | 269 assertions, runs offline |
+| Self-test | 270 assertions, runs offline |
 | External dependencies | 0 (Node built-ins + the `git`/`npm` commands only) |
 | Cross-platform | Native support for macOS, Linux standard paths, Termux Android, and containers (XDG-compliant) |
 | Scaffolding | One command emits a runnable plugin in five forms, verified on creation, then a write gate issues the birth certificate |
@@ -48,7 +48,7 @@ This project takes a different approach: **maintain the method of obtaining know
 - **Cross-platform & container ready**: eliminates hardcoded directory assumptions, supporting Linux standard paths (`/usr/lib/node_modules`), Termux on Android (`$PREFIX/lib/node_modules`), `npm_config_prefix`, `DSH_HOST_PATH` / `DSH_LOCATION` env overrides, and XDG cache specs
 - **Cheap verification**: in-memory Cordis smoke test returns in milliseconds to seconds without a real host cold start; `--real-smoke` provides real-host isolated profile boot verification
 - **Zero external dependencies**: Node built-ins plus `git`/`npm` commands only
-- **Reproducible**: 269 assertions, runs offline; CI runs on ubuntu, macOS, and Windows
+- **Reproducible**: 270 assertions, runs offline; CI runs on ubuntu, macOS, and Windows
 - **More than adaptation**: `scaffold.mjs` emits a runnable plugin in five forms in one command, and `write-gate.mjs` issues a birth certificate
 - **Silent failures have hard evidence**: `ghostHost` compares process start time against disk change time; `falseGreen` catches TypeScript silent fallbacks
 - **Honest about its limits**: passing smoke test ≠ host compatibility, and the tool states this clearly in its output
@@ -236,7 +236,7 @@ No TypeScript, no AST library, no HTTP client. Runs on Node 22.13+ (`import.meta
 Self-test:
 
 ```sh
-npm test   # node scripts/self-test.mjs, 269 assertions
+npm test   # node scripts/self-test.mjs, 270 assertions
 ```
 
 Contributors should enable the pre-commit gate (one time): `git config core.hooksPath .githooks` — every commit runs the self-test, so a forgotten downstream sync is caught at commit time.

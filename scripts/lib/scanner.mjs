@@ -22,6 +22,56 @@ export const CODE = 0
 export const COMMENT = 1
 export const STRING = 2
 
+// 正则字面量里的 `/` 不是除号。判断「这个 `/` 是正则起点」的启发式：
+// 前一个非空白字符属于「期待表达式」的上下文（运算符、开括号、关键字等）。
+// 反例要挡住：`a / b`（除号，前是标识符）、`x = y / z`（前是标识符）。
+// 这个启发式不完美（正则出现在 `return /x/` 后时前是标识符），但足够覆盖
+// 本仓与插件里的真实形态：正则几乎总出现在 `= (` `,` `[` `!` `&` `|` `?` 之后。
+// 2026-11-09 场测实录：不认正则时，检测器源码里的 `/['"]/` 让状态机把后续
+// 三行吞成一个字符串，`process.on(...)` 与 `setInterval(...)` 的真实调用
+// 被误标成代码，本工具自扫报出两处不存在的违规。
+const REGEX_PRECEDING_CHARS = new Set([
+  '=', '(', '[', ',', '!', '&', '|', '?', '{', '}', ';', ':', '+', '-', '*', '%', '^', '~', '<', '>',
+])
+
+/**
+ * 这个下标处的 `/` 是否开启一个正则字面量。
+ * @param {string} source 源码
+ * @param {number} index `/` 的下标
+ * @returns {boolean}
+ */
+function regexLiteralStart(source, index) {
+  // 注释与字符串的 `/` 不进这里（调用方已在 CODE 态）
+  for (let i = index - 1; i >= 0; i--) {
+    const ch = source[i]
+    if (ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r') continue
+    return REGEX_PRECEDING_CHARS.has(ch)
+  }
+  return true // 行首的 `/` 是正则
+}
+
+/**
+ * 从正则字面量的 `/` 起，扫到配对的结束 `/`（跳过字符类与转义），
+ * 返回结束 `/` 的下标（不含 flags）。找不到返回 -1（按除号处理）。
+ * @param {string} source 源码
+ * @param {number} start 起始 `/` 的下标
+ * @returns {number}
+ */
+function regexLiteralEnd(source, start) {
+  let i = start + 1
+  let inClass = false
+  while (i < source.length) {
+    const ch = source[i]
+    if (ch === '\\') { i += 2; continue }
+    if (ch === '[') inClass = true
+    else if (ch === ']') inClass = false
+    else if (ch === '/' && !inClass) return i
+    else if (ch === '\n') return -1 // 正则不跨行；换行说明这不是正则
+    i += 1
+  }
+  return -1
+}
+
 // 逐字符打标记，返回与源码等长的 Uint8Array
 export function maskSource(source) {
   const n = source.length
@@ -48,6 +98,17 @@ export function maskSource(source) {
         state = COMMENT
         quote = '*/'
         continue
+      }
+      // 正则字面量：整段标 CODE（正则里的引号不是字符串边界）。
+      // 正则内的 `/` 不参与除号判定，所以按「整段是一个词法单元」处理。
+      if (ch === '/' && regexLiteralStart(source, i)) {
+        const end = regexLiteralEnd(source, i)
+        if (end !== -1) {
+          for (let j = i; j <= end; j++) mask[j] = CODE
+          i = end + 1
+          continue
+        }
+        // 找不到结束（按除号处理）
       }
       if (ch === "'" || ch === '"') {
         mask[i] = STRING

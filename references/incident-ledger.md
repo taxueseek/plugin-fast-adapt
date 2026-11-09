@@ -25,6 +25,17 @@
 | `symlink-delete-no-follow` | 递归删缓存目录穿透软链删掉目标内容 | `docs/defensive-patterns/general.zh.md#用-unlink-删除链接形态的路径` | `fixtures/symlink-delete-no-follow/` |
 | `scan-code-boundary` | 常量锚点 `ABORTED` 子串误伤 `FS_ABORTED` | 本机实测（v0.2.2 降噪复盘） | `fixtures/scan-code-boundary/` |
 | `bom-silent-null` | `package.json` 带 UTF-8 BOM 读不出元信息，被吞成 null 继续跑 | 上游 issue #12322；本机实测 2026-11-05 | `fixtures/bom-silent-null/` |
+| `regex-literal-masking` | 本工具自扫报出两处 lifecycle 误报，位置在自己的检测器源码里 | 本机实测 2026-11-09（fleet 场测） | `fixtures/regex-literal-masking/` |
+
+## F4 场测结论（2026-11-09）
+
+三条新规则（lifecycle-unpaired-resource / vendor-rescope-unscoped / waterfall-missing-next）在**本机 45 个真实插件、1278 个文件**上跑过一遍：
+
+- **第三方插件零命中**——没有一条误报，判据收窄的三轮（见 `references/heuristics.md`）经受住了场测。
+- 唯一命中在本工具自己的仓库里：`fixtures/waterfall-real-break/`（夹具，预期命中）与 `scripts/self-test.mjs`（真实 `process.on`，本就该报）。
+- 场测顺带发现 `regex-literal-masking`（maskSource 不认正则字面量），已入库并修。
+
+结论：三条规则的判据**不需要再收窄**，F4 结案。场测工具是临时脚本，未入库（判据本身已由夹具与自检覆盖）。
 
 ## 待入库（有事故记录、还没切片）
 

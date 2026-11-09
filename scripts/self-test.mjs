@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url'
 // 组齐全时一个字节都不动。
 process.env = cleanGitEnv(process.env)
 
-import { scanSource, compareVersions, parseVersion, satisfiesRange, computeWindow, isPluginForm } from './lib/scanner.mjs'
+import { scanSource, splitSource, compareVersions, parseVersion, satisfiesRange, computeWindow, isPluginForm } from './lib/scanner.mjs'
 import { parseGuideMarkdown, extractAnchors, listGuideVersions, loadGuides } from './lib/guide-parser.mjs'
 import { resolveTargetVersion, fetchNpmMetadata, runGuideSync, guideVersionFor, upstreamCheckExit, readMissingTag, recordMissingTag } from './guide-sync.mjs'
 import { anchorMatches, verifyPackagesAgainstHost, pickScanRoots, scanPluginFromGuideRoot } from './code-scan.mjs'
@@ -103,6 +103,28 @@ test('字符串字面量被单独收集（供错误码匹配）', () => {
   const values = r.strings.map((s) => s.value)
   assert.ok(values.some((v) => v.includes('@deepseek-ai/dsh-settings')), '字符串内容应被收集')
   assert.ok(values.some((v) => v.includes('removeBundle')), '字符串内容应被收集')
+})
+
+test('正则字面量不进字符串收集，也不让后续真实调用被吞成字符串（2026-11-09 场测复盘）', () => {
+  // 根因：maskSource 不认正则字面量，正则里的引号被当成字符串边界，
+  // 状态机从正则起跟丢，把后面三行（含真实 process.on / setInterval）整段标 STRING，
+  // 本工具自扫因此报出两处不存在的 lifecycle 违规。
+  const src = [
+    'const procOnRe = /\\bprocess\\s*\\.\\s*(?:on|addListener)\\s*\\(/g',
+    'const timerRe = /(?:^|[^\\w$])setInterval\\s*\\(/g',
+    'export function apply() {',
+    "  process.on('exit', () => {})",
+    '  setInterval(() => {}, 1000)',
+    '}',
+  ].join('\n')
+  const r = scanSource(src)
+  // 正则里的内容不是字符串字面量（它是一段正则，不是 import 路径也不是错误码）
+  assert.ok(!r.strings.some((s) => s.value.includes('process')), `正则内容不该被收集成字符串: ${JSON.stringify(r.strings)}`)
+  // 真实的 process.on 调用必须被抓到（它在正则之后，不能被吞掉）
+  assert.ok(r.calls.some((c) => c.name === 'on'), `正则后的真实调用应被抓到: ${JSON.stringify(r.calls)}`)
+  // 正则字面量本身仍在代码区（供需要时匹配）
+  const { code } = splitSource(src)
+  assert.ok(code.includes('procOnRe'), '正则字面量应留在代码区')
 })
 
 // ── 2. 扫描器：不漏报 ──────────────────────────────────────────────────────

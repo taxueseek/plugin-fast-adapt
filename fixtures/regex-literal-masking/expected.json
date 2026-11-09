@@ -1,0 +1,13 @@
+{
+  "id": "regex-literal-masking",
+  "source": "本机实测 2026-11-09（45 个真实插件、1278 文件的 fleet 场测）",
+  "symptom": "本工具自扫报出两处 lifecycle-unpaired-resource 误报，位置在自己的检测器源码里",
+  "rootCause": "maskSource 不认正则字面量：正则里的引号被当成字符串边界，状态机从正则起跟丢，把后续真实调用整段标成 STRING",
+  "fix": "maskSource 增加正则字面量识别（/ 前一个非空白字符属于「期待表达式」上下文时整段标 CODE），正则内引号不参与字符串边界判定",
+  "check": {
+    "kind": "standards",
+    "args": [],
+    "assert": "findings.filter(f => f.rule === 'lifecycle-unpaired-resource').length === 2 && findings.filter(f => f.rule === 'lifecycle-unpaired-resource').every(f => f.line >= 26)"
+  },
+  "fingerprint": "scanner:mask-source:regex-literal"
+}

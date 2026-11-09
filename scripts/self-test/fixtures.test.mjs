@@ -16,7 +16,7 @@ const LEDGER = path.join(ROOT, 'references', 'incident-ledger.md')
 
 test('夹具库：全量回归通过（判据写松或写紧都会红）', () => {
   const result = runFixtures()
-  assert.ok(result.total >= 8, `夹具数应至少 8 条，实际 ${result.total} 条——新增事故要配夹具`)
+  assert.ok(result.total >= 9, `夹具数应至少 9 条，实际 ${result.total} 条——新增事故要配夹具`)
   assert.deepStrictEqual(
     result.failed,
     [],
