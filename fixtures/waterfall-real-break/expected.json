@@ -1,0 +1,13 @@
+{
+  "id": "waterfall-real-break",
+  "source": "docs/defensive-patterns/general.zh.md#waterfall-责任链流水线",
+  "symptom": "waterfall 监听器收了 next 从不调用，责任链静默停住",
+  "rootCause": "监听器必须调用 next() 把控制权交回流水线",
+  "fix": "判据：只看裸 next(，作用域取配对花括号区间；本夹具应报 1 处",
+  "check": {
+    "kind": "standards",
+    "args": [],
+    "assert": "findings.filter(f => f.rule === 'waterfall-missing-next').length === 1"
+  },
+  "fingerprint": "standards:waterfall-missing-next:real-break"
+}

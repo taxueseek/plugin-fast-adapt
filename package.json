@@ -20,8 +20,7 @@
     "lib/**/*.js",
     "sub-skills/**/*.md",
     "scripts/**/*.mjs",
-    "references/**/*.md",
-    "research/**/*.md"
+    "references/**/*.md"
   ],
   "dsh": {
     "bundle": {

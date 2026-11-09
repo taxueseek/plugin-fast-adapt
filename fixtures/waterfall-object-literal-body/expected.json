@@ -1,0 +1,13 @@
+{
+  "id": "waterfall-object-literal-body",
+  "source": "本机实测 2026-11-06（dsh-ops 假阳性）",
+  "symptom": "箭头表达式体里收对象字面量的调用被当成块体，函数体外的 next() 被漏读",
+  "rootCause": "bodyOpenBrace 把表达式体里的对象字面量 `{` 当成函数体起点",
+  "fix": "从 `=>` 之后起扫并按行首前瞻区分块体与表达式体；表达式体（=> next()）必然调了 next，直接不判",
+  "check": {
+    "kind": "standards",
+    "args": [],
+    "assert": "findings.filter(f => f.rule === 'waterfall-missing-next').length === 0"
+  },
+  "fingerprint": "standards:waterfall-missing-next:object-literal-body"
+}

@@ -16,6 +16,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { gitChildEnv } from './proc-env.mjs'
+import { phasesOf, STAGE_STATUS, SMOKE_STATUS, TYPECHECK_STATUS } from './run-states.mjs'
 
 // 日志根可注入（DSH_PFA_RUNS_DIR）：self-test 用临时目录，不写真实用户缓存。
 // 默认根走 XDG_STATE 而非 ~/.cache——台账是有保留期的运行史不是可再生缓存，
@@ -68,20 +69,6 @@ function toolDirty(toolDir) {
     return execFileSync('git', ['status', '--porcelain'], { env: gitChildEnv().env, cwd: toolDir, encoding: 'utf8' }).trim().length > 0
   } catch {
     return null
-  }
-}
-
-// 阶段三态摘要：scan/smoke/typecheck/realSmoke 各 ok | skipped | fail | error 之一，
-// null = 该阶段信息缺失（realSmoke 默认关，null = 未启用）。有了它，「扫描没跑」
-// 不再与「扫描满分」在同一行摘要里混淆（dsh-image-gen 实录：scan skipped、
-// auditScore 照记 100）。
-function phasesOf(record) {
-  return {
-    scan: record.scan?.error ? 'error' : record.scan?.skipped ? 'skipped' : record.scan ? 'ok' : null,
-    smoke: record.smoke == null ? null : record.smoke.skipped ? 'skipped' : record.smoke.success ? 'ok' : 'fail',
-    // --no-typecheck 产生的 { skipped: true } 没有 status 字段，也要归入 skipped
-    typecheck: record.typecheck == null ? null : record.typecheck.status ?? (record.typecheck.skipped ? 'skipped' : null),
-    realSmoke: record.realSmoke == null ? null : record.realSmoke.skipped ? 'skipped' : (record.realSmoke.status ?? null),
   }
 }
 
@@ -198,10 +185,10 @@ export function getLatestSuccessfulRun(pluginName, { root } = {}) {
       const rec = JSON.parse(lines[i])
       if (
         rec.plugin === pluginName &&
-        rec.phases?.scan !== 'error' &&
-        rec.phases?.smoke !== 'fail' &&
+        rec.phases?.scan !== STAGE_STATUS.ERROR &&
+        rec.phases?.smoke !== SMOKE_STATUS.FAIL &&
         rec.smoke !== false &&
-        rec.typecheck !== 'fail' &&
+        rec.typecheck !== TYPECHECK_STATUS.FAIL &&
         (rec.criticalOrHigh ?? 0) === 0
       ) {
         return rec

@@ -1,0 +1,6 @@
+{
+  "name": "fixture-waterfall-real-break",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "lib/index.js"
+}

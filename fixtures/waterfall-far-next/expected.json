@@ -1,0 +1,13 @@
+{
+  "id": "waterfall-far-next",
+  "source": "本机实测 2026-11-06",
+  "symptom": "next() 写在监听器函数体深处时被报成「未调用 next() 透传」",
+  "rootCause": "作用域按固定字符窗口取（监听器后 800 字符），而不是按配对花括号的函数体边界取",
+  "fix": "改用 matchingBrace 取配对花括号区间，函数体写多长都不影响判定",
+  "check": {
+    "kind": "standards",
+    "args": [],
+    "assert": "findings.filter(f => f.rule === 'waterfall-missing-next').length === 0"
+  },
+  "fingerprint": "standards:waterfall-missing-next:far-next"
+}

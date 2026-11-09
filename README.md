@@ -2,7 +2,7 @@
 
 **简体中文** | [English](README.en.md)
 
-[![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D22.13-blue.svg)](package.json) [![外部依赖](https://img.shields.io/badge/外部依赖-0-blue.svg)](#依赖与自检) [![自检](https://img.shields.io/badge/自检-263项断言-brightgreen.svg)](#依赖与自检)
+[![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D22.13-blue.svg)](package.json) [![外部依赖](https://img.shields.io/badge/外部依赖-0-blue.svg)](#依赖与自检) [![自检](https://img.shields.io/badge/自检-269项断言-brightgreen.svg)](#依赖与自检)
 
 > **DSH 每次发新版，老插件就可能启动不了。** 这个技能直连 DeepSeek 官方升级指南，扫你的插件代码，报出踩了哪几条破坏性变更、官方给的修法是什么；还能一条命令从零造出可运行的插件。**已适配到 0.2.2-rc.1**：该版官方还没写指南条目，官方 Release Note 被当作虚拟指南一并纳入，因此覆盖度仍判 `complete=true`；再新的版本如果既无指南也无发布说明，账本会明说「不能当查干净」。支持本地环境权威锚定、Release Note 破坏性变更提取与整机集群多维批量治理。
 
@@ -18,7 +18,7 @@
 | 验证一次改动 | 3600 秒真宿主冷启动 → 毫秒级内存冒烟（支持未构建产物硬拦截与宿主模块软链兜底） |
 | 幽灵宿主 | 磁盘已换新、进程还在跑旧代码时报警（比进程启动时间，不读版本号） |
 | 假绿检测 | `tsconfig` 的 `paths` 指向不存在的 checkout 时报警（本地门禁可能全绿而实际已坏） |
-| 自检 | 263 项断言，离线可跑 |
+| 自检 | 269 项断言，离线可跑 |
 | 外部依赖 | 0（只用 Node 内置模块 + `git`/`npm` 命令） |
 | 跨平台 | 原生支持 macOS、Linux 标准路径、Termux 移动端与容器环境（支持 XDG 规范） |
 | 造插件 | 一条命令出五形态可运行插件，生成即验证 |
@@ -48,7 +48,7 @@ DSH（DeepSeek Harness）是一个「所有功能都以插件形式存在」的 
 - **跨平台与容器自适应**：消除绝对路径硬编码，扩展适配 Linux 发行版标准路径（`/usr/lib/node_modules`）、Termux 移动端（`$PREFIX/lib/node_modules`）与 `npm_config_prefix`，支持环境变量 `DSH_HOST_PATH` / `DSH_LOCATION` 直接覆盖，严格遵循 XDG 缓存规范
 - **验证便宜**：内存级 Cordis 冒烟毫秒到秒级出结果，不用真宿主冷启动；需要真证据时 `--real-smoke` 再补干净 profile 真装真启档
 - **零外部依赖**：只用 Node 内置模块加 `git`/`npm` 命令，没有 TypeScript、没有 AST 库、没有网络请求库
-- **可复现**：263 项自检离线可跑；CI 在 push 和 PR 上跑 ubuntu/macOS/Windows 三平台，打 tag 时另跑发布预检
+- **可复现**：269 项自检离线可跑；CI 在 push 和 PR 上跑 ubuntu/macOS/Windows 三平台，打 tag 时另跑发布预检
 - **不止适配**：`scaffold.mjs` 一条命令生成五形态可运行插件（真基类装载验证），`write-gate.mjs` 写完出「出生证」
 - **静默失败有判据**：`ghostHost` 比对进程启动时间与磁盘变更时间，抓「磁盘新版、内存旧版」；`falseGreen` 抓 `tsconfig` 的 `paths` 指向不存在 checkout 时 TypeScript 的静默回落。两条都只报不判，证据写在输出里
 - **边界诚实**：冒烟通过不等于宿主兼容，这句话写在工具输出里；体检的软指标只透传，不替用户说「合格」
@@ -232,12 +232,12 @@ node scripts/write-gate.mjs <插件目录>   # 出生证：硬门禁自动判，
 自检：
 
 ```sh
-npm test   # node scripts/self-test.mjs，263 项断言
+npm test   # node scripts/self-test.mjs，269 项断言
 ```
 
 开发者建议启用提交前门禁（一次性）：`git config core.hooksPath .githooks`——commit 时自动跑自检，改完真源忘了 sync-skill 在这一刻被拦。
 
-覆盖扫描器不误报（注释和字符串里的同义词不算命中）、不漏报、版本启发式、替换对识别、端到端命中（含官方指南文件＋行号出处锚点）、指南分支快照与覆盖度未知态、入口解析单一真源（exports 优先）、诊断输出瘦身、CLI 帮助与未知参数、接缝查询双源结论（一致已移除/宿主仍在报分歧/无记录如实说）、运行日志×宿主日志交叉核对、--real-smoke 桥接档位（fail→退出码 2、失败指路）、上游盯梢退出码、同步提交命令建议（只 add 同步路径防夹带）、SOP 引用完整性、dist-tags 缓存三态、冒烟验证（含未声明 inject 契约拦截）、四维审计（含 peer 修补）、启用诊断、幽灵宿主四态（stale/ok/unknown/no-running-host）与磁盘时间来源、tsconfig paths 假绿（含 extends 继承、JSONC 注释、通配符前缀、非宿主 alias 降级）、创作脚手架（五形态生成、命名投影语法、冒烟闭环、挂载层可识别、非法输入与非空目录拒绝）、创作体检门（硬门禁拦截、软指标不越权判红、跳过语义、scaffold 衔接）、日志诊断、下游同步漂移检查＋真机零漂移拦截、缓存根注入（自检不写真实用户缓存）、runlog 台账根一次性搬迁（旧 `~/.cache` 根迁 `~/.local/state`）、self-test 体积门禁、扫描性能回归门。自检本身零网络、零外部依赖，任何机器上都能跑。
+覆盖扫描器不误报（注释和字符串里的同义词不算命中）、不漏报、版本启发式、替换对识别、端到端命中（含官方指南文件＋行号出处锚点）、指南分支快照与覆盖度未知态、入口解析单一真源（exports 优先）、诊断输出瘦身、CLI 帮助与未知参数、接缝查询双源结论（一致已移除/宿主仍在报分歧/无记录如实说）、运行日志×宿主日志交叉核对、--real-smoke 桥接档位（fail→退出码 2、失败指路）、上游盯梢退出码、同步提交命令建议（只 add 同步路径防夹带）、SOP 引用完整性、dist-tags 缓存三态、冒烟验证（含未声明 inject 契约拦截）、四维审计（含 peer 修补）、启用诊断、幽灵宿主四态（stale/ok/unknown/no-running-host）与磁盘时间来源、tsconfig paths 假绿（含 extends 继承、JSONC 注释、通配符前缀、非宿主 alias 降级）、创作脚手架（五形态生成、命名投影语法、冒烟闭环、挂载层可识别、非法输入与非空目录拒绝）、创作体检门（硬门禁拦截、软指标不越权判红、跳过语义、scaffold 衔接）、日志诊断、下游同步漂移检查＋真机零漂移拦截、缓存根注入（自检不写真实用户缓存）、runlog 台账根一次性搬迁（旧 `~/.cache` 根迁 `~/.local/state`）、self-test 体积门禁、扫描性能回归门、事故夹具全量回归（`fixtures/` 与 `references/incident-ledger.md` 双向对账）、状态词表单一真源对账（`lib/run-states.mjs`）、文档分层对账（过程报告不进技能面）。自检本身零网络、零外部依赖，任何机器上都能跑。
 
 给插件自己的仓库加提交时门禁（冒烟/typecheck 硬门＋体检软门），见 [references/ci-snippet.md](references/ci-snippet.md)。
 
@@ -276,6 +276,7 @@ npm test   # node scripts/self-test.mjs，263 项断言
 | `references/user-guide.md` | 完整实战指南（本地锚定、跨平台自适应、Web/APP 集群治理矩阵与低级错误守卫） |
 | `references/legacy-migration-sop.md` | 老插件迁移 SOP（官方指南覆盖不到时的对照手册） |
 | `references/heuristics.md` | 扫描降噪规则与实测依据 |
+| `references/incident-ledger.md` | 事故账本：真实误报/漏报一句话索引，每条指向 `fixtures/` 下的最小复现切片 |
 | `references/ci-snippet.md` | 插件仓 CI 门禁模板（冒烟/typecheck 硬门＋体检软门） |
 
 ## 安全姿态

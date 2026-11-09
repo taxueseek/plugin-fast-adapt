@@ -1,0 +1,17 @@
+{
+  "id": "git-config-broken-group",
+  "source": "本机实测 2026-11-05（DSH 宿主会话内）；上游 packages/boot/plugin-manager/tests/git-environment.ts 明文记录同一现象",
+  "symptom": "宿主会话内本工具所有 git 调用静默失败，症状是「没结果」不是「报错」",
+  "rootCause": "宿主凭证擦除按变量名过滤，KEY 同时是「git 配置通道名」与「密钥字段名」，擦除必然砸中 git 配置组",
+  "fix": "lib/proc-env.mjs 在工具边界净化：组齐全原样返回，组残缺摘掉整组并把 GIT_CONFIG_COUNT 落成 '0'",
+  "check": {
+    "kind": "env",
+    "env": {
+      "GIT_CONFIG_COUNT": "2",
+      "GIT_CONFIG_VALUE_0": "false",
+      "GIT_CONFIG_VALUE_1": "false"
+    },
+    "assert": "gitChildEnv(env).repaired === true && gitChildEnv(env).env.GIT_CONFIG_COUNT === '0' && gitChildEnv(env).env.GIT_CONFIG_KEY_0 === undefined"
+  },
+  "fingerprint": "proc-env:git-config:broken-group"
+}

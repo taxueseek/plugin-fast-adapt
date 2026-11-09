@@ -77,6 +77,16 @@ node scripts/sync-skill.mjs --dest <下游技能目录>            # 同步
 - **日志只落本机**，含本地路径与用户名，外发前必须 `sanitize`。`sanitize` 同时替换 home 的字面量与 realpath 两种形态（macOS 上 `/var` 与 `/private/var` 是同一目录的两种写法，只替换一种会漏掉另一种）。
 - **缓存根可注入**：`DSH_PFA_CACHE_DIR` > `DSH_CACHE_DIR` > `XDG_CACHE_HOME` > `~/.cache`，由 `lib/cache-root.mjs` 统一求值。自检启动即把缓存根指向临时目录，不写真实用户缓存。
 
+## 判据回写纪律
+
+修一次误报或漏报，三件一起做，缺一不可：
+
+1. **写回判据**：`references/heuristics.md`（扫描降噪）或对应 `lib/*.mjs` 的注释（机器判据），说清「为什么这条判据是对的」。
+2. **沉淀夹具**：`fixtures/<id>/input/` 放最小复现，`fixtures/<id>/expected.json` 写正确判定与 fingerprint。自检启动时全量回归，判据写松了（该报的不报）或写紧了（不该报的报了）都会红。
+3. **登记账本**：`references/incident-ledger.md` 一行一条，带来源与夹具 id。
+
+只做第 1 步不做第 2 步，下次换台机器重跑就没了；只做第 2 步不做第 3 步，夹具与判据会各自漂移。三条夹具一起才封住改动：`waterfall-real-break`（该报的报）、`waterfall-far-next` 与 `waterfall-object-literal-body`（不该报的不报）。
+
 ## 按需读取（车道之外）
 
 | 场景 | 读什么 |
@@ -84,6 +94,7 @@ node scripts/sync-skill.mjs --dest <下游技能目录>            # 同步
 | 完整使用指南与集群多维治理实战 | `references/user-guide.md` |
 | 官方指南覆盖不到的老插件 | `references/legacy-migration-sop.md` |
 | 扫描降噪规则与实测依据 | `references/heuristics.md` |
+| 事故账本（真实误报/漏报的最小复现索引） | `references/incident-ledger.md` |
 | 给插件自己的仓库加提交时门禁 | `references/ci-snippet.md` |
 
 ## 自检
@@ -92,7 +103,7 @@ node scripts/sync-skill.mjs --dest <下游技能目录>            # 同步
 npm test
 ```
 
-263 项断言，覆盖扫描器不误报（注释和字符串里的同名词不算命中）、不漏报、版本窗口与 real semver 判定、目标形态判定、指南出处锚点、指南分支快照与覆盖度未知态、三元版本账本直通与变更嗅探、本地宿主接缝契约核对与未构建硬拦截、跨平台与工作区自适应（Termux/Linux/环境变量/祖先依赖）、上游经验吸纳（退出码 143 停机判定/Bundle 遮蔽阴影/准入账本 compatPatch/提示词 {{cwd}} 拦截/全局前缀分裂检测/集群治理 Web-APP 与运行态生命周期多维看板）、Cordis 深度防御性审查（核心 peer 依赖 vendored 污染 P0 拦截/顶层单例状态泄漏 P2 预警/run 与 audit --compact 紧凑模式/DSH 原生插件服务）、Release Note 破坏性变更虚拟指南提取与双语去重、接缝查询双源结论、运行日志与宿主日志交叉核对、一键编排各档位（含 --strict）、冒烟验证（含 Config 默认值解析、宿主 node_modules 兜底、未声明 inject 契约拦截与 exports-only 入口）、四维审计（含 peer 与 compat 准入账本修补）、启用诊断（宿主半与客户端半）、幽灵宿主四态与磁盘时间来源、tsconfig paths 假绿（含 extends 与 JSONC）、环境层三处盲区、创作脚手架与体检门、日志诊断、下游同步、发布预检规则（版本一致/tag/包内容/npm 状态）、跨平台模拟、诊断输出瘦身、CLI 帮助与未知参数、宿主凭证擦除留下的残缺 GIT_CONFIG 配置组净化（真实 git 子进程回归）、链接形态路径的安全删除、文档断言数与技能面 description 长度门禁、扫描性能回归、生命周期配对检查、确定性 Codemod 自动修补、Types-Diff 类型差分自动接缝与 SKILL.md 常设规则枚举双向对账、合成指南目录参数链（第五个参数不再被静默忽略）、工具链缺失按 PATH 预检确定性判定（runner 在场时内层命令缺失判 fail 不吞成 skipped）、脱敏覆盖 home 全部形态（realpath 与 Windows 8.3 短名）。自检零网络、零外部依赖，任何机器上都能跑。
+269 项断言，覆盖扫描器不误报（注释和字符串里的同名词不算命中）、不漏报、版本窗口与 real semver 判定、目标形态判定、指南出处锚点、指南分支快照与覆盖度未知态、三元版本账本直通与变更嗅探、本地宿主接缝契约核对与未构建硬拦截、跨平台与工作区自适应（Termux/Linux/环境变量/祖先依赖）、上游经验吸纳（退出码 143 停机判定/Bundle 遮蔽阴影/准入账本 compatPatch/提示词 {{cwd}} 拦截/全局前缀分裂检测/集群治理 Web-APP 与运行态生命周期多维看板）、Cordis 深度防御性审查（核心 peer 依赖 vendored 污染 P0 拦截/顶层单例状态泄漏 P2 预警/run 与 audit --compact 紧凑模式/DSH 原生插件服务）、Release Note 破坏性变更虚拟指南提取与双语去重、接缝查询双源结论、运行日志与宿主日志交叉核对、一键编排各档位（含 --strict）、冒烟验证（含 Config 默认值解析、宿主 node_modules 兜底、未声明 inject 契约拦截与 exports-only 入口）、四维审计（含 peer 与 compat 准入账本修补）、启用诊断（宿主半与客户端半）、幽灵宿主四态与磁盘时间来源、tsconfig paths 假绿（含 extends 与 JSONC）、环境层三处盲区、创作脚手架与体检门、日志诊断、下游同步、发布预检规则（版本一致/tag/包内容/npm 状态）、跨平台模拟、诊断输出瘦身、CLI 帮助与未知参数、宿主凭证擦除留下的残缺 GIT_CONFIG 配置组净化（真实 git 子进程回归）、链接形态路径的安全删除、文档断言数与技能面 description 长度门禁、扫描性能回归、生命周期配对检查、确定性 Codemod 自动修补、Types-Diff 类型差分自动接缝与 SKILL.md 常设规则枚举双向对账、合成指南目录参数链（第五个参数不再被静默忽略）、工具链缺失按 PATH 预检确定性判定（runner 在场时内层命令缺失判 fail 不吞成 skipped）、脱敏覆盖 home 全部形态（realpath 与 Windows 8.3 短名）、事故夹具全量回归（`fixtures/` 与 `references/incident-ledger.md` 双向对账，判据收窄的两侧都钉住）、状态词表单一真源对账（`lib/run-states.mjs`）、文档分层对账（过程报告归档 `docs-local/archive/`，不进技能面）。自检零网络、零外部依赖，任何机器上都能跑。
 
 提交前门禁：`git config core.hooksPath .githooks`（一次性）启用 pre-commit 钩子，commit 时自动跑本自检，改完真源忘了同步在这一刻被拦。
 

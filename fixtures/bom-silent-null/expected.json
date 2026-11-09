@@ -1,0 +1,12 @@
+{
+  "id": "bom-silent-null",
+  "source": "上游 issue #12322；本机实测 2026-11-05",
+  "symptom": "package.json 带 BOM 时读不出插件元信息，被吞成 null 继续跑，最后输出「查干净了」",
+  "rootCause": "JSON.parse 不认 BOM，异常被吞；十处各自读 package.json，只有宿主那一侧剥了 BOM",
+  "fix": "lib/package-json.mjs 收口：剥 BOM、宽松/严格两档、missing/corrupt/ok 三态；批量巡检要区分「没有」与「坏了」",
+  "check": {
+    "kind": "pkg",
+    "assert": "probePackageJson(dir).status === 'ok' && probePackageJson(dir).bom === true && readPackageJson(dir).version === '1.0.0'"
+  },
+  "fingerprint": "package-json:bom:silent-null"
+}

@@ -26,6 +26,7 @@ import { probeEnvironment } from './env-doctor.mjs'
 import { auditPlugin } from './plugin-audit.mjs'
 import { writeRunLog, getLatestSuccessfulRun, isPluginUnmodifiedSince } from './lib/runlog.mjs'
 import { readPackageJson, readPackageJsonStrict } from './lib/package-json.mjs'
+import { STAGE_STATUS, TYPECHECK_STATUS, SMOKE_STATUS, REAL_SMOKE_STATUS } from './lib/run-states.mjs'
 import {
   extractHostSignature,
   saveCachedSignature,
@@ -100,7 +101,7 @@ function runStep(script, scriptArgs, label, stages) {
     } catch {
       json = { raw: stdout.slice(0, 4000) }
     }
-    stages[label] = { status: 'ok', durationMs: Date.now() - started, output: json }
+    stages[label] = { status: STAGE_STATUS.OK, durationMs: Date.now() - started, output: json }
     return json
   } catch (err) {
     let json = null
@@ -109,7 +110,7 @@ function runStep(script, scriptArgs, label, stages) {
       if (rawOut.startsWith('{')) json = JSON.parse(rawOut)
     } catch {}
     stages[label] = {
-      status: 'error',
+      status: STAGE_STATUS.ERROR,
       durationMs: Date.now() - started,
       stage: json?.stage || undefined,
       error: json?.error || err.message?.slice(0, 1000),
@@ -177,12 +178,12 @@ function realSmokeEnvGap(tail) {
 function runTypecheck(pluginRoot, stages) {
   const pkg = readPackageJson(pluginRoot)
   if (!pkg) {
-    stages.typecheck = { status: 'skipped', reason: 'package.json 不可读' }
+    stages.typecheck = { status: TYPECHECK_STATUS.SKIPPED, reason: 'package.json 不可读' }
     return
   }
   const script = pkg.scripts?.typecheck
   if (!script) {
-    stages.typecheck = { status: 'skipped', reason: '未声明 typecheck script' }
+    stages.typecheck = { status: TYPECHECK_STATUS.SKIPPED, reason: '未声明 typecheck script' }
     return
   }
   const runner = fs.existsSync(path.join(pluginRoot, 'pnpm-lock.yaml')) ? 'pnpm' : 'npm'
@@ -194,14 +195,14 @@ function runTypecheck(pluginRoot, stages) {
       shell: SPAWN_SHELL,
       maxBuffer: 32 * 1024 * 1024,
     })
-    stages.typecheck = { status: 'ok', runner, durationMs: Date.now() - started, tail: out.split('\n').slice(-5).join('\n') }
+    stages.typecheck = { status: TYPECHECK_STATUS.OK, runner, durationMs: Date.now() - started, tail: out.split('\n').slice(-5).join('\n') }
   } catch (err) {
     const missing = toolchainMissing(runner, err)
     stages.typecheck = missing
       ? {
           // 工具链缺失不是插件的问题：单列为 skipped，不判 fail，
           // 否则「本机没装 pnpm」会被当成「插件编译不过」，把人推去修不存在的构建问题。
-          status: 'skipped',
+          status: TYPECHECK_STATUS.SKIPPED,
           reason: `${runner} 不在 PATH，typecheck 无法执行`,
           runner,
           durationMs: Date.now() - started,
@@ -209,7 +210,7 @@ function runTypecheck(pluginRoot, stages) {
           hint: `本机找不到 ${runner} 可执行文件——这是环境缺件，不是插件构建失败。把 ${runner} 的 bin 目录加进 PATH（或改用 npm：删掉 pnpm-lock.yaml 后重跑）再验构建。`,
         }
       : {
-          status: 'fail',
+          status: TYPECHECK_STATUS.FAIL,
           runner,
           durationMs: Date.now() - started,
           tail: String(err.stdout || err.message || '').split('\n').slice(-12).join('\n'),
@@ -222,7 +223,12 @@ function runTypecheck(pluginRoot, stages) {
 // Mock 冒烟的边界在 mockFallbacks 里自曝；真冷启动走原仓库 plugin-upgrade 的
 // verify-runtime.mjs（干净 profile 安装→启动→归因，POSIX-only）。
 // 找不到脚本就诚实跳过给补法，不静默降级也不伪造。
-const VERIFY_RUNTIME_EXIT = { 1: 'fail', 2: 'inconclusive', 3: 'skipped' }
+// verify-runtime 的退出码 → 真冷启动状态。词表在 lib/run-states.mjs，这里只做码到词的映射。
+const VERIFY_RUNTIME_EXIT = {
+  1: REAL_SMOKE_STATUS.FAIL,
+  2: REAL_SMOKE_STATUS.INCONCLUSIVE,
+  3: REAL_SMOKE_STATUS.SKIPPED,
+}
 
 function resolveVerifyRuntime() {
   if (process.env.PFA_VERIFY_RUNTIME) return process.env.PFA_VERIFY_RUNTIME
@@ -256,7 +262,7 @@ function runRealSmoke(pluginRoot) {
       timeout: 420_000,
     })
     return {
-      status: 'ok',
+      status: REAL_SMOKE_STATUS.OK,
       script: path.relative(TOOL_DIR, script),
       durationMs: Date.now() - started,
       tail: out.split('\n').slice(-5).join('\n').trim(),
@@ -266,7 +272,7 @@ function runRealSmoke(pluginRoot) {
     // 若进程按预期停机且无崩溃堆栈，不误报为 fail。
     if (err.status === 143) {
       return {
-        status: 'ok',
+        status: REAL_SMOKE_STATUS.OK,
         exitCode: 143,
         script: path.relative(TOOL_DIR, script),
         durationMs: Date.now() - started,
@@ -274,7 +280,7 @@ function runRealSmoke(pluginRoot) {
         note: '包装进程由 SIGTERM (exit 143) 正常终止，判定为停机通过',
       }
     }
-    const label = VERIFY_RUNTIME_EXIT[err.status] ?? 'error'
+    const label = VERIFY_RUNTIME_EXIT[err.status] ?? STAGE_STATUS.ERROR
     return {
       status: label,
       exitCode: err.status ?? null,
@@ -283,9 +289,9 @@ function runRealSmoke(pluginRoot) {
       durationMs: Date.now() - started,
       tail: String(err.stdout || err.message || '').split('\n').slice(-12).join('\n'),
       hint:
-        label === 'fail'
+        label === REAL_SMOKE_STATUS.FAIL
           ? '真冷启动失败——tail 是 verify-runtime 的归因输出，四类归因（插件代码/依赖解析/profile 配置/宿主运行时）以它为准'
-          : label === 'inconclusive'
+          : label === REAL_SMOKE_STATUS.INCONCLUSIVE
             ? (realSmokeEnvGap(String(err.stdout || '')) ??
               '真冷启动不定论（exit 2）——看 tail 判断是需要换 profile 重探还是环境缺件')
             : null,
@@ -325,7 +331,7 @@ const toolVersion = toolPkg?.version ?? null
 // 1. 环境
 const env = probeEnvironment(pluginDir)
 stages.env = {
-  status: 'ok',
+  status: STAGE_STATUS.OK,
   globalDsh: env.globalDsh,
   desktopApp: env.desktopApp,
   profiles: env.profiles,
@@ -377,7 +383,7 @@ if (lastRun && !isCustomRun && hostVersion && pluginPkg?.version) {
         tool: { version: currentToolVersion },
         host: { version: hostVersion },
         window: lastRun.window || { local: hostVersion, target: hostVersion },
-        phases: { scan: 'ok', smoke: 'ok', typecheck: 'skipped', realSmoke: null },
+        phases: { scan: STAGE_STATUS.OK, smoke: SMOKE_STATUS.OK, typecheck: TYPECHECK_STATUS.SKIPPED, realSmoke: null },
         fastPass: true,
         auditScore: lastRun.auditScore,
         durationMs: elapsed,
@@ -394,7 +400,7 @@ if (lastRun && !isCustomRun && hostVersion && pluginPkg?.version) {
         overallScore: lastRun.auditScore ?? null,
         priorityCounts: { P0: 0, P1: 0, P2: 0, P3: 0 },
         smoke: { success: true, skipped: 'fast-pass' },
-        typecheck: 'skipped',
+        typecheck: TYPECHECK_STATUS.SKIPPED,
         blockers: [],
         verdict: 'PASS',
         fastPass: true,
@@ -441,14 +447,14 @@ let officialTarget = null
 
 if (explicitTarget) {
   officialTarget = explicitTarget
-  stages.version = { status: 'ok', resolution: { target: explicitTarget, source: 'explicit-flag' } }
+  stages.version = { status: STAGE_STATUS.OK, resolution: { target: explicitTarget, source: 'explicit-flag' } }
   versionResult = { resolution: stages.version.resolution }
 } else if (checkUpstream && hostVersion && !offline) {
   versionResult = runStep('guide-sync.mjs', [hostVersion], 'version', stages)
   officialTarget = versionResult?.resolution?.target ?? hostVersion
 } else {
   stages.version = {
-    status: 'ok',
+    status: STAGE_STATUS.OK,
     resolution: {
       target: hostVersion,
       source: 'local-host',
@@ -478,7 +484,7 @@ const windowTarget = windowInfo.target
 // npm 发版早于上游打 tag 时整段扫描跳过，而本机其实已有可用的指南快照。
 let guideRoot = null
 if (offline) {
-  stages.guides = { status: 'skipped', reason: '--offline' }
+  stages.guides = { status: STAGE_STATUS.SKIPPED, reason: '--offline' }
 } else if (windowLocal && windowTarget && !flag('no-clone')) {
   const cloned = runStep('guide-sync.mjs', [windowLocal, '--clone', '--target', windowTarget], 'guides', stages)
   guideRoot = cloned?.guides?.root ?? null
@@ -491,21 +497,21 @@ if (offline) {
 // --offline 一律跳过（自检零外部状态）。
 let typesDiff = null
 if (offline) {
-  stages.typesDiff = { status: 'skipped', reason: '--offline' }
+  stages.typesDiff = { status: STAGE_STATUS.SKIPPED, reason: '--offline' }
 } else if (guideRoot && windowLocal && windowTarget && env.globalDsh?.location) {
   try {
     const currentSig = extractHostSignature(env.globalDsh.location)
     saveCachedSignature(currentSig.version, currentSig)
     if (windowLocal === currentSig.version) {
       stages.typesDiff = {
-        status: 'skipped',
+        status: STAGE_STATUS.SKIPPED,
         reason: `窗口起点与当前宿主同为 v${currentSig.version}，无可差分区间；本次已留存 v${currentSig.version} 签名快照`,
       }
     } else {
       const baseSig = loadCachedSignature(windowLocal)
       if (!baseSig) {
         stages.typesDiff = {
-          status: 'skipped',
+          status: STAGE_STATUS.SKIPPED,
           reason: `基线 v${windowLocal} 签名未缓存（大概率是升级后才第一次跑）。本次已留存 v${currentSig.version} 签名，下次从更早基线起扫即可差分；如需立即补，用 --from 指向旧版宿主目录`,
         }
       } else {
@@ -517,7 +523,7 @@ if (offline) {
           synth = { written: guides.length, file }
         }
         stages.typesDiff = {
-          status: 'ok',
+          status: REAL_SMOKE_STATUS.OK,
           base: windowLocal,
           target: currentSig.version,
           breakingCount: diff.breakingCount,
@@ -528,10 +534,10 @@ if (offline) {
       }
     }
   } catch (err) {
-    stages.typesDiff = { status: 'error', error: String(err?.message || err).slice(0, 300) }
+    stages.typesDiff = { status: STAGE_STATUS.ERROR, error: String(err?.message || err).slice(0, 300) }
   }
 } else {
-  stages.typesDiff = { status: 'skipped', reason: '无指南根或未检测到宿主安装位置' }
+  stages.typesDiff = { status: STAGE_STATUS.SKIPPED, reason: '无指南根或未检测到宿主安装位置' }
 }
 
 // 4. 扫描（宿主实测核查内置；第五个参数让包面差分合成的虚拟指南并入扫描）
@@ -548,9 +554,9 @@ if (guideRoot && windowLocal && windowTarget) {
 let auditReport = null
 try {
   auditReport = auditPlugin(pluginDir, { scanResult, targetVersion: windowTarget })
-  stages.audit = { status: 'ok', scores: auditReport.scores, overallScore: auditReport.overallScore, findings: auditReport.findings.length }
+  stages.audit = { status: STAGE_STATUS.OK, scores: auditReport.scores, overallScore: auditReport.overallScore, findings: auditReport.findings.length }
 } catch (err) {
-  stages.audit = { status: 'error', error: err.message?.slice(0, 500) }
+  stages.audit = { status: STAGE_STATUS.ERROR, error: err.message?.slice(0, 500) }
 }
 
 // 6. 冒烟（前置低级错误拦截：未构建则阻断冒烟）
@@ -558,7 +564,7 @@ let smokeResult = null
 const buildCheck = checkBuildArtifact(pluginDir)
 if (!buildCheck.ok) {
   stages.smoke = {
-    status: 'error',
+    status: SMOKE_STATUS.ERROR,
     stage: 'entry_resolution',
     error: buildCheck.reason,
   }
@@ -628,15 +634,15 @@ const report = {
     ? smokeResult.success
       ? { success: true, durationMs: smokeResult.durationMs, registeredToolsCount: smokeResult.registeredToolsCount, mockFallbacks: smokeResult.mockFallbacks }
       : {
-          status: 'error',
+          status: SMOKE_STATUS.ERROR,
           success: false,
           stage: smokeResult.stage || 'runtime_execution',
           error: smokeResult.error,
           undeclaredInjectAccess: smokeResult.undeclaredInjectAccess,
           skipped: false,
         }
-    : stages.smoke?.status === 'error'
-      ? { status: 'error', success: false, stage: stages.smoke.stage || 'runtime_execution', error: stages.smoke.error, skipped: false }
+    : stages.smoke?.status === SMOKE_STATUS.ERROR
+      ? { status: SMOKE_STATUS.ERROR, success: false, stage: stages.smoke.stage || 'runtime_execution', error: stages.smoke.error, skipped: false }
       : { skipped: true },
   typecheck: stages.typecheck ?? { skipped: true },
   realSmoke,
@@ -674,33 +680,33 @@ if (report.scan?.skipped) {
 }
 if (criticalOrHigh > 0) verdictLines.push(`⚠ critical/high 命中 ${criticalOrHigh} 处——先清零再做优化`)
 else if (report.scan?.findingCount != null) verdictLines.push(`扫描命中 ${report.scan.findingCount} 处（无 critical/high）`)
-if (report.typesDiff?.status === 'ok') {
+if (report.typesDiff?.status === STAGE_STATUS.OK) {
   verdictLines.push(
     `签名差分 v${report.typesDiff.base} → v${report.typesDiff.target}: ${report.typesDiff.changeCount} 处变更（${report.typesDiff.breakingCount} 处 P0）` +
     `${report.typesDiff.synth ? `，合成 ${report.typesDiff.synth.written} 条虚拟指南已并入扫描` : ''}`
   )
-} else if (report.typesDiff?.status === 'skipped' && report.typesDiff.reason) {
+} else if (report.typesDiff?.status === STAGE_STATUS.SKIPPED && report.typesDiff.reason) {
   verdictLines.push(`签名差分跳过——${report.typesDiff.reason}`)
-} else if (report.typesDiff?.status === 'error') {
+} else if (report.typesDiff?.status === STAGE_STATUS.ERROR) {
   verdictLines.push(`签名差分失败（${String(report.typesDiff.error).slice(0, 120)}）——不影响官方指南扫描，已记入报告`)
 }
 if ((report.scan?.docGapCount ?? 0) > 0) {
   verdictLines.push(`⚠ 其中 ${report.scan.docGapCount} 处是官方指南没记的（${(report.scan.docGapSymbols || []).join('、')}）——包面 diff 补报，官方文档滞后或漏记（#5816 类）`)
 }
 if (report.audit) verdictLines.push(`体检 ${report.audit.overallScore}/100（性能 ${report.audit.scores.performance}/弹性 ${report.audit.scores.resilience}/预算 ${report.audit.scores.contextBudget}/生命周期 ${report.audit.scores.lifecycle}）`)
-if (report.smoke?.status === 'error' || report.smoke?.success === false) {
+if (report.smoke?.status === SMOKE_STATUS.ERROR || report.smoke?.success === false) {
   verdictLines.push(`⚠ 冒烟阻断（${report.smoke.stage || 'runtime_execution'}）——${String(report.smoke.error || '').split('\n')[0]}`)
 } else if (report.smoke?.success != null) {
   verdictLines.push(`冒烟通过（${report.smoke.registeredToolsCount} 工具，${report.smoke.durationMs}ms）`)
 }
-if (report.typecheck?.status === 'fail') verdictLines.push('typecheck 红——适配前先修构建')
-else if (report.typecheck?.status === 'ok') verdictLines.push('typecheck 通过')
-else if (report.typecheck?.status === 'skipped') verdictLines.push(`typecheck 跳过（${report.typecheck.reason}）`)
+if (report.typecheck?.status === TYPECHECK_STATUS.FAIL) verdictLines.push('typecheck 红——适配前先修构建')
+else if (report.typecheck?.status === TYPECHECK_STATUS.OK) verdictLines.push('typecheck 通过')
+else if (report.typecheck?.status === TYPECHECK_STATUS.SKIPPED) verdictLines.push(`typecheck 跳过（${report.typecheck.reason}）`)
 if (realSmoke) {
   if (realSmoke.skipped) verdictLines.push(`真冷启动跳过——${realSmoke.reason}`)
-  else if (realSmoke.status === 'ok') verdictLines.push(`真冷启动通过（${realSmoke.durationMs}ms，verify-runtime 四类归因全绿）`)
-  else if (realSmoke.status === 'fail') verdictLines.push('⚠ 真冷启动失败——看 realSmoke.tail 的归因')
-  else if (realSmoke.status === 'inconclusive') verdictLines.push('真冷启动不定论——看 realSmoke.tail')
+  else if (realSmoke.status === REAL_SMOKE_STATUS.OK) verdictLines.push(`真冷启动通过（${realSmoke.durationMs}ms，verify-runtime 四类归因全绿）`)
+  else if (realSmoke.status === REAL_SMOKE_STATUS.FAIL) verdictLines.push('⚠ 真冷启动失败——看 realSmoke.tail 的归因')
+  else if (realSmoke.status === REAL_SMOKE_STATUS.INCONCLUSIVE) verdictLines.push('真冷启动不定论——看 realSmoke.tail')
 }
 
 // 8. 日志（--no-log 跳过）
@@ -714,12 +720,12 @@ if (!flag('no-log')) {
 // 保持既有退出码语义（0 干净、2 命中或构建/真冷启动失败）。
 const scanUnknown = Boolean(report.scan?.skipped) || report.scan?.coverage?.complete === false
 const strictFail = flag('strict') && scanUnknown
-const exitFail = criticalOrHigh > 0 || report.typecheck?.status === 'fail' || realSmoke?.status === 'fail' || strictFail
+const exitFail = criticalOrHigh > 0 || report.typecheck?.status === TYPECHECK_STATUS.FAIL || realSmoke?.status === REAL_SMOKE_STATUS.FAIL || strictFail
 const next = []
 if (exitFail) {
   if (criticalOrHigh > 0) next.push('按 scan.findings 的 migration 逐条清命中（evidence 行原文可核对是否误报）')
-  if (report.typecheck?.status === 'fail') next.push('typecheck 红——先修构建（尾部输出在 report.typecheck.tail）')
-  if (realSmoke?.status === 'fail') next.push('真冷启动失败——realSmoke.tail 有四类归因')
+  if (report.typecheck?.status === TYPECHECK_STATUS.FAIL) next.push('typecheck 红——先修构建（尾部输出在 report.typecheck.tail）')
+  if (realSmoke?.status === REAL_SMOKE_STATUS.FAIL) next.push('真冷启动失败——realSmoke.tail 有四类归因')
   if (strictFail) {
     next.push(report.scan?.skipped
       ? '扫描没跑（--strict）——按 scan.reason 修指南来源或网络后重跑'
@@ -729,8 +735,8 @@ if (exitFail) {
 // 非失败但结论不完整：工具链缺失与真冷启动不定论都要给补法，
 // 否则「退出码 0」会被读成「查干净了」，而实际是没验成。
 if (!exitFail) {
-  if (report.typecheck?.status === 'skipped' && report.typecheck?.hint) next.push(`typecheck 未验成：${report.typecheck.hint}`)
-  if (realSmoke?.status === 'inconclusive' && realSmoke?.hint) next.push(`真冷启动未验成：${realSmoke.hint}`)
+  if (report.typecheck?.status === TYPECHECK_STATUS.SKIPPED && report.typecheck?.hint) next.push(`typecheck 未验成：${report.typecheck.hint}`)
+  if (realSmoke?.status === REAL_SMOKE_STATUS.INCONCLUSIVE && realSmoke?.hint) next.push(`真冷启动未验成：${realSmoke.hint}`)
 }
 
 if (flag('compact')) {
@@ -760,7 +766,7 @@ if (flag('compact')) {
     overallScore: report.audit?.overallScore ?? null,
     priorityCounts: report.audit?.priorityCounts ?? { P0: 0, P1: 0, P2: 0, P3: 0 },
     smoke: report.smoke?.success != null ? { success: report.smoke.success, stage: report.smoke.stage, durationMs: report.smoke.durationMs } : { skipped: true },
-    typecheck: report.typecheck?.status ?? 'skipped',
+    typecheck: report.typecheck?.status ?? TYPECHECK_STATUS.SKIPPED,
     realSmoke: realSmoke ? { status: realSmoke.status } : undefined,
     blockers,
     verdict: exitFail ? 'FAIL' : 'PASS',

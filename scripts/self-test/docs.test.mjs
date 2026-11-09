@@ -108,3 +108,60 @@ test('文档安全姿态与常设规则条数对齐代码（防 README 与代码
     assert.ok(!hardcoded.test(text), `${name} 用中文数字硬编码了常设规则条数，规则表一变就漂移；改写成「条数以规则表为准」`)
   }
 })
+
+test('状态词表：run.mjs 与 runlog.mjs 不再手写阶段状态字面量（单一真源对账）', async () => {
+  // 这一条是「同一类问题只修了一处」的机器版：run.mjs 曾 24 处手写 status 字面量，
+  // runlog.mjs 又按另一套派生逻辑读它们。加一个状态名要改 N 处，漏一处就是静默失配。
+  // 现在写入点与派生都从 lib/run-states.mjs 取值，门禁钉住这件事不再回退。
+  const root = path.resolve(import.meta.dirname, '..', '..')
+  const read = (f) => fs.readFileSync(path.join(root, f), 'utf8')
+  const { STAGE_STATUS, TYPECHECK_STATUS, SMOKE_STATUS, REAL_SMOKE_STATUS, ALL_STATUSES } = await import('../lib/run-states.mjs')
+  const runSrc = read('scripts/run.mjs')
+  const runlogSrc = read('scripts/lib/runlog.mjs')
+
+  // 1. 词表本身自洽：不同词表之间的值可以同名（ok/skipped/error 是多阶段共用的），
+  //    但同一张表内不允许两个键指向同一个值（那才是真的重复定义）。
+  const vocab = { STAGE_STATUS, TYPECHECK_STATUS, SMOKE_STATUS, REAL_SMOKE_STATUS }
+  for (const [name, table] of Object.entries(vocab)) {
+    const values = Object.values(table)
+    assert.strictEqual(new Set(values).size, values.length, `${name} 内有两个键指向同一个状态值`)
+  }
+  assert.deepStrictEqual([...ALL_STATUSES].sort(), ['error', 'fail', 'inconclusive', 'ok', 'skipped'], 'ALL_STATUSES 并集漂移')
+
+  // 2. 写入点不再出现裸字面量。允许出现在注释里（说明文字），不允许出现在
+  //    `status:` 赋值或 `===` 比较的位置。
+  const literalUse = (src, label) => {
+    const offenders = []
+    for (const [i, line] of src.split('\n').entries()) {
+      const code = line.replace(/^\s*\/\/.*$/, '').trim()
+      if (!code) continue
+      if (/status:\s*'/.test(code) || /status\s*===\s*'/.test(code) || /status\s*!==\s*'/.test(code)) {
+        offenders.push(`${label}:${i + 1}: ${code}`)
+      }
+    }
+    return offenders
+  }
+  const offenders = [...literalUse(runSrc, 'run.mjs'), ...literalUse(runlogSrc, 'runlog.mjs')]
+  assert.deepStrictEqual(offenders, [], `这些位置仍在手写状态字面量，应改走 lib/run-states.mjs：\n${offenders.join('\n')}`)
+
+  // 3. runlog 的 phasesOf 只从词表派生，不再有自己的字面量分支
+  assert.ok(/phasesOf/.test(runlogSrc), 'runlog.mjs 应使用词表导出的 phasesOf')
+  assert.ok(!/record\.typecheck\.status \?\?/.test(runlogSrc), 'runlog 不应再自己派生 typecheck 状态（已收进 run-states.phasesOf）')
+})
+
+test('文档分层：过程报告（research/）不进技能面，技能面文件都在 package.json files 白名单里', async () => {
+  // argo v2.13.0 的文档分层收口（docs/ 87→26）：真源、生成物、公开文档、过程报告
+  // 四层分开，过程报告归档不进公开仓。本技能的同构动作：research/ 是过程报告，
+  // 不该打进 npm 包（读者不会用，还会随每次调研增长）。
+  const root = path.resolve(import.meta.dirname, '..', '..')
+  const read = (f) => fs.readFileSync(path.join(root, f), 'utf8')
+  const pkg = JSON.parse(read('package.json'))
+  const files = pkg.files || []
+  assert.ok(!files.includes('research/**/*.md'), 'research/ 是过程报告，不该进 npm 包；移到 docs-local/archive/ 或直接删除')
+  assert.ok(!files.includes('fixtures/**'), 'fixtures/ 是自检资产，不该进 npm 包（随包分发的是判据，不是夹具）')
+
+  // 技能面同步的真源 sync-skill.mjs 也要跟上：它的同步面固定为五类文件，
+  // 不应把 research/ 或 fixtures/ 镜像到下游。
+  const syncSrc = read('scripts/sync-skill.mjs')
+  assert.ok(!/research/.test(syncSrc), 'sync-skill 的同步面不应包含 research/')
+})

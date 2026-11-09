@@ -1,0 +1,6 @@
+{
+  "name": "fixture-shared-state-constant-table",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "lib/index.js"
+}

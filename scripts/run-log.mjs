@@ -16,6 +16,7 @@
 // failedPlugins/waitingForServices 说装载侧状态，两边以前要各跑一个命令再人肉对。
 
 import fs from 'node:fs'
+import { STAGE_STATUS } from './lib/run-states.mjs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { listRuns, resolveRunFile, sanitizeRun, getLogRoot } from './lib/runlog.mjs'
@@ -64,9 +65,9 @@ export function correlateRuns({ limit = 20, logsDir = DEFAULT_LOGS_DIR } = {}) {
         if (text.includes(name)) hits.push({ log: logRun.file, what: 'error-message', detail: text.slice(0, 200) })
       }
     }
-    const codeSideClean = run.phases?.scan === 'ok' && !(run.criticalOrHigh > 0)
+    const codeSideClean = run.phases?.scan === STAGE_STATUS.OK && !(run.criticalOrHigh > 0)
     // 扫描没跑（skipped/error/旧条目无 phases）时代码侧是未知，不能与宿主日志干净合成「一致」
-    const codeSideUnknown = run.phases?.scan !== 'ok'
+    const codeSideUnknown = run.phases?.scan !== STAGE_STATUS.OK
     const verdict = hits.length === 0
       ? codeSideUnknown ? 'host-log-clean-scan-unknown' : 'host-log-clean'
       : codeSideClean

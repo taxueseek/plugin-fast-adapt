@@ -1,0 +1,13 @@
+{
+  "id": "scan-code-boundary",
+  "source": "本机实测（v0.2.2 降噪复盘）",
+  "symptom": "常量锚点 ABORTED 命中 FS_ABORTED，同一类子串碰撞误报",
+  "rootCause": "朴素正则做子串匹配，不做词边界",
+  "fix": "常量锚点改为词边界匹配（(?:^|[^A-Za-z0-9_-])CODE(?:$|[^A-Za-z0-9_-])）",
+  "check": {
+    "kind": "scan",
+    "anchors": { "codes": ["ABORTED"] },
+    "assert": "findings.length === 1 && findings[0].symbol === 'ABORTED'"
+  },
+  "fingerprint": "code-scan:code-anchor:word-boundary"
+}

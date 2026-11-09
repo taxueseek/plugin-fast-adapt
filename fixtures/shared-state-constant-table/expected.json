@@ -1,0 +1,13 @@
+{
+  "id": "shared-state-constant-table",
+  "source": "本机实测 2026-11-05（dsh-llm-fallbacks 10 命中、dsh-image-gen 35 命中全误报）",
+  "symptom": "泛化判据把模块级常量查表（new Set / new Map / 数组）报成「共享状态没有所有者」",
+  "rootCause": "常量查表容器与真正的共享可变容器在文本上同形，先能后对的代价是把常量表全报成违规",
+  "fix": "判据收窄为两种机械可判形态：globalThis.__X__ 赋值、被导出的模块级 let/var 在函数体里被重新赋值",
+  "check": {
+    "kind": "standards",
+    "args": [],
+    "assert": "findings.filter(f => f.rule === 'shared-state-no-owner').length === 0"
+  },
+  "fingerprint": "standards:shared-state-no-owner:constant-table"
+}

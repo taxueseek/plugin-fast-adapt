@@ -1,0 +1,6 @@
+{
+  "name": "fixture-symlink-delete-no-follow",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "lib/index.js"
+}

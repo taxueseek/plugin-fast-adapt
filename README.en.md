@@ -18,7 +18,7 @@
 | Verifying one change | 3,600 s real host cold start → millisecond-scale in-memory smoke test (with unbuilt check & host module fallback) |
 | Ghost host | Warns when the disk has new code but the running process still executes the old one (compares process start time, not version strings) |
 | Fake-green check | Warns when `tsconfig` `paths` point at a missing checkout, where TypeScript silently falls back to published types |
-| Self-test | 263 assertions, runs offline |
+| Self-test | 269 assertions, runs offline |
 | External dependencies | 0 (Node built-ins + the `git`/`npm` commands only) |
 | Cross-platform | Native support for macOS, Linux standard paths, Termux Android, and containers (XDG-compliant) |
 | Scaffolding | One command emits a runnable plugin in five forms, verified on creation, then a write gate issues the birth certificate |
@@ -48,7 +48,7 @@ This project takes a different approach: **maintain the method of obtaining know
 - **Cross-platform & container ready**: eliminates hardcoded directory assumptions, supporting Linux standard paths (`/usr/lib/node_modules`), Termux on Android (`$PREFIX/lib/node_modules`), `npm_config_prefix`, `DSH_HOST_PATH` / `DSH_LOCATION` env overrides, and XDG cache specs
 - **Cheap verification**: in-memory Cordis smoke test returns in milliseconds to seconds without a real host cold start; `--real-smoke` provides real-host isolated profile boot verification
 - **Zero external dependencies**: Node built-ins plus `git`/`npm` commands only
-- **Reproducible**: 263 assertions, runs offline; CI runs on ubuntu, macOS, and Windows
+- **Reproducible**: 269 assertions, runs offline; CI runs on ubuntu, macOS, and Windows
 - **More than adaptation**: `scaffold.mjs` emits a runnable plugin in five forms in one command, and `write-gate.mjs` issues a birth certificate
 - **Silent failures have hard evidence**: `ghostHost` compares process start time against disk change time; `falseGreen` catches TypeScript silent fallbacks
 - **Honest about its limits**: passing smoke test ≠ host compatibility, and the tool states this clearly in its output
@@ -236,12 +236,12 @@ No TypeScript, no AST library, no HTTP client. Runs on Node 22.13+ (`import.meta
 Self-test:
 
 ```sh
-npm test   # node scripts/self-test.mjs, 263 assertions
+npm test   # node scripts/self-test.mjs, 269 assertions
 ```
 
 Contributors should enable the pre-commit gate (one time): `git config core.hooksPath .githooks` — every commit runs the self-test, so a forgotten downstream sync is caught at commit time.
 
-Covers scanner false positives (names in comments and strings are not hits), false negatives, version heuristics, replacement-pair recognition, end-to-end findings (with guide file + line provenance anchors), dual-source seam-query verdicts (agree-removed / host-still-present disagreement / honest no-record), run-log × host-log cross-checks, the --real-smoke bridge tier (fail → exit 2 with a next-step pointer), the upstream-watch exit codes, the sync commit-command suggestion (adds only the synced path), SOP reference integrity, dist-tags cache states, smoke verification (including the undeclared-inject contract rejection), the four-dimension audit (including peer patches), activation diagnostics, ghost-host four states (stale/ok/unknown/no-running-host) with disk-time provenance, tsconfig paths fake green (extends chains, JSONC comments, wildcard prefixes, non-host aliases downgraded), the plugin scaffolder (all five forms, naming-projection grammar, smoke closure, patch-layer recognizability, invalid-input and non-empty-target rejection), the write gate (hard-gate interception, soft metrics never overrule, skip semantics, scaffold handoff), log diagnosis, downstream-sync drift checks plus a real-machine zero-drift gate, cache-root injection (the self-test never writes the real user cache), one-time run-log ledger migration (legacy `~/.cache` root moves to `~/.local/state`), a self-test size gate and a scanner performance gate. The self-test itself is zero-network and zero-dependency, and runs on any machine.
+Covers scanner false positives (names in comments and strings are not hits), false negatives, version heuristics, replacement-pair recognition, end-to-end findings (with guide file + line provenance anchors), dual-source seam-query verdicts (agree-removed / host-still-present disagreement / honest no-record), run-log × host-log cross-checks, the --real-smoke bridge tier (fail → exit 2 with a next-step pointer), the upstream-watch exit codes, the sync commit-command suggestion (adds only the synced path), SOP reference integrity, dist-tags cache states, smoke verification (including the undeclared-inject contract rejection), the four-dimension audit (including peer patches), activation diagnostics, ghost-host four states (stale/ok/unknown/no-running-host) with disk-time provenance, tsconfig paths fake green (extends chains, JSONC comments, wildcard prefixes, non-host aliases downgraded), the plugin scaffolder (all five forms, naming-projection grammar, smoke closure, patch-layer recognizability, invalid-input and non-empty-target rejection), the write gate (hard-gate interception, soft metrics never overrule, skip semantics, scaffold handoff), log diagnosis, downstream-sync drift checks plus a real-machine zero-drift gate, cache-root injection (the self-test never writes the real user cache), one-time run-log ledger migration (legacy `~/.cache` root moves to `~/.local/state`), a self-test size gate, a scanner performance gate, full incident-fixture regression (`fixtures/` cross-checked against `references/incident-ledger.md`, with both sides of every tightened criterion pinned), a single-source state-vocabulary check (`lib/run-states.mjs`), and a doc-layering check (process reports are archived under `docs-local/archive/` and never enter the skill surface). The self-test itself is zero-network and zero-dependency, and runs on any machine.
 
 To gate your own plugin's repository at commit time (smoke/typecheck as hard gates, audit as a soft report), see [references/ci-snippet.md](references/ci-snippet.md).
 
@@ -280,6 +280,7 @@ To gate your own plugin's repository at commit time (smoke/typecheck as hard gat
 | `references/user-guide.md` | Comprehensive user guide (local anchoring, cross-platform adaptability, Web/APP fleet governance, guardrails) |
 | `references/legacy-migration-sop.md` | Legacy migration SOP (for ranges the official guide does not cover) |
 | `references/heuristics.md` | Scan noise-reduction rules and the measurements behind them |
+| `references/incident-ledger.md` | Incident ledger: one line per real false positive/negative, each pointing at a minimal reproduction under `fixtures/` |
 | `references/ci-snippet.md` | CI gate template for plugin repositories (smoke/typecheck hard gates + audit soft report) |
 
 ## Safety posture

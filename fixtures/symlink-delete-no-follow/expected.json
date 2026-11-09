@@ -1,0 +1,12 @@
+{
+  "id": "symlink-delete-no-follow",
+  "source": "上游常设规则 docs/defensive-patterns/general.zh.md#用-unlink-删除链接形态的路径",
+  "symptom": "递归删缓存目录时穿透软链，删掉链接目标的内容",
+  "rootCause": "rmSync(link, { recursive: true }) 在 POSIX 跟随链接；Windows 对 junction 抛 ERR_FS_EISDIR",
+  "fix": "lib/proc-env.mjs removeDirSafely 先 lstat：链接走 unlink（只删链接本身），真实目录才递归删",
+  "check": {
+    "kind": "env",
+    "assert": "(() => { const r = removeDirSafely(link); return r.kind === 'symlink' && r.removed === true && targetKept() })()"
+  },
+  "fingerprint": "proc-env:remove-dir-safely:symlink-no-follow"
+}
