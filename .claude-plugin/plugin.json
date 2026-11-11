@@ -1,7 +1,7 @@
 {
   "name": "plugin-fast-adapt",
-  "version": "0.3.3",
-  "description": "DSH 插件升级适配与破坏性变更核查，兼具代码审查、从零造插件、环境诊断与原生插件挂载能力",
+  "version": "0.4.0",
+  "description": "Adapt DSH plugins to new host releases: official-guide-driven breaking-change scans, in-memory smoke tests, fleet governance and five-form scaffolding, plus code review, plugin authoring and environment diagnosis",
   "author": {
     "name": "taxueseek"
   },
