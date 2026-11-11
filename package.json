@@ -1,7 +1,7 @@
 {
   "name": "plugin-fast-adapt",
-  "version": "0.3.3",
-  "description": "DSH 插件升级适配：主入口加四条车道子技能与 DSH 原生插件，直连官方指南，零外部依赖",
+  "version": "0.4.0",
+  "description": "Adapt DeepSeek Harness (DSH) plugins to new host releases: official-guide-driven breaking-change scans, in-memory smoke tests, fleet governance, five-form plugin scaffolding. Agent-native skill, zero dependencies",
   "type": "module",
   "main": "./lib/index.js",
   "exports": {
@@ -14,7 +14,8 @@
   "files": [
     "SKILL.md",
     "README.md",
-    "README.en.md",
+    "README.zh-CN.md",
+    "README.ja.md",
     "LICENSE",
     "cordis.patch.yml",
     "lib/**/*.js",

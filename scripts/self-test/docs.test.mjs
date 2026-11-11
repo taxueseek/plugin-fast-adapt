@@ -30,7 +30,7 @@ test('主技能与两份 README 的脚本清单双向对齐：正文引用的脚
   // 后来两份 README 的清单也各漏 5 个脚本，只因门禁只查 SKILL.md 才没拦住，
   // 所以把三份文档一起收进这张网：脚本集合只有一份，清单就不该有三套说法。
   const root = path.resolve(import.meta.dirname, '..', '..')
-  const docs = ['SKILL.md', 'README.md', 'README.en.md']
+  const docs = ['SKILL.md', 'README.md', 'README.zh-CN.md', 'README.ja.md']
   const scriptFiles = fs.readdirSync(path.join(root, 'scripts')).filter((f) => f.endsWith('.mjs'))
   for (const doc of docs) {
     const text = fs.readFileSync(path.join(root, doc), 'utf8')
@@ -52,7 +52,7 @@ test('主技能与两份 README 的脚本清单双向对齐：正文引用的脚
 test('文档宣称的断言数与实际一致（防手工漂移）', () => {
   // 这个数字已漂过两次（49→50→54 都是事后手补）；现在让自检拦住它
   const root = path.resolve(import.meta.dirname, '..', '..')
-  const docs = ['SKILL.md', 'README.md', 'README.en.md'].map((f) => path.join(root, f))
+  const docs = ['SKILL.md', 'README.md', 'README.zh-CN.md', 'README.ja.md'].map((f) => path.join(root, f))
   let checked = 0
   for (const doc of docs) {
     const text = fs.readFileSync(doc, 'utf8')
@@ -60,6 +60,7 @@ test('文档宣称的断言数与实际一致（防手工漂移）', () => {
       ...text.matchAll(/(\d+)\s*项断言/g),
       ...text.matchAll(/(\d+)\s*项自检/g),
       ...text.matchAll(/(\d+)\s*assertions/g),
+      ...text.matchAll(/(\d+)\s*個のアサーション/g),
     ].map((m) => Number(m[1]))
     assert.ok(numbers.length > 0, `${path.basename(doc)} 应写明断言数，否则本断言失去保护对象`)
     for (const n of numbers) {
@@ -74,25 +75,27 @@ test('文档安全姿态与常设规则条数对齐代码（防 README 与代码
   const root = path.resolve(import.meta.dirname, '..', '..')
   const read = (f) => fs.readFileSync(path.join(root, f), 'utf8')
   const main = read('SKILL.md')
-  const zh = read('README.md')
-  const en = read('README.en.md')
+  const zh = read('README.zh-CN.md')
+  const en = read('README.md')
+  const ja = read('README.ja.md')
   const adapt = read('sub-skills/adapt/SKILL.md')
 
   // 1. 自动修补已不止两类：codemod / fix-peer-deps 之外还有 fleet-sweep
-  //    --apply-compat 写 package.json（已补备份）。三份文档都不能再宣称「从不改插件代码」。
-  assert.ok(!/不自动改插件代码/.test(zh), 'README.md 仍宣称「不自动改插件代码」，与 codemod/fix-peer-deps/fleet-sweep 的三个写盘入口矛盾')
-  assert.ok(!/Never edits plugin code automatically/.test(en), 'README.en.md 仍宣称从不自动改插件代码')
-  for (const [name, text] of [['SKILL.md', main], ['README.md', zh], ['README.en.md', en]]) {
+  //    --apply-compat 写 package.json（已补备份）。四份文档都不能再宣称「从不改插件代码」。
+  assert.ok(!/不自动改插件代码/.test(zh), 'README.zh-CN.md 仍宣称「不自动改插件代码」，与 codemod/fix-peer-deps/fleet-sweep 的三个写盘入口矛盾')
+  assert.ok(!/Never edits plugin code automatically/.test(en), 'README.md 仍宣称从不自动改插件代码')
+  assert.ok(!/プラグインコードを自動的に編集することはない/.test(ja), 'README.ja.md 仍宣称绝不自动修改插件代码')
+  for (const [name, text] of [['SKILL.md', main], ['README.md', en], ['README.zh-CN.md', zh], ['README.ja.md', ja]]) {
     // 只看安全姿态那几行：正文清单表本来就列了 fleet-sweep.mjs，全篇搜会假绿。
-    const safetyLines = text.split('\n').filter((l) => /自动修补|自动改插件代码|Automatic plugin-code edits|三类/.test(l)).join('\n')
+    const safetyLines = text.split('\n').filter((l) => /自动修补|自动改插件代码|Automatic plugin-code edits|プラグインコードの自動修復|三类/.test(l)).join('\n')
     assert.ok(/fleet-sweep/.test(safetyLines), `${name} 的安全姿态未把 fleet-sweep --apply-compat 列入自动修补边界`)
   }
 
   // 2. run-log 的 sanitize --out 会写文件，文档必须如实披露这一例外，不能只写
   //    「完全只读」。这里锁披露句而非禁掉 run-log 字样——正确的文档本来就要点名它。
-  for (const [name, text] of [['SKILL.md', main], ['README.md', zh], ['README.en.md', en]]) {
+  for (const [name, text] of [['SKILL.md', main], ['README.md', en], ['README.zh-CN.md', zh], ['README.ja.md', ja]]) {
     assert.ok(/sanitize --out/.test(text), `${name} 未披露 run-log 的 sanitize --out 写盘例外`)
-    const line = text.split('\n').find((l) => /完全只读|完全不写文件|strictly read-only/.test(l))
+    const line = text.split('\n').find((l) => /完全只读|完全不写文件|strictly read-only|厳格に読み取り専用/.test(l))
     assert.ok(line && /sanitize --out/.test(line), `${name} 的只读清单行未在同行披露 run-log 的 sanitize --out 例外`)
   }
 

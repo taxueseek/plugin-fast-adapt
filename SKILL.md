@@ -50,7 +50,7 @@ node scripts/sync-skill.mjs --dest <下游技能目录> --check   # 只查漂移
 node scripts/sync-skill.mjs --dest <下游技能目录>            # 同步
 ```
 
-同步面固定为技能读者真正会用的文件：`SKILL.md`、`README.md`、`README.en.md`、`references/**`、`scripts/**`、`sub-skills/**`，`package.json` 不入技能面。`--dry-run` 只打印不落盘；同步完成后打印建议的下游提交命令（只 add 同步路径防夹带），不自动提交。
+同步面固定为技能读者真正会用的文件：`SKILL.md`、`README.md`、`README.zh-CN.md`、`README.ja.md`、`references/**`、`scripts/**`、`sub-skills/**`，`package.json` 不入技能面。`--dry-run` 只打印不落盘；同步完成后打印建议的下游提交命令（只 add 同步路径防夹带），不自动提交。
 
 ## 跨车道纪律
 

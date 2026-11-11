@@ -166,7 +166,7 @@ test('发布门禁：.pfa-backup 进 FORBIDDEN_PACK，实测 npm pack 会把它�
     'FORBIDDEN_PACK 应拦 .pfa-backup 下的文件',
   )
   const base = [
-    'package.json', 'LICENSE', 'SKILL.md', 'README.md', 'README.en.md',
+    'package.json', 'LICENSE', 'SKILL.md', 'README.md', 'README.zh-CN.md', 'README.ja.md',
     'sub-skills/adapt/SKILL.md', 'sub-skills/build/SKILL.md', 'sub-skills/diagnose/SKILL.md',
     'scripts/run.mjs', 'scripts/guide-sync.mjs', 'scripts/release-check.mjs',
     'scripts/lib/release-rules.mjs', 'scripts/lib/scanner.mjs',
