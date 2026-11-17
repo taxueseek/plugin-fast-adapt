@@ -16,6 +16,7 @@ import { readPackageJson, readPackageJsonStrict, probePackageJson, hasBom } from
 import { cacheRoot, cacheSubdir } from '../lib/cache-root.mjs'
 import { NO_BACKUP, backupBeforeWrite, backupStamp, BACKUP_DIR_NAME } from '../lib/backup.mjs'
 import { checkPackFiles, FORBIDDEN_PACK } from '../lib/release-rules.mjs'
+import { extractAnchors } from '../lib/guide-parser.mjs'
 
 const SCRIPTS = path.resolve(import.meta.dirname, '..')
 
@@ -186,4 +187,44 @@ test('发布门禁：工具自身与 scaffold 生成的 .gitignore 都忽略 .pf
     /\.gitignore', 'node_modules\/\\n\.pfa-backup\/\\n'/.test(scaffoldSrc),
     'scaffold 生成的 .gitignore 应同时忽略 node_modules 与 .pfa-backup',
   )
+})
+
+test('指南解析：v0.2.2-rc.2 表格子路径移除精确提取且不误伤 /types 迁移目标', () => {
+  const change = [
+    'Upgrading from v0.2.2-rc.2 removes the seven package subpaths below.',
+    '',
+    '| Removed subpath | Type import or supported replacement |',
+    '|---|---|',
+    '| `@deepseek-ai/dsh-commands/brand` | `@deepseek-ai/dsh-commands/types` |',
+    '| `@deepseek-ai/dsh-tools/presentation` | Type imports from `@deepseek-ai/dsh-tools` |',
+  ].join('\n')
+  const migration = '1. Move identifier type imports to `@deepseek-ai/dsh-commands/types`.'
+  const a = extractAnchors(change, migration)
+  assert.ok(a.packages.includes('@deepseek-ai/dsh-commands/brand'), '应提取子路径 /brand')
+  assert.ok(a.packages.includes('@deepseek-ai/dsh-tools/presentation'), '应提取子路径 /presentation')
+  assert.ok(!a.packages.includes('@deepseek-ai/dsh-commands/types'), '迁移目标 /types 不应进移除包锚点')
+  assert.ok(!a.packages.includes('@deepseek-ai/dsh-tools'), '替换列根包不应进移除包锚点')
+})
+
+test('指南解析：v0.2.2-rc.2 Cordis 4.0 成员链不漏报且新符号不误伤 ctx.root', () => {
+  const change = [
+    '- `ctx.root` no longer exists. The root context is now `ctx[Context.root]`.',
+    '- `Service.config` becomes `Service.metadata`.',
+    '- `[Service.resolveConfig](base?, head?)` becomes `[Service.resolveIntercept]()`.',
+    '- `Config.merge` hooks on services are no longer called.',
+  ].join('\n')
+  const migration = [
+    '1. Replace every `ctx.root` with `ctx[Context.root]`.',
+    '2. In service classes, rename `declare [Service.config]` to `declare [Service.metadata]` and calls of `[Service.resolveConfig]()` to `[Service.resolveIntercept]()`.',
+    '3. Move a `Config.merge` implementation to a `[Service.mergeIntercept](...values)` method.',
+    '4. Run your TypeScript build: references to `ctx.root`, `Service.config` and `Service.resolveConfig` fail to compile.',
+  ].join('\n')
+  const a = extractAnchors(change, migration)
+  for (const sym of ['ctx.root', 'Service.config', 'Service.resolveConfig', 'Config.merge']) {
+    assert.ok(a.members.includes(sym), `应保留旧符号 ${sym}: ${JSON.stringify(a.members)}`)
+  }
+  for (const sym of ['Context.root', 'Service.metadata', 'Service.resolveIntercept', 'Service.mergeIntercept']) {
+    assert.ok(!a.members.includes(sym), `新符号 ${sym} 不应留在待报锚点`)
+  }
+  assert.ok(!a.introduced.includes('the') && !a.introduced.includes('ctx.root'), `introduced 不应含停用词或旧符号: ${JSON.stringify(a.introduced)}`)
 })

@@ -89,7 +89,7 @@ node scripts/seams.mjs <包名或符号> [--guide <guide-root>] [--host <版本>
 
 回答「这个接缝在我的目标宿主还在不在」，双源合成：指南源（锚点表全走廊，哪个版本声称移除或改名了它、原文在哪一行、官方修法）乘宿主源（包看 node_modules 实测，符号看宿主套件源码文本命中，弱证据如实标注）。裸 `dsh-*` 名自动归一到 `@deepseek-ai/` scope 再查。诚实三态：双源都说没有才下「已移除」；指南说没有但宿主里有，报分歧不替人拍板；双源都无记录时明说「指南未提及不代表 API 不存在」。不走网络，指南根走缓存。
 
-宿主实测的路径解析（`lib/host-scope.mjs`，与 `code-scan` 的宿主核查共用）：套件子包的真实位置是宿主主包内部的 `node_modules/@deepseek-ai/dsh-*`，不是全局 `node_modules` 的下一级。两个候选作用域都探（主包内部优先，全局 `@deepseek-ai` 兜住平铺安装形态），`checkedWhere` 记实际解析到的位置——结论可回溯到磁盘。包名收裸名与 `@scope/name` 全写两种写法，全写会先剥掉 scope 前缀再拼路径。
+宿主实测的路径解析（`scripts/lib/host-scope.mjs`，与 `code-scan` 的宿主核查共用）：套件子包的真实位置是宿主主包内部的 `node_modules/@deepseek-ai/dsh-*`，不是全局 `node_modules` 的下一级。两个候选作用域都探（主包内部优先，全局 `@deepseek-ai` 兜住平铺安装形态），`checkedWhere` 记实际解析到的位置——结论可回溯到磁盘。包名收裸名与 `@scope/name` 全写两种写法，全写会先剥掉 scope 前缀再拼路径。
 
 ## 一键编排与运行日志
 

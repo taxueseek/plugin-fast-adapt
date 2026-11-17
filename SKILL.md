@@ -25,7 +25,7 @@ DSH 插件升级适配与防御性审核的主入口。四条车道各管一件�
 | 仓库 `docs/defensive-patterns/` | **任何时候都成立**的硬要求（不随版本变） | 五篇：package-surface / general / client-components / conversation-and-session / remote-and-api | 机械可判的 7 条 `standards-scan`（规则 id：top-level-await、loader-entry-shape、shared-state-no-owner、cross-package-relative-import、lifecycle-unpaired-resource、vendor-rescope-unscoped、waterfall-missing-next），其余人工 |
 | 仓库 `docs/persistence-changes/` | 落盘格式变了什么、**旧数据还能不能读** | 每份一条变更 | 暂为人工（缺真实故障样本） |
 
-常设规则那层已经不再全靠人工：`lib/standards.mjs` 里那张表把**照原文读必然得出同一结论**的七条做成了机器检出（模块顶层 await、入口导出面、共享状态无所有者、跨包相对 import、外部生命周期资源未配对注销、裸引用未收归 `@deepseek-ai/` 作用域、waterfall 监听器未透传 `next`），每条都带 `defensive-patterns` 的原文出处，规则 id 以来源表那行为准并与规则表双向对账（自检兜着）；需要意图判断的（dispose 是否真等停稳、回调异常是否隔离、slot 注册物是否稳定）**故意不进**自动扫描，留在 review 车道人工核对——把裁量题伪装成判定题比不判更坏。确定性违规可由 `codemod.mjs` 一键修复。
+常设规则那层已经不再全靠人工：`scripts/lib/standards.mjs` 里那张表把**照原文读必然得出同一结论**的七条做成了机器检出（模块顶层 await、入口导出面、共享状态无所有者、跨包相对 import、外部生命周期资源未配对注销、裸引用未收归 `@deepseek-ai/` 作用域、waterfall 监听器未透传 `next`），每条都带 `defensive-patterns` 的原文出处，规则 id 以来源表那行为准并与规则表双向对账（自检兜着）；需要意图判断的（dispose 是否真等停稳、回调异常是否隔离、slot 注册物是否稳定）**故意不进**自动扫描，留在 review 车道人工核对——把裁量题伪装成判定题比不判更坏。确定性违规可由 `codemod.mjs` 一键修复。
 
 前两类管「时间轴上的破坏性变更」，后两类管「不随版本变的常设契约」。二者不可互替：一份插件通过了全部升级指南扫描，仍可能违反常设要求；反过来，一条常设要求也不会出现在任何一版的 upgrade-guide 里。**只扫升级指南，等于只查了一半。**
 
@@ -61,7 +61,7 @@ node scripts/sync-skill.mjs --dest <下游技能目录>            # 同步
 - **远程依赖的结论一律标待审计**。宿主/插件共享模块、bundle 遮蔽、peer 解析这几类问题，构建期与安装期都可能全绿，只在浏览器或真实冷启动里炸（上游同类项目里这类 issue 的形态高度一致：构建通过、运行时两个实例互相不认识）。所以任何不经过真冷启动的结论都要标明「未在真宿主验证」。
 - **自动化只吃机械可判的部分**。常设规则的自动化边界写死在 `standards-scan --rules` 的输出里：每条规则的「机械判据」一栏说清机器看什么、没看什么。判据收窄过三轮（第一版把模块级 `new Set()` 与 `Symbol.for` 全报成违规，实测在 dsh-image-gen 上 35 处命中全是常量表与编译产物），现在宁少不滥：**误报一次，使用者就不再信第二次**。
 - **批量修补的失败方向必须是报错而不是静默改坏**。`fix-peer-deps` 敢批量做，是因为「宿主核心包写进 dependencies」判据纯机械，且搬错位置会让 `npm install` 直接报缺依赖，不会变成看不见的运行时异常；默认 dry-run、`--apply` 才落盘且先备份。
-- **起子进程与删路径是本工具仅有的两类危险动作**。前者要净化环境（宿主的子进程凭证擦除会摘掉 `GIT_CONFIG_KEY_n` 却留下 `GIT_CONFIG_COUNT`，git 读到残缺配置组直接 fatal，本工具每条 git 调用都会静默失败）；后者要不跟随链接（`rmSync(recursive)` 删软链/junction 会删到目标里去）。两条都由 `lib/proc-env.mjs` 收口，新写的脚本一律走它，不要各自 `execFileSync` / `rmSync`。
+- **起子进程与删路径是本工具仅有的两类危险动作**。前者要净化环境（宿主的子进程凭证擦除会摘掉 `GIT_CONFIG_KEY_n` 却留下 `GIT_CONFIG_COUNT`，git 读到残缺配置组直接 fatal，本工具每条 git 调用都会静默失败）；后者要不跟随链接（`rmSync(recursive)` 删软链/junction 会删到目标里去）。两条都由 `scripts/lib/proc-env.mjs` 收口，新写的脚本一律走它，不要各自 `execFileSync` / `rmSync`。
 - **目标宿主版本按平台分派**。桌面 APP 跑的是自己捆的那份宿主，不是 npm 全局那份；两者错开时（2026-11-05 实测：APP `0.2.2-rc.1` vs npm `0.2.1-rc.5`），拿 npm 版本判 APP 插件会把两端都判错，而报告看起来和正常的一样。`fleet-sweep` 现在每项按平台取目标版本，摘要里同时给出 `desktopHostVersion` 与 `targetVersionByPlatform`。诚实边界：宿主实测走 `hostInfo.location` 那棵树，APP 自捆宿主的包不在里面，所以 APP 插件的「套件包不存在」只对 npm 树成立。
 - **集群治理与单兵深度结合**。宿主刚升级、要把整批插件过一遍时，先用 `node scripts/fleet-sweep.mjs` 做集群广度筛查与矩阵看板诊断，筛出有问题的插件再逐个回到适配车道深查。
 - **工具不自带定时器**。上游盯哨 `guide-sync --check` 的退出码是语义化的（1 有新版、0 无需动作、2 判定失败），接 cron、launchd 还是 agent 轮询由用户定。
@@ -72,16 +72,16 @@ node scripts/sync-skill.mjs --dest <下游技能目录>            # 同步
 - **`quick-smoke` 与 `write-gate` 会执行插件代码**（动态 import 入口模块）。只对自己或审过的代码跑，不要对来路不明的目录跑。执行面限于 Node 进程内，但插件代码理论上能做任何 Node 能做的事。
 - **自愈默认 dry-run**：`env-heal` 不加 `--apply` 只报告，加了也是移动不删除（进 `~/.dsh/.trash/<日期>/`）。
 - **不改 DSH 本体**，不动 `~/.dsh` 下的配置和 profile 声明。
-- **自动修补只限判据纯机械的三类，先备份后落盘**：`codemod`（Loader 入口导出面、顶层 await）、`fix-peer-deps`（宿主核心包 peer 挪位）与 `fleet-sweep --apply-compat`（批量写 `package.json` 兼容账本与 Peer 范围）默认 dry-run 或不带 `--apply` 只报，`--apply`/`--apply-compat` 才落盘，且原文件先备份到 `<插件目录>/.pfa-backup/<时间戳>/`（三个入口共用 `lib/backup.mjs` 的同一形状）。`.pfa-backup/` 已进 `release-rules` 的 `FORBIDDEN_PACK` 与 scaffold 生成的 `.gitignore`——实测 `npm pack` 会把它打进包，而备份里是改动前的 `package.json`。除此之外一律只报命中和官方修法；`plugin-audit --peer-patch` 也只打印建议，不写 `package.json`。
+- **自动修补只限判据纯机械的三类，先备份后落盘**：`codemod`（Loader 入口导出面、顶层 await）、`fix-peer-deps`（宿主核心包 peer 挪位）与 `fleet-sweep --apply-compat`（批量写 `package.json` 兼容账本与 Peer 范围）默认 dry-run 或不带 `--apply` 只报，`--apply`/`--apply-compat` 才落盘，且原文件先备份到 `<插件目录>/.pfa-backup/<时间戳>/`（三个入口共用 `scripts/lib/backup.mjs` 的同一形状）。`.pfa-backup/` 已进 `release-rules` 的 `FORBIDDEN_PACK` 与 scaffold 生成的 `.gitignore`——实测 `npm pack` 会把它打进包，而备份里是改动前的 `package.json`。除此之外一律只报命中和官方修法；`plugin-audit --peer-patch` 也只打印建议，不写 `package.json`。
 - **网络只用在「取官方源」这一步**：定版本读 npm 的 dist-tags，取指南 clone 官方仓库。两处都有超时，失败明确报错而非静默跳过；dist-tags 有 1 小时缓存，网络失败降级用旧缓存并标 stale；上游 tag 未打导致的 clone 失败记 1 小时否定缓存（dist-tags 一变即作废），期间不重复拉取；指南优先复用本机已有 clone，`--no-clone` 可跳过。
 - **日志只落本机**，含本地路径与用户名，外发前必须 `sanitize`。`sanitize` 同时替换 home 的字面量与 realpath 两种形态（macOS 上 `/var` 与 `/private/var` 是同一目录的两种写法，只替换一种会漏掉另一种）。
-- **缓存根可注入**：`DSH_PFA_CACHE_DIR` > `DSH_CACHE_DIR` > `XDG_CACHE_HOME` > `~/.cache`，由 `lib/cache-root.mjs` 统一求值。自检启动即把缓存根指向临时目录，不写真实用户缓存。
+- **缓存根可注入**：`DSH_PFA_CACHE_DIR` > `DSH_CACHE_DIR` > `XDG_CACHE_HOME` > `~/.cache`，由 `scripts/lib/cache-root.mjs` 统一求值。自检启动即把缓存根指向临时目录，不写真实用户缓存。
 
 ## 判据回写纪律
 
 修一次误报或漏报，三件一起做，缺一不可：
 
-1. **写回判据**：`references/heuristics.md`（扫描降噪）或对应 `lib/*.mjs` 的注释（机器判据），说清「为什么这条判据是对的」。
+1. **写回判据**：`references/heuristics.md`（扫描降噪）或对应 `scripts/lib/*.mjs` 的注释（机器判据），说清「为什么这条判据是对的」。
 2. **沉淀夹具**：`fixtures/<id>/input/` 放最小复现，`fixtures/<id>/expected.json` 写正确判定与 fingerprint。自检启动时全量回归，判据写松了（该报的不报）或写紧了（不该报的报了）都会红。
 3. **登记账本**：`references/incident-ledger.md` 一行一条，带来源与夹具 id。
 
@@ -103,7 +103,7 @@ node scripts/sync-skill.mjs --dest <下游技能目录>            # 同步
 npm test
 ```
 
-270 项断言，覆盖扫描器不误报（注释和字符串里的同名词不算命中）、不漏报、版本窗口与 real semver 判定、目标形态判定、指南出处锚点、指南分支快照与覆盖度未知态、三元版本账本直通与变更嗅探、本地宿主接缝契约核对与未构建硬拦截、跨平台与工作区自适应（Termux/Linux/环境变量/祖先依赖）、上游经验吸纳（退出码 143 停机判定/Bundle 遮蔽阴影/准入账本 compatPatch/提示词 {{cwd}} 拦截/全局前缀分裂检测/集群治理 Web-APP 与运行态生命周期多维看板）、Cordis 深度防御性审查（核心 peer 依赖 vendored 污染 P0 拦截/顶层单例状态泄漏 P2 预警/run 与 audit --compact 紧凑模式/DSH 原生插件服务）、Release Note 破坏性变更虚拟指南提取与双语去重、接缝查询双源结论、运行日志与宿主日志交叉核对、一键编排各档位（含 --strict）、冒烟验证（含 Config 默认值解析、宿主 node_modules 兜底、未声明 inject 契约拦截与 exports-only 入口）、四维审计（含 peer 与 compat 准入账本修补）、启用诊断（宿主半与客户端半）、幽灵宿主四态与磁盘时间来源、tsconfig paths 假绿（含 extends 与 JSONC）、环境层三处盲区、创作脚手架与体检门、日志诊断、下游同步、发布预检规则（版本一致/tag/包内容/npm 状态）、跨平台模拟、诊断输出瘦身、CLI 帮助与未知参数、宿主凭证擦除留下的残缺 GIT_CONFIG 配置组净化（真实 git 子进程回归）、链接形态路径的安全删除、文档断言数与技能面 description 长度门禁、扫描性能回归、生命周期配对检查、确定性 Codemod 自动修补、Types-Diff 类型差分自动接缝与 SKILL.md 常设规则枚举双向对账、合成指南目录参数链（第五个参数不再被静默忽略）、工具链缺失按 PATH 预检确定性判定（runner 在场时内层命令缺失判 fail 不吞成 skipped）、脱敏覆盖 home 全部形态（realpath 与 Windows 8.3 短名）、事故夹具全量回归（`fixtures/` 与 `references/incident-ledger.md` 双向对账，判据收窄的两侧都钉住；含 2026-11-09 fleet 场测修出的正则字面量掩码根因）、状态词表单一真源对账（`lib/run-states.mjs`）、文档分层对账（过程报告归档 `docs-local/archive/`，不进技能面）。自检零网络、零外部依赖，任何机器上都能跑。
+自检套件（272 项断言），覆盖扫描器不误报（注释和字符串里的同名词不算命中）、不漏报、版本窗口与 real semver 判定、目标形态判定、指南出处锚点、指南分支快照与覆盖度未知态、三元版本账本直通与变更嗅探、本地宿主接缝契约核对与未构建硬拦截、跨平台与工作区自适应（Termux/Linux/环境变量/祖先依赖）、上游经验吸纳（退出码 143 停机判定/Bundle 遮蔽阴影/准入账本 compatPatch/提示词 {{cwd}} 拦截/全局前缀分裂检测/集群治理 Web-APP 与运行态生命周期多维看板）、Cordis 深度防御性审查（核心 peer 依赖 vendored 污染 P0 拦截/顶层单例状态泄漏 P2 预警/run 与 audit --compact 紧凑模式/DSH 原生插件服务）、Release Note 破坏性变更虚拟指南提取与双语去重、接缝查询双源结论、运行日志与宿主日志交叉核对、一键编排各档位（含 --strict）、冒烟验证（含 Config 默认值解析、宿主 node_modules 兜底、未声明 inject 契约拦截与 exports-only 入口）、四维审计（含 peer 与 compat 准入账本修补）、启用诊断（宿主半与客户端半）、幽灵宿主四态与磁盘时间来源、tsconfig paths 假绿（含 extends 与 JSONC）、环境层三处盲区、创作脚手架与体检门、日志诊断、下游同步、发布预检规则（版本一致/tag/包内容/npm 状态）、跨平台模拟、诊断输出瘦身、CLI 帮助与未知参数、宿主凭证擦除留下的残缺 GIT_CONFIG 配置组净化（真实 git 子进程回归）、链接形态路径的安全删除、文档断言数与技能面 description 长度门禁、扫描性能回归、生命周期配对检查、确定性 Codemod 自动修补、Types-Diff 类型差分自动接缝与 SKILL.md 常设规则枚举双向对账、合成指南目录参数链（第五个参数不再被静默忽略）、工具链缺失按 PATH 预检确定性判定（runner 在场时内层命令缺失判 fail 不吞成 skipped）、脱敏覆盖 home 全部形态（realpath 与 Windows 8.3 短名）、事故夹具全量回归（`fixtures/` 与 `references/incident-ledger.md` 双向对账，判据收窄的两侧都钉住；含 2026-11-09 fleet 场测修出的正则字面量掩码根因）、状态词表单一真源对账（`scripts/lib/run-states.mjs`）、文档分层对账（过程报告归档 `docs-local/archive/`，不进技能面）。自检零网络、零外部依赖，任何机器上都能跑。
 
 提交前门禁：`git config core.hooksPath .githooks`（一次性）启用 pre-commit 钩子，commit 时自动跑本自检，改完真源忘了同步在这一刻被拦。
 
@@ -134,4 +134,4 @@ npm test
 | `release-check.mjs` | 发布前预检：版本一致、`v<版本>` tag、npm 是否已发布、`npm pack` 必需文件与夹带、自检、工作区；只读，不自动打 tag 或发布 |
 | `cli.mjs` | npm bin 入口（`npx plugin-fast-adapt`），转发到 run.mjs |
 | `self-test.mjs` | 自检 |
-| `lib/` | 扫描器、指南解析、运行日志、客户端半判定、宿主发现与宿主模块探测、发布规则、`package.json` 读取、缓存根、备份约定（宿主发现、`package.json` 读取、缓存根、备份各为独立层，CLI 入口只 re-export，不反向依赖） |
+| `scripts/lib/` | 扫描器、指南解析、运行日志、客户端半判定、宿主发现与宿主模块探测、发布规则、`package.json` 读取、缓存根、备份约定（宿主发现、`package.json` 读取、缓存根、备份各为独立层，CLI 入口只 re-export，不反向依赖） |

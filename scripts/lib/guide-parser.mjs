@@ -63,6 +63,44 @@ const GENERIC_MEMBERS = new Set([
 // 带点锚点看末段，裸名看整体：裸名没有对象约束，更容易撞名，所以门槛更高。
 const MIN_MEMBER_LEN = 6
 const MIN_BARE_LEN = 8
+// 宿主/Cordis 强命名空间前缀：有对象约束时允许更短末段（如 ctx.root）与通用末段（如 Service.config）。
+const STRONG_OBJECT_PREFIXES = new Set(['ctx', 'Service', 'Config', 'Context', 'Cordis'])
+const PKG_PATH_RE = /@deepseek-ai\/[a-z0-9][\w-]*(?:\/[a-z0-9][\w.-]*)*/g
+
+// 从 Change 段的 Markdown 表格提取被移除的包/子路径：
+// 仅当表头第一列明确标明 Removed/Deprecated/Retired/Old 时，取数据行第一列的 @deepseek-ai/* 路径。
+function extractTableRemovedPackages(changeText) {
+  const removed = []
+  const lines = changeText.split('\n')
+  let inRemovedTable = false
+  let sawSeparator = false
+  for (const rawLine of lines) {
+    const line = rawLine.trim()
+    if (!line.startsWith('|')) {
+      inRemovedTable = false
+      sawSeparator = false
+      continue
+    }
+    const cols = line.split('|').slice(1, -1).map((c) => c.trim())
+    if (!cols.length) continue
+    if (!inRemovedTable) {
+      if (/\b(removed|deprecated|retired|old)\b/i.test(cols[0])) {
+        inRemovedTable = true
+        sawSeparator = false
+      }
+      continue
+    }
+    if (!sawSeparator) {
+      if (/^:?-{3,}:?$/.test(cols[0])) sawSeparator = true
+      else inRemovedTable = false
+      continue
+    }
+    for (const m of cols[0].matchAll(PKG_PATH_RE)) {
+      removed.push(m[0])
+    }
+  }
+  return removed
+}
 
 // 从 guide 正文抽锚点。包名用精确匹配，成员名用词边界。
 //
@@ -87,16 +125,19 @@ export function extractAnchors(changeText, migrationText) {
     }
     return false
   }
-  for (const m of blob.matchAll(/@deepseek-ai\/[a-z0-9][\w-]*/g)) {
+  for (const m of blob.matchAll(PKG_PATH_RE)) {
     if (sentenceHasRemoval(changeText, m[0]) || sentenceHasRemoval(migrationText, m[0])) {
       anchors.packages.add(m[0])
     }
+  }
+  for (const pkg of extractTableRemovedPackages(changeText)) {
+    anchors.packages.add(pkg)
   }
 
   // 完整点链优先：抽 ctx.tools.presentAs 而不是 ctx.tools + tools.presentAs。
   // 短链会被长链覆盖，避免「ctx.tools」这种过于通用的锚点。
   const chains = new Set()
-  for (const m of blob.matchAll(/\b([a-z][\w$]*(?:\.[a-z][\w$]*)+)\b/g)) {
+  for (const m of blob.matchAll(/\b([A-Za-z][\w$]*(?:\.[A-Za-z_][\w$]*)+)\b/g)) {
     chains.add(m[1])
   }
   // 裸调用：foo(
@@ -108,9 +149,11 @@ export function extractAnchors(changeText, migrationText) {
     const parts = chain.split('.')
     const last = parts[parts.length - 1]
     const isBare = parts.length === 1
+    const hasStrongPrefix = !isBare && STRONG_OBJECT_PREFIXES.has(parts[0])
     if (isBare && last.length < MIN_BARE_LEN) continue
-    if (!isBare && last.length < MIN_MEMBER_LEN) continue
-    if (GENERIC_MEMBERS.has(last) || GENERIC_MEMBERS.has(chain)) continue
+    if (!isBare && last.length < (hasStrongPrefix ? 4 : MIN_MEMBER_LEN)) continue
+    if (GENERIC_MEMBERS.has(chain)) continue
+    if (!hasStrongPrefix && GENERIC_MEMBERS.has(last)) continue
     anchors.members.add(chain)
   }
 
@@ -131,8 +174,10 @@ export function extractAnchors(changeText, migrationText) {
   const introduced = new Set()
   for (const [oldRaw, newRaw] of findReplacements(migrationText)) {
     const oldSym = normalizeSymbol(oldRaw)
-    const newSym = normalizeSymbol(newRaw)
-    if (newSym) introduced.add(newSym)
+    const newSyms = expandBracketSymbols(newRaw)
+    for (const s of newSyms) {
+      if (s) introduced.add(s)
+    }
     if (oldSym) introduced.delete(oldSym)
   }
 
@@ -160,9 +205,10 @@ export function extractAnchors(changeText, migrationText) {
 // 用严格配对会漏掉 C。
 function findReplacements(migrationText) {
   const pairs = []
+  const symPat = `\\[?(?:declare\\s+)?(?:[a-zA-Z_][\\w$]*\\.)*[a-zA-Z_][\\w$]*(?:\\[[a-zA-Z_][\\w$.]*\\]|(?:\\.[a-zA-Z_][\\w$]*)*)\\]?(?:\\([^)]*\\))?`
   const strictPatterns = [
-    /\b[Rr]eplace\s+(?:the\s+)?`?([a-zA-Z_][\w$]*(?:\.[a-zA-Z_][\w$]*)*(?:\([^)]*\))?)`?\s+(?:with|by|using)\s+`?([a-zA-Z_][\w$]*(?:\.[a-zA-Z_][\w$]*)*(?:\([^)]*\))?)/g,
-    /`?([a-zA-Z_][\w$]*(?:\.[a-zA-Z_][\w$]*)*(?:\([^)]*\))?)`?\s*(?:→|->|becomes?|is\s+renamed\s+to|now\s+becomes)\s+`?([a-zA-Z_][\w$]*(?:\.[a-zA-Z_][\w$]*)*(?:\([^)]*\))?)/g,
+    new RegExp(`\\b(?:[Rr]eplace|[Rr]ename)\\s+(?:every\\s+|the\\s+)?\`?(?:declare\\s+)?(${symPat})\`?\\s+(?:with|by|using|to)\\s+\`?(?:declare\\s+)?(\\[?[a-zA-Z_][\\w$]*(?:\\.[a-zA-Z_][\\w$]*)*(?:\\[[a-zA-Z_][\\w$.]*\\])?\\]?(?:\\([^)]*\\))?)\`?`, 'g'),
+    /\`?([a-zA-Z_][\w$]*(?:\.[a-zA-Z_][\w$]*)*(?:\([^)]*\))?)\`?\s*(?:→|->|becomes?|is\s+renamed\s+to|now\s+becomes)\s+\`?([a-zA-Z_][\w$]*(?:\.[a-zA-Z_][\w$]*)*(?:\([^)]*\))?)/g,
   ]
   for (const re of strictPatterns) {
     for (const m of migrationText.matchAll(re)) {
@@ -174,11 +220,18 @@ function findReplacements(migrationText) {
   // 也是新符号。实测教训（白描插件，v0.2.0-rc.2 指南）："Move … into
   // meta.title and meta.description" 的 meta.description 是迁移目标，
   // 只抓 into 后第一个符号会漏掉 and 同伴，把新写法当待报锚点误报 high。
+  // 不带反引号的纯小写单词（如 with the / by declaring）属于自然语言，不收。
   const LOOSE_NEW =
-    /\b(?:with|using|by|into)\s+`?([a-zA-Z_][\w$]*(?:\.[a-zA-Z_][\w$]*)*)`?(?:\s+and\s+`?([a-zA-Z_][\w$]*(?:\.[a-zA-Z_][\w$]*)*)`?)?/g
+    /\b(?:with|using|by|into)\s+(`?\[?[a-zA-Z_][\w$]*(?:\.[a-zA-Z_][\w$]*)*(?:\[[a-zA-Z_][\\w$.]*\])?\]?(?:\([^)]*\))?`?)(?:\s+and\s+(`?\[?[a-zA-Z_][\w$]*(?:\.[a-zA-Z_][\w$]*)*(?:\[[a-zA-Z_][\\w$.]*\])?\]?(?:\([^)]*\))?`?))?/g
+  const isCodeToken = (raw) => raw.startsWith('`') || /[A-Z_.\[\]]/.test(raw)
   for (const m of migrationText.matchAll(LOOSE_NEW)) {
-    if (m[1]) pairs.push([null, m[1]])
-    if (m[2]) pairs.push([null, m[2]])
+    if (m[1] && isCodeToken(m[1])) pairs.push([null, m[1]])
+    if (m[2] && isCodeToken(m[2])) pairs.push([null, m[2]])
+  }
+
+  // 带反引号的迁移目标：`to \`[Service.resolveIntercept]()\``（排除 `references to \`old\``）或 `use \`symbols.decorator\``
+  for (const m of migrationText.matchAll(/(?<!\breferences\s)\b(?:to(?:\s+a|\s+an)?|use)\s+`(\[?[a-zA-Z_][\w$]*(?:\.[a-zA-Z_][\w$]*)*(?:\[[a-zA-Z_][\w$.]*\])?\]?(?:\([^)]*\))?)`/g)) {
+    pairs.push([null, m[1]])
   }
 
   return pairs
@@ -187,19 +240,40 @@ function findReplacements(migrationText) {
 function isIntroducedSymbol(introducedSet, anchor) {
   if (!introducedSet.size) return false
   if (introducedSet.has(anchor)) return true
-  const last = anchor.split('.').pop()
+  const parts = anchor.split('.')
+  const last = parts[parts.length - 1]
+  const obj = parts.slice(0, -1).join('.')
   for (const sym of introducedSet) {
-    if (sym === last || sym.endsWith(`.${last}`)) return true
+    if (!sym.includes('.')) {
+      if (sym === last && !STRONG_OBJECT_PREFIXES.has(parts[0])) return true
+      continue
+    }
+    const sParts = sym.split('.')
+    if (sParts[sParts.length - 1] !== last) continue
+    const sObj = sParts.slice(0, -1).join('.')
+    if (obj === sObj || obj.endsWith(`.${sObj}`) || sObj.endsWith(`.${obj}`)) return true
   }
   return false
 }
 
 // 去掉参数列表和包裹符号，只留符号名：installBundle(spec) → installBundle
 function normalizeSymbol(raw) {
+  if (!raw) return ''
   return String(raw)
     .replace(/[`'"]/g, '')
+    .replace(/^declare\s+/, '')
     .replace(/\s*\(.*$/, '')
+    .replace(/^\[|\]$/g, '')
     .trim()
+}
+
+// 展开方括号计算属性：ctx[Context.root] → ['ctx', 'Context.root']，[Service.metadata] → ['Service.metadata']
+function expandBracketSymbols(raw) {
+  if (!raw) return []
+  const cleaned = String(raw).replace(/[`'"]/g, '').replace(/^declare\s+/, '').replace(/\s*\(.*$/, '').trim()
+  const bracket = cleaned.match(/^([a-zA-Z_][\w$.]*)\[([a-zA-Z_][\w$.]*)\]$/)
+  if (bracket) return [bracket[1], bracket[2]]
+  return [cleaned.replace(/^\[|\]$/g, '').trim()]
 }
 
 // 从 GitHub Release 文本中抽取出虚拟指南条目
