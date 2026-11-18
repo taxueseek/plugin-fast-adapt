@@ -546,6 +546,15 @@ export async function runGuideSync(localVersion, { clone = false, fetcher = null
       }
     }
 
+    // 4.5 本机已安装宿主内置指南兜底（@deepseek-ai/dsh 自带 docs/upgrade-guide；不遮蔽否定缓存 error）
+    if (guides.source === 'unavailable') {
+      const hostLoc = findGlobalDsh()?.location
+      const hostGuideRoot = hostLoc ? path.join(hostLoc, 'docs', 'upgrade-guide') : null
+      if (hostGuideRoot && fs.existsSync(hostGuideRoot)) {
+        guides = { source: 'host-bundled', root: hostGuideRoot, versions: listGuideVersions(hostGuideRoot), frozen: true }
+      }
+    }
+
     // 5. 靶向抓取：若指南根目录缺失目标版本的指南，尝试靶向获取该版本 Release Note 填补真空期
     if (guides.root && guideVersion) {
       const hasVer = (guides.versions || []).some((v) => v.replace(/^v/, '') === guideVersion.replace(/^v/, ''))

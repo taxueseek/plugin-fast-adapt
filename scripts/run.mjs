@@ -485,8 +485,9 @@ const windowTarget = windowInfo.target
 let guideRoot = null
 if (offline) {
   stages.guides = { status: STAGE_STATUS.SKIPPED, reason: '--offline' }
-} else if (windowLocal && windowTarget && !flag('no-clone')) {
-  const cloned = runStep('guide-sync.mjs', [windowLocal, '--clone', '--target', windowTarget], 'guides', stages)
+} else if (windowLocal && windowTarget) {
+  const syncArgs = [windowLocal, ...(flag('no-clone') ? [] : ['--clone']), '--target', windowTarget]
+  const cloned = runStep('guide-sync.mjs', syncArgs, 'guides', stages)
   guideRoot = cloned?.guides?.root ?? null
 }
 

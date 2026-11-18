@@ -88,9 +88,10 @@ test('插件形态：入口导出面完整且命令注册走 ctx.inject 按需�
 test('插件形态：Cordis ctx.inject 回调解包 commandCtx.commands 并遵循 dsh-commands 契约', async () => {
   const { apply } = await import('../../lib/index.js')
   const registered = []
+  const registeredTools = []
   const fakeCtx = {
     provide() {},
-    tools: { register() {} },
+    tools: { register(def) { registeredTools.push(def) } },
     inject(deps, cb) {
       assert.deepStrictEqual(deps, ['commands'])
       // 模拟真宿主 Cordis：回调参数是子上下文 commandCtx，而非 commands 服务本身
@@ -102,11 +103,29 @@ test('插件形态：Cordis ctx.inject 回调解包 commandCtx.commands 并遵�
     },
   }
   apply(fakeCtx, {})
+  assert.deepStrictEqual(
+    registeredTools.map((t) => t.name),
+    ['dsh_fast_adapt_audit', 'dsh_fast_adapt_doctor', 'dsh_fast_adapt_smoke'],
+  )
   assert.deepStrictEqual(registered.map((c) => c.name), ['fast-adapt', 'fast-audit'])
-  for (const cmd of registered) {
-    assert.ok(cmd.definitionId, `${cmd.name} 应声明 definitionId`)
-    const res = await cmd.handler({ rawInput: ROOT, attachments: [] })
-    assert.strictEqual(res?.kind, 'success')
-    assert.strictEqual(typeof res?.text, 'string')
+  const prevNoLog = process.env.DSH_PFA_NO_LOG
+  process.env.DSH_PFA_NO_LOG = '1'
+  try {
+    for (const cmd of registered) {
+      assert.ok(cmd.definitionId, `${cmd.name} 应声明 definitionId`)
+      const res = await cmd.handler({ rawInput: ROOT, attachments: [] })
+      assert.strictEqual(res?.kind, 'success')
+      assert.strictEqual(typeof res?.text, 'string')
+    }
+    const fastAdaptCmd = registered.find((c) => c.name === 'fast-adapt')
+    const doctorRes = await fastAdaptCmd.handler({ rawInput: `doctor ${ROOT}`, attachments: [] })
+    assert.strictEqual(doctorRes?.kind, 'success')
+    assert.match(doctorRes.text, /\[Fast-Adapt Doctor\]/)
+    const smokeRes = await fastAdaptCmd.handler({ rawInput: `smoke ${ROOT}`, attachments: [] })
+    assert.strictEqual(smokeRes?.kind, 'success')
+    assert.match(smokeRes.text, /\[Fast-Adapt Smoke\]/)
+  } finally {
+    if (prevNoLog === undefined) delete process.env.DSH_PFA_NO_LOG
+    else process.env.DSH_PFA_NO_LOG = prevNoLog
   }
 })

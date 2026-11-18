@@ -93,7 +93,7 @@ test('run --compact：支持子 Agent 紧凑摘要输出', () => {
 
   const stdout = execFileSync(
     process.execPath,
-    [path.join(SCRIPTS, 'run.mjs'), dir, '--offline', '--no-clone', '--compact'],
+    [path.join(SCRIPTS, 'run.mjs'), dir, '--offline', '--no-clone', '--no-log', '--compact'],
     { encoding: 'utf8' },
   )
   const parsed = JSON.parse(stdout)
@@ -122,7 +122,7 @@ test('run --compact：账本直通提示不污染 stdout', () => {
   // 再跑一次带 --compact，命中账本直通
   const stdout = execFileSync(
     process.execPath,
-    [path.join(SCRIPTS, 'run.mjs'), dir, '--offline', '--no-clone', '--compact'],
+    [path.join(SCRIPTS, 'run.mjs'), dir, '--offline', '--no-clone', '--no-log', '--compact'],
     { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
   )
   const parsed = JSON.parse(stdout)
