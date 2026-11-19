@@ -4,6 +4,8 @@ English | [简体中文](README.zh-CN.md) | [日本語](README.ja.md)
 
 [![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D22.13-blue.svg)](package.json) [![Dependencies](https://img.shields.io/badge/dependencies-0-blue.svg)](#dependencies) [![Self-test](https://img.shields.io/badge/self--test-281%20passing-brightgreen.svg)](#dependencies)
 
+> **Read this before you run it.** `quick-smoke` and `write-gate` are not a simulation: they import the plugin's entry module and run it **in the current Node process** — no `node:vm`, no worker thread, no subprocess. The plugin can read and write files on your machine, make network calls and read environment variables, with exactly the privileges of whoever ran the command; it touches the real environment, not a sandbox. Run them only on code you wrote or reviewed, never on an untrusted directory. `--real-smoke` is the genuinely isolated tier: a real install and boot inside a clean profile. See [Safety posture](#safety-posture).
+
 > **Every time DSH ships a new release, existing plugins can stop working.** This skill reads the vendor's official upgrade guide directly, scans your plugin code, and reports which breaking changes you hit together with the vendor's own fix instructions; it also scaffolds a runnable plugin from zero in one command and verifies it. **Adapted through 0.2.2-rc.4, field-verified on 0.2.2-rc.5**: official guides cover 18 versions from `v0.1.7-rc.2` through `0.2.2-rc.4` (folding in Release Notes as virtual guides when guide entries lag); verified live on the current `next` channel & local global host **0.2.2-rc.5** (with desktop APP bundled at `0.2.2-rc.2`), returning an honest `up-to-date-on-channel` verdict, saving a `v0.2.2-rc.5` signature snapshot, passing health audit (100/100) and in-memory smoke (4ms). Because `0.2.2-rc.5` has no vendor guide doc yet, the ledger explicitly states coverage stops at `0.2.2-rc.4` and the scan cannot be called clean instead of pretending otherwise. Also features local environment anchoring, Release Note targeted extraction, and fleet multi-dimensional governance.
 
 ## At a glance
@@ -22,8 +24,6 @@ English | [简体中文](README.zh-CN.md) | [日本語](README.ja.md)
 | External dependencies | 0 (Node built-ins + the `git`/`npm` commands only) |
 | Cross-platform | Native support for macOS, Linux standard paths, Termux Android, and containers (XDG-compliant) |
 | Scaffolding | One command emits a runnable plugin in five forms, verified on creation, then a write gate issues the birth certificate |
-
-> **Read this before you run it.** `quick-smoke` and `write-gate` execute plugin code by importing the entry module **in the current Node process** — there is no `node:vm`, no worker thread, no subprocess. The plugin can read and write files, make network calls and read environment variables, with exactly the privileges of whoever ran the command. Run them only on code you wrote or reviewed, never on an untrusted directory. `--real-smoke` is the genuinely isolated tier: a real install and boot inside a clean profile. See [Safety posture](#safety-posture).
 
 ## What problem it solves
 
