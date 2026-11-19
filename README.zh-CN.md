@@ -4,14 +4,14 @@
 
 [![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D22.13-blue.svg)](package.json) [![外部依赖](https://img.shields.io/badge/外部依赖-0-blue.svg)](#依赖与自检) [![自检](https://img.shields.io/badge/自检-273项断言-brightgreen.svg)](#依赖与自检)
 
-> **DSH 每次发新版，老插件就可能启动不了。** 这个技能直连 DeepSeek 官方升级指南，扫你的插件代码，报出踩了哪几条破坏性变更、官方给的修法是什么；还能一条命令从零造出可运行的插件。**已适配到 0.2.2-rc.1，并在 0.2.2-rc.2 上实测通过**：rc.1 该版官方还没写指南条目，官方 Release Note 被当作虚拟指南一并纳入，因此覆盖度仍判 `complete=true`；rc.2 宿主在超前于官方所有 npm 通道的状态下实机验证通过——定版诚实判「ahead-of-upstream，无需升级」，391 个核心套件包导出面差分零删除。再新的版本如果既无指南也无发布说明，账本会明说「不能当查干净」。支持本地环境权威锚定、Release Note 破坏性变更提取与整机集群多维批量治理。
+> **DSH 每次发新版，老插件就可能启动不了。** 这个技能直连 DeepSeek 官方升级指南，扫你的插件代码，报出踩了哪几条破坏性变更、官方给的修法是什么；还能一条命令从零造出可运行的插件。**已适配到 0.2.2-rc.4，并在 0.2.2-rc.5 上实测通过**：官方指南已覆盖 `v0.1.7-rc.2` 至 `0.2.2-rc.4` 共 18 个版本（无指南条目时由官方 Release Note 转虚拟指南补上）；在当前 npm `next` 通道与本机全局宿主 **0.2.2-rc.5**（桌面 APP 捆绑 `0.2.2-rc.2`）上实机验证通过——定版诚实判 `up-to-date-on-channel`，留存 `v0.2.2-rc.5` 签名快照，体检 100/100、内存冒烟 4ms 通过。因 `0.2.2-rc.5` 尚无官方指南文档，账本会明说「只覆盖到 `0.2.2-rc.4`，不能当查干净」，绝不假装全覆盖。支持本地环境权威锚定、Release Note 破坏性变更提取与整机集群多维批量治理。
 
 ## 速览
 
 | | |
 | --- | --- |
 | 上游发新版 | 无需任何改动，直接可用（直连官方源与 Release Notes，不维护滞后卡片） |
-| DSH 宿主适配 | 覆盖 v0.1.7-rc.2 至 **0.2.2-rc.1**（该版无官方指南条目，由官方 Release Note 转成虚拟指南补上）；宿主 **0.2.2-rc.2** 在超前于官方所有通道时实测通过（391 包导出面差分零删除）；再新的版本若无任何官方来源，覆盖度账本会明说「不能当查干净」 |
+| DSH 宿主适配 | 覆盖 `v0.1.7-rc.2` 至 **0.2.2-rc.4**（18 个版本，含 Release Note 转虚拟指南补全）；已在最新 `next` 通道宿主 **0.2.2-rc.5**（桌面 APP 捆绑 `0.2.2-rc.2`）实测通过；对尚未出指南的新版本（如 `0.2.2-rc.5`），覆盖度账本会明说覆盖上限并提示「不能当查干净」 |
 | 集群治理看板 | 一键扫描整机 Web / APP 插件与工作区，按运行态生命周期多维矩阵呈现 |
 | 定版权威 | 默认收敛到本机真实宿主版本（方案 B 零网络请求，防上游频控） |
 | 扫描误报 | 12 处 → 0（四层降噪 + 常量词边界正则 + 虚拟指南去重） |
@@ -35,7 +35,7 @@ DSH（DeepSeek Harness）是一个「所有功能都以插件形式存在」的 
 
 ### 优势
 
-- **适配到 0.2.2-rc.1，0.2.2-rc.2 实测通过**：直连官方 `docs/upgrade-guide/` 与 Release Notes。官方指南只写到 0.2.2-alpha.3，0.2.2-rc.1 由 Release Note 转成虚拟指南补上（该 Release Note 两万七千余字，含完整破坏性变更段），所以覆盖度仍判全覆盖；0.2.2-rc.2 宿主超前于官方所有 npm 通道，2026-11-12 实机验证通过——定版诚实判「ahead-of-upstream」，391 个核心套件包导出面差分零删除。支持虚拟指南自动生成与三元版本账本快速探测
+- **适配到 0.2.2-rc.4，0.2.2-rc.5 实测通过**：直连官方 `docs/upgrade-guide/` 与 Release Notes，覆盖 `v0.1.7-rc.2` 至 `0.2.2-rc.4` 共 18 个版本（指南滞后时由 Release Note 转虚拟指南补上）。2026-11-19 在 DSH `0.2.2-rc.5`（npm `next` 最新通道；桌面 APP 捆绑 `0.2.2-rc.2`）实机验证通过——定版诚实判 `up-to-date-on-channel`，留存 `v0.2.2-rc.5` 签名快照，并诚实披露 `rc.5` 尚无官方文档。支持虚拟指南自动生成与三元版本账本快速探测
 - **本地环境权威锚定（零网络依赖）**：默认定版本严格收敛到本机已安装的 DSH 宿主版本（方案 B，零外部网络请求），免除官方源网络波动与 GitHub 频控影响；显式 `--check-upstream` 才核对上游
 - **集群全域多维治理看板**：新增 `fleet-sweep.mjs`，一键扫描整机 Web 插件、APP 桌面端插件、工作区源码与运行中服务，输出五大生命周期矩阵看板，支持 `--apply-compat` 批量安全修补
 - **误报与低级错误硬守卫**：
@@ -136,7 +136,7 @@ node scripts/fleet-sweep.mjs --workspace       # 仅扫描当前工作区源码�
 node scripts/fleet-sweep.mjs --web             # 仅查看 Web 平台插件
 node scripts/fleet-sweep.mjs --app             # 仅查看 Desktop (APP) 桌面端插件
 node scripts/fleet-sweep.mjs --disabled        # 仅查看被标记 disabled 或未激活的插件清单与原因
-node scripts/fleet-sweep.mjs --target 0.2.2-rc.1 --apply-compat # 批量修补 0 破坏命中的 package.json
+node scripts/fleet-sweep.mjs --target 0.2.2-rc.5 --apply-compat # 批量修补 0 破坏命中的 package.json
 ```
 
 详细操作 SOP 与多平台实战指引见 [references/user-guide.md](references/user-guide.md)。

@@ -4,14 +4,14 @@ English | [简体中文](README.zh-CN.md) | [日本語](README.ja.md)
 
 [![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D22.13-blue.svg)](package.json) [![Dependencies](https://img.shields.io/badge/dependencies-0-blue.svg)](#dependencies) [![Self-test](https://img.shields.io/badge/self--test-273%20passing-brightgreen.svg)](#dependencies)
 
-> **Every time DSH ships a new release, existing plugins can stop working.** This skill reads the vendor's official upgrade guide directly, scans your plugin code, and reports which breaking changes you hit together with the vendor's own fix instructions; it also scaffolds a runnable plugin from zero in one command and verifies it. **Adapted through 0.2.2-rc.1, field-verified on 0.2.2-rc.2**: rc.1 has no vendor guide entry yet, so its official Release Note is folded in as a virtual guide and coverage still reads complete; the rc.2 host — newer than every official npm channel at the time of testing — was verified live, where version resolution returned an honest `ahead-of-upstream` verdict and the export-surface diff across 391 core packages found zero removals. If a future version has neither a guide nor release notes, the ledger says outright that the scan cannot be called clean instead of pretending otherwise. Also features local environment anchoring, Release Note targeted extraction, and fleet multi-dimensional governance.
+> **Every time DSH ships a new release, existing plugins can stop working.** This skill reads the vendor's official upgrade guide directly, scans your plugin code, and reports which breaking changes you hit together with the vendor's own fix instructions; it also scaffolds a runnable plugin from zero in one command and verifies it. **Adapted through 0.2.2-rc.4, field-verified on 0.2.2-rc.5**: official guides cover 18 versions from `v0.1.7-rc.2` through `0.2.2-rc.4` (folding in Release Notes as virtual guides when guide entries lag); verified live on the current `next` channel & local global host **0.2.2-rc.5** (with desktop APP bundled at `0.2.2-rc.2`), returning an honest `up-to-date-on-channel` verdict, saving a `v0.2.2-rc.5` signature snapshot, passing health audit (100/100) and in-memory smoke (4ms). Because `0.2.2-rc.5` has no vendor guide doc yet, the ledger explicitly states coverage stops at `0.2.2-rc.4` and the scan cannot be called clean instead of pretending otherwise. Also features local environment anchoring, Release Note targeted extraction, and fleet multi-dimensional governance.
 
 ## At a glance
 
 | | |
 | --- | --- |
 | Upstream ships a new release | Works immediately, zero changes (reads vendor sources and release notes, no hand-curated cards) |
-| DSH Host Compatibility | Covers v0.1.7-rc.2 through **0.2.2-rc.1** (that version's official Release Note is converted into a virtual guide); host **0.2.2-rc.2** field-verified live while ahead of every official channel (391-package export-surface diff: zero removals). A newer version with no vendor source at all makes the coverage ledger say the scan cannot be called clean |
+| DSH Host Compatibility | Covers `v0.1.7-rc.2` through **0.2.2-rc.4** (18 versions, folding in Release Notes as virtual guides); field-verified live on latest `next` channel host **0.2.2-rc.5** (desktop APP bundled `0.2.2-rc.2`). For undocumented newer versions like `0.2.2-rc.5`, the coverage ledger explicitly states the scan cannot be called clean |
 | Fleet Governance Board | One-click sweep across Web/APP installed plugins & workspace code with life-cycle matrix |
 | Version Authority | Strictly anchors to the local installed host version by default (Plan B: 0 network requests) |
 | Scan false positives | 12 → 0 (four noise-reduction layers + word boundary regex + virtual guide deduplication) |
@@ -35,7 +35,7 @@ This project takes a different approach: **maintain the method of obtaining know
 
 ### Advantages
 
-- **Adapted through 0.2.2-rc.1, field-verified on 0.2.2-rc.2**: reads the official `docs/upgrade-guide/` and Release Notes directly. The guide stops at 0.2.2-alpha.3, so 0.2.2-rc.1 is covered by converting its official Release Note (27k+ characters, with a full breaking-changes section) into a virtual guide; that is why coverage still reads complete. The 0.2.2-rc.2 host — ahead of every official npm channel — was verified live on 2026-11-12: honest `ahead-of-upstream` resolution plus a zero-removal export-surface diff across 391 core packages. Also generates virtual guides and speeds up scans with a 3-tuple compatibility ledger
+- **Adapted through 0.2.2-rc.4, field-verified on 0.2.2-rc.5**: reads the official `docs/upgrade-guide/` and Release Notes directly across 18 versions (`v0.1.7-rc.2` → `0.2.2-rc.4`), converting Release Notes into virtual guides where guide entries lag. Verified live on 2026-11-19 against DSH `0.2.2-rc.5` (npm `next` channel; desktop APP `0.2.2-rc.2`): honest `up-to-date-on-channel` verdict, `v0.2.2-rc.5` signature snapshot persisted, and explicit disclosure that `rc.5` lacks vendor docs yet. Also supports virtual guide generation and a 3-tuple compatibility ledger
 - **Local environment authority anchoring (zero network reliance)**: defaults to the locally installed DSH host version (Plan B, 0 external network requests), eliminating upstream network jitters and GitHub rate limits; uses `--check-upstream` for explicit check
 - **Fleet multi-dimensional governance board**: introduces `fleet-sweep.mjs` to inspect workspace code, installed Web plugins, APP desktop plugins, and active processes in a multi-stage life-cycle matrix, with `--apply-compat` batch safe patching
 - **Hard guards against false positives & unbuilt traps**:
@@ -136,7 +136,7 @@ node scripts/fleet-sweep.mjs --workspace       # workspace source plugins only
 node scripts/fleet-sweep.mjs --web             # Web profile plugins only
 node scripts/fleet-sweep.mjs --app             # Desktop (APP) profile plugins only
 node scripts/fleet-sweep.mjs --disabled        # disabled/inactive plugins and reasons
-node scripts/fleet-sweep.mjs --target 0.2.2-rc.1 --apply-compat # batch adapt zero-hit plugins
+node scripts/fleet-sweep.mjs --target 0.2.2-rc.5 --apply-compat # batch adapt zero-hit plugins
 ```
 
 Detailed SOP and multi-platform practices are in [references/user-guide.md](references/user-guide.md).
