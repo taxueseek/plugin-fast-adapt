@@ -13,8 +13,13 @@ import { runFixtures, listFixtures, loadExpected } from '../lib/fixtures.mjs'
 
 const ROOT = path.resolve(import.meta.dirname, '..', '..')
 const LEDGER = path.join(ROOT, 'references', 'incident-ledger.md')
+// 安装副本形态：package.json 的 files 白名单不含 fixtures/（夹具是仓库内的判据资产，
+// 随包分发的是判据本身，不是夹具切片）。装包后夹具不在，夹具断言必须诚实判 skipped，
+// 不能报成「0 条夹具」或「账本漂移」——那是把「没带夹具」误报成「判据坏了」。
+const FIXTURES_PRESENT = listFixtures().length > 0
 
 test('夹具库：全量回归通过（判据写松或写紧都会红）', () => {
+  if (!FIXTURES_PRESENT) return { skipped: '安装副本不含 fixtures/（files 白名单），夹具回归不在包内跑' }
   const result = runFixtures()
   assert.ok(result.total >= 9, `夹具数应至少 9 条，实际 ${result.total} 条——新增事故要配夹具`)
   assert.deepStrictEqual(
@@ -25,6 +30,7 @@ test('夹具库：全量回归通过（判据写松或写紧都会红）', () =>
 })
 
 test('夹具库：每条 expected.json 都带来源与 fingerprint', () => {
+  if (!FIXTURES_PRESENT) return { skipped: '安装副本不含 fixtures/（files 白名单）' }
   for (const id of listFixtures()) {
     const expected = loadExpected(id)
     assert.strictEqual(expected.id, id, `${id} 的 expected.id 与目录名不一致`)
@@ -37,6 +43,7 @@ test('夹具库：每条 expected.json 都带来源与 fingerprint', () => {
 
 test('夹具库：fixtures/ 与 incident-ledger 双向对账（防各自漂移）', () => {
   // 复用既有双向断言模式：一边多一条、另一边少一行都要红。
+  if (!FIXTURES_PRESENT) return { skipped: '安装副本不含 fixtures/（files 白名单），对账不在包内跑' }
   const ledger = fs.readFileSync(LEDGER, 'utf8')
   const ids = listFixtures()
   for (const id of ids) {
@@ -54,6 +61,7 @@ test('夹具库：判据收窄的两侧都钉住（该报的报、不该报的�
   // 夹具的 pass 语义是「expected.assert 成立」：真断链夹具的断言是「命中 1 处」，
   // 所以判据改坏（不再报）时它变 failed；两条不误报夹具的断言是「命中 0 处」，
   // 所以判据改坏（开始误报）时它们变 failed。三个方向合起来才封住改动。
+  if (!FIXTURES_PRESENT) return { skipped: '安装副本不含 fixtures/（files 白名单）' }
   const result = runFixtures()
   const failedIds = new Set(result.failed.map((f) => f.id))
   assert.ok(!failedIds.has('waterfall-real-break'), '真断链夹具应通过（判据要能报出来）')

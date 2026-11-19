@@ -179,7 +179,11 @@ test('发布门禁：.pfa-backup 进 FORBIDDEN_PACK，实测 npm pack 会把它�
 })
 
 test('发布门禁：工具自身与 scaffold 生成的 .gitignore 都忽略 .pfa-backup', () => {
-  const own = fs.readFileSync(path.join(SCRIPTS, '..', '.gitignore'), 'utf8')
+  const ownPath = path.join(SCRIPTS, '..', '.gitignore')
+  // 安装副本不含 .gitignore（files 白名单刻意不带本机物）。缺失时诚实跳过，
+  // 不报成「工具自身没忽略」——那是把「包里没这个文件」误报成「门禁失守」。
+  if (!fs.existsSync(ownPath)) return { skipped: '安装副本不含 .gitignore（files 白名单刻意不带本机物）' }
+  const own = fs.readFileSync(ownPath, 'utf8')
   assert.ok(/^\.pfa-backup\/$/m.test(own), '工具自身 .gitignore 应忽略 .pfa-backup/')
 
   const scaffoldSrc = fs.readFileSync(path.join(SCRIPTS, 'scaffold.mjs'), 'utf8')

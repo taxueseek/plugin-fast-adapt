@@ -33,11 +33,17 @@ export async function runTests() {
   }
 
   let passed = 0
+  let skipped = 0
   const failures = []
 
   for (const { name, fn } of tests) {
     try {
-      await fn()
+      const r = await fn()
+      if (r && typeof r.skipped === 'string') {
+        skipped++
+        process.stderr.write(`  skip ${name}（${r.skipped}）\n`)
+        continue
+      }
       passed++
       process.stderr.write(`  ok  ${name}\n`)
     } catch (err) {
@@ -46,7 +52,7 @@ export async function runTests() {
     }
   }
 
-  process.stderr.write(`\n${passed} 项通过，${failures.length} 项失败\n`)
+  process.stderr.write(`\n${passed} 项通过，${skipped} 项跳过，${failures.length} 项失败\n`)
   if (failures.length) process.exit(1)
   process.stderr.write('[PASS] plugin-fast-adapt 自检全部通过\n')
 }
