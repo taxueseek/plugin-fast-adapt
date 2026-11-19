@@ -237,3 +237,53 @@ test('集群治理：auditCache 复用同目录同版本结果，且识别 DeepS
   assert.strictEqual(found.length, 1)
   assert.strictEqual(found[0].state, 'RUNNING', 'DeepSeek Harness.app 运行中应把 desktop profile 标为 RUNNING')
 })
+
+test('集群治理：工作区容器子目录（如 Deepseek/）下探发现、宿主日志异常关联与 asar 包集判定', async () => {
+  const ws = tmpPluginDir('fleet-nested')
+  const group = path.join(ws, 'Deepseek')
+  const nestedPlugin = path.join(group, 'dsh-nested-demo')
+  fs.mkdirSync(nestedPlugin, { recursive: true })
+  fs.writeFileSync(
+    path.join(nestedPlugin, 'package.json'),
+    JSON.stringify({ name: 'dsh-nested-demo', version: '1.0.0', main: 'index.js', dsh: {} }),
+  )
+  fs.writeFileSync(
+    path.join(nestedPlugin, 'index.js'),
+    "import { foo } from '@deepseek-ai/dsh-asar-only'\nexport function apply() { return foo }\n",
+  )
+
+  const discovered = discoverPlugins([ws])
+  assert.ok(discovered.includes(nestedPlugin), '应发现工作区分组子目录下的 DSH 插件')
+
+  // 若走 npm 树会报不存在；走 asarPackages 时若包含该包则不误报，同时 logFailures 会标为 warning
+  const inspected = inspectPlugin(
+    { name: 'dsh-nested-demo', dir: nestedPlugin, platform: 'app', state: 'RUNNING', installed: true },
+    {
+      hostInfo: { location: tmpPluginDir('empty-npm-host'), version: '0.2.2-rc.5' },
+      asarPackages: new Set(['@deepseek-ai/dsh-asar-only']),
+      logFailures: new Map([['dsh-nested-demo', 'ERR_MODULE_NOT_FOUND']]),
+    },
+  )
+  assert.strictEqual(inspected.healthStatus, 'warning')
+  assert.ok(inspected.issues.some((i) => i.includes('宿主日志异常')), '应关联宿主日志异常')
+})
+
+test('seams：resolveGuideRoot 优先使用 harness-guides-branch 分支快照', async () => {
+  const { resolveGuideRoot } = await import('../seams.mjs')
+  const fakeCache = tmpPluginDir('seams-branch-cache')
+  const oldTagGuide = path.join(fakeCache, 'harness-dsh-v0.2.1-rc.3', 'docs', 'upgrade-guide')
+  const branchGuide = path.join(fakeCache, 'harness-guides-branch', 'docs', 'upgrade-guide')
+  fs.mkdirSync(oldTagGuide, { recursive: true })
+  fs.mkdirSync(branchGuide, { recursive: true })
+
+  const prev = process.env.DSH_PFA_CACHE_DIR
+  process.env.DSH_PFA_CACHE_DIR = fakeCache
+  try {
+    const res = resolveGuideRoot({ hostVersion: '0.2.2-rc.5' })
+    assert.strictEqual(res.source, 'branch-snapshot')
+    assert.strictEqual(res.root, branchGuide)
+  } finally {
+    if (prev === undefined) delete process.env.DSH_PFA_CACHE_DIR
+    else process.env.DSH_PFA_CACHE_DIR = prev
+  }
+})

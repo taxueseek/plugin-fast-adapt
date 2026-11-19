@@ -27,7 +27,7 @@ export const CRASH_REPORT_NAME = /^crash-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d
 
 // asar 布局：16 字节头（[4]=pickle 头长度、[12]=JSON 长度），随后是文件表 JSON，
 // 文件数据区从 8 + 头长度 开始，条目 offset 为字符串形式的十进制偏移。
-function readAsarFile(asarPath, segments) {
+function readAsarHeader(asarPath) {
   const fd = fs.openSync(asarPath, 'r')
   try {
     const head = Buffer.alloc(16)
@@ -36,17 +36,58 @@ function readAsarFile(asarPath, segments) {
     const jsonSize = head.readUInt32LE(12)
     const json = Buffer.alloc(jsonSize)
     fs.readSync(fd, json, 0, jsonSize, 16)
-    let node = JSON.parse(json.toString('utf8'))
-    for (const seg of segments) {
-      node = node?.files?.[seg]
-      if (!node) return null
-    }
-    if (typeof node.size !== 'number' || node.offset === undefined) return null
+    return { headerSize, tree: JSON.parse(json.toString('utf8')) }
+  } finally {
+    fs.closeSync(fd)
+  }
+}
+
+function readAsarFile(asarPath, segments) {
+  const { headerSize, tree } = readAsarHeader(asarPath)
+  let node = tree
+  for (const seg of segments) {
+    node = node?.files?.[seg]
+    if (!node) return null
+  }
+  if (typeof node.size !== 'number' || node.offset === undefined) return null
+  const fd = fs.openSync(asarPath, 'r')
+  try {
     const body = Buffer.alloc(node.size)
     fs.readSync(fd, body, 0, node.size, 8 + headerSize + Number(node.offset))
     return body.toString('utf8')
   } finally {
     fs.closeSync(fd)
+  }
+}
+
+/**
+ * 列出桌面 APP `app.asar` 内捆绑的 `@deepseek-ai/*` 套件包名集合（只读 asar 头，不解包）。
+ * APP 不存在或读取失败时返回 null。
+ */
+export function listAsarDshPackages({ appPath = DEFAULT_APP_PATH } = {}) {
+  const asarPath = path.join(appPath, 'Contents', 'Resources', 'app.asar')
+  if (!fs.existsSync(asarPath)) return null
+  try {
+    const { tree } = readAsarHeader(asarPath)
+    const dshNm = tree?.files?.dsh?.files?.node_modules?.files
+    if (!dshNm) return null
+    const pkgs = new Set()
+    const scope = dshNm['@deepseek-ai']?.files
+    if (scope) {
+      for (const name of Object.keys(scope)) pkgs.add(`@deepseek-ai/${name}`)
+    }
+    const pnpm = dshNm['.pnpm']?.files
+    if (pnpm) {
+      for (const dirName of Object.keys(pnpm)) {
+        const innerScope = pnpm[dirName]?.files?.node_modules?.files?.['@deepseek-ai']?.files
+        if (innerScope) {
+          for (const name of Object.keys(innerScope)) pkgs.add(`@deepseek-ai/${name}`)
+        }
+      }
+    }
+    return pkgs
+  } catch {
+    return null
   }
 }
 

@@ -327,7 +327,12 @@ export function auditPlugin(pluginDir, { scanResult = null, targetVersion = null
       })
       for (const rawPkg of dshPackages) {
         const base = packageBase(rawPkg)
-        const check = packageOnHost(base, hostInfoResolved)
+        const check = hostInfoResolved.asarPackages
+          ? {
+              exists: hostInfoResolved.asarPackages.has(base),
+              checkedWhere: `app.asar/dsh/node_modules/${base}`,
+            }
+          : packageOnHost(base, hostInfoResolved)
         if (check.status === 'absent') {
           report.findings.push({
             dimension: 'resilience',

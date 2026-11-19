@@ -19,6 +19,8 @@ import { listInstalledPlugins, probeEnvironment } from './env-doctor.mjs'
 import { auditPlugin, peerPatchFor, compatPatchFor } from './plugin-audit.mjs'
 import { readPackageJson, readPackageJsonStrict, probePackageJson } from './lib/package-json.mjs'
 import { NO_BACKUP, backupBeforeWrite } from './lib/backup.mjs'
+import { diagnoseLogs } from './log-doctor.mjs'
+import { listAsarDshPackages } from './lib/desktop-app.mjs'
 
 const TOOL_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -153,6 +155,16 @@ export function discoverWorkspacePlugins(roots = [process.cwd()]) {
             const leaf = path.join(sub, subEntry.name)
             if (fs.existsSync(path.join(leaf, 'package.json'))) candidates.add(leaf)
           }
+        } else if (!fs.existsSync(subPkg) && !/^\d{4}-\d{2}-\d{2}/.test(e.name)) {
+          // 兼容类似 Deepseek/ 这种工作区分组目录：仅在子目录自身不是包时下探一层 DSH 插件
+          try {
+            for (const subEntry of fs.readdirSync(sub, { withFileTypes: true })) {
+              if (!subEntry.isDirectory() || subEntry.name.startsWith('.') || subEntry.name === 'node_modules') continue
+              const leaf = path.join(sub, subEntry.name)
+              const leafPkg = readPackageJson(leaf)
+              if (leafPkg && isPluginForm(leafPkg)) candidates.add(leaf)
+            }
+          } catch {}
         }
       }
     } catch {}
@@ -335,7 +347,7 @@ export function discoverAllPlugins(
 // 统一巡检与问题诊断
 export function inspectPluginItem(
   rawItem,
-  { hostInfo = null, targetVersion = null, envData = null, applyCompat = false, auditCache = null } = {},
+  { hostInfo = null, targetVersion = null, envData = null, applyCompat = false, auditCache = null, asarPackages = null, logFailures = null } = {},
 ) {
   const item = typeof rawItem === 'string'
     ? {
@@ -363,16 +375,16 @@ export function inspectPluginItem(
   }
 
   // 同一物理目录在多个 profile（如 desktop / desktop-diag2 / web）下以软链复用，
-  // 同目录同目标版本的只读构建检查与四维审计结果完全一致，缓存复用免去重复全量文件扫描。
-  const cacheKey = dir && !applyCompat && auditCache ? `${dir}\0${effectiveTarget || ''}` : null
+  // 同目录同目标版本同宿主包源的只读构建检查与四维审计结果完全一致，缓存复用免去重复全量文件扫描。
+  const useAsar = item.platform === 'app' && Boolean(asarPackages)
+  const cacheKey = dir && !applyCompat && auditCache ? `${dir}\0${effectiveTarget || ''}\0${useAsar ? 'asar' : 'npm'}` : null
   const cached = cacheKey ? auditCache.get(cacheKey) : null
 
   const build = cached ? cached.build : dir ? checkBuild(dir) : { ok: true, status: 'N/A' }
   // 报告里那句「该包在当前本地宿主 (X) 中物理不存在」的 X 要与判定用的版本一致。
-  // 注意诚实边界：宿主实测走的是 hostInfo.location 指向的那棵树（本机是 npm 全局宿主），
-  // APP 自捆宿主的包不在那棵树里，所以 APP 插件的「套件包不存在」只对 npm 树成立——
-  // 版本标对是为了不给人「APP 树也查过了」的错觉。
-  const platformHostInfo = platformTarget && hostInfo ? { ...hostInfo, version: platformTarget } : hostInfo
+  // 当 APP 插件提供了 app.asar 包名集合时，直接按 asar 真实捆绑包判定，不再错用 npm 树。
+  let platformHostInfo = platformTarget && hostInfo ? { ...hostInfo, version: platformTarget } : hostInfo
+  if (useAsar && platformHostInfo) platformHostInfo = { ...platformHostInfo, asarPackages }
   let audit = cached ? cached.audit : null
   if (!audit) {
     if (dir) {
@@ -451,6 +463,12 @@ export function inspectPluginItem(
     if (healthStatus === 'healthy') healthStatus = 'warning'
   }
 
+  // 宿主运行时日志故障关联（来自 ~/.dsh/logs 的最近失败记录）
+  if (item.installed && item.state !== 'DISABLED' && logFailures?.has(pkg.name || item.name)) {
+    issues.push(`宿主日志异常: ${logFailures.get(pkg.name || item.name)}`)
+    if (healthStatus === 'healthy') healthStatus = 'warning'
+  }
+
   return {
     ...item,
     name: pkg.name || item.name,
@@ -486,6 +504,22 @@ export function runFleetSweep(argv = process.argv.slice(2)) {
     envData,
     includeOfficial: args.includeOfficial,
   })
+  const asarPackages = listAsarDshPackages()
+  const logFailures = new Map()
+  if (scanInstalled) {
+    try {
+      const diag = diagnoseLogs({ limit: 3, pattern: null })
+      for (const r of diag.runs || []) {
+        for (const fp of r.failedPlugins || []) {
+          const k = fp.package || fp.plugin
+          if (k && !logFailures.has(k)) logFailures.set(k, fp.error || '启动失败')
+        }
+        for (const ie of r.inactiveEntries || []) {
+          if (ie.package && !logFailures.has(ie.package)) logFailures.set(ie.package, ie.error || '未激活')
+        }
+      }
+    } catch {}
+  }
   const auditCache = new Map()
   let items = rawList.map((item) =>
     inspectPluginItem(item, {
@@ -494,6 +528,8 @@ export function runFleetSweep(argv = process.argv.slice(2)) {
       envData,
       applyCompat: args.applyCompat,
       auditCache,
+      asarPackages,
+      logFailures,
     }),
   )
 
