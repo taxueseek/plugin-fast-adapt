@@ -23,6 +23,8 @@ English | [简体中文](README.zh-CN.md) | [日本語](README.ja.md)
 | Cross-platform | Native support for macOS, Linux standard paths, Termux Android, and containers (XDG-compliant) |
 | Scaffolding | One command emits a runnable plugin in five forms, verified on creation, then a write gate issues the birth certificate |
 
+> **Read this before you run it.** `quick-smoke` and `write-gate` execute plugin code by importing the entry module **in the current Node process** — there is no `node:vm`, no worker thread, no subprocess. The plugin can read and write files, make network calls and read environment variables, with exactly the privileges of whoever ran the command. Run them only on code you wrote or reviewed, never on an untrusted directory. `--real-smoke` is the genuinely isolated tier: a real install and boot inside a clean profile. See [Safety posture](#safety-posture).
+
 ## What problem it solves
 
 DSH (DeepSeek Harness) is an AI runtime framework where everything is a plugin, and the trouble is that every new release can break existing plugins. The common workaround is hand-written upgrade cards: dozens of cards per version range, each recording what broke and how to fix it. That path has three problems it cannot get around:
