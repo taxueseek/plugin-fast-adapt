@@ -37,7 +37,8 @@ This project takes a different approach: **maintain the method of obtaining know
 
 - **Adapted through 0.2.2-rc.4, field-verified on 0.2.2-rc.5**: reads the official `docs/upgrade-guide/` and Release Notes directly across 18 versions (`v0.1.7-rc.2` → `0.2.2-rc.4`), converting Release Notes into virtual guides where guide entries lag. Verified live on 2026-11-19 against DSH `0.2.2-rc.5` (npm `next` channel; desktop APP `0.2.2-rc.2`): honest `up-to-date-on-channel` verdict, `v0.2.2-rc.5` signature snapshot persisted, and explicit disclosure that `rc.5` lacks vendor docs yet. Also supports virtual guide generation and a 3-tuple compatibility ledger
 - **Local environment authority anchoring (zero network reliance)**: defaults to the locally installed DSH host version (Plan B, 0 external network requests), eliminating upstream network jitters and GitHub rate limits; uses `--check-upstream` for explicit check
-- **Fleet multi-dimensional governance board**: introduces `fleet-sweep.mjs` to inspect workspace code, installed Web plugins, APP desktop plugins, and active processes in a multi-stage life-cycle matrix, with `--apply-compat` batch safe patching
+- **Fleet multi-dimensional governance board**: introduces `fleet-sweep.mjs` to inspect workspace code, installed Web plugins, APP desktop plugins, and active processes in a multi-stage life-cycle matrix, with `--apply-compat` batch safe patching. APP plugins are judged against the real `app.asar` bundled packages instead of the npm tree, workspace grouping directories (e.g. `Deepseek/`) are searched one level deeper, and host startup failures from `~/.dsh/logs` are folded into the board
+- **PR baseline guard**: before opening a PR against another plugin, `run-log.mjs sanitize --pr-draft` and `fleet-sweep.mjs --pr-ready` check `origin/HEAD`, the npm latest version and worktree cleanliness, and block when the local copy is stale or dirty — preventing a fork built on an outdated snapshot
 - **Hard guards against false positives & unbuilt traps**:
   - Four noise-reduction layers + regex word boundaries (preventing `ABORTED` matching `FS_ABORTED`)
   - Virtual release note & official guide deduplication
@@ -122,6 +123,7 @@ node scripts/run.mjs <plugin-dir> --strict       # exit 2 when the scan did not 
 node scripts/run-log.mjs list           # review past runs (tool version@commit included)
 node scripts/run-log.mjs doctor         # cross-check run logs × host startup logs (first stop for "plugin erroring")
 node scripts/run-log.mjs sanitize --latest --out share.json   # sanitise before sharing
+node scripts/run-log.mjs sanitize --latest --pr-draft         # PR baseline guard: blocks on stale local copy or dirty worktree
 npm run release-check                   # release preflight: version sync, tag, npm publish state, pack contents, self-test
 ```
 
@@ -137,6 +139,7 @@ node scripts/fleet-sweep.mjs --web             # Web profile plugins only
 node scripts/fleet-sweep.mjs --app             # Desktop (APP) profile plugins only
 node scripts/fleet-sweep.mjs --disabled        # disabled/inactive plugins and reasons
 node scripts/fleet-sweep.mjs --target 0.2.2-rc.5 --apply-compat # batch adapt zero-hit plugins
+node scripts/fleet-sweep.mjs --pr-ready [--offline]  # shortlist plugins safe to PR upstream (stale/dirty ones are blocked)
 ```
 
 Detailed SOP and multi-platform practices are in [references/user-guide.md](references/user-guide.md).
@@ -164,7 +167,10 @@ node scripts/guide-sync.mjs <local-version> --target <scan-target> --clone
 node scripts/code-scan.mjs <plugin-dir> <upgrade-guide-dir> <local-version> <target-version>
 
 # 4b. Seam query: dual-source verdict for a package/API symbol across the official
-#     guide anchors and the local host install ("removed" is only concluded when both agree)
+#     guide anchors and the local host install ("removed" is only concluded when both agree).
+#     Without an explicit guide root it prefers the managed default-branch snapshot,
+#     then falls back to the per-host cache.
+#     Sub-packages live under the host package's own node_modules; see lib/host-scope.mjs
 node scripts/seams.mjs dsh-settings
 ```
 
@@ -252,7 +258,7 @@ To gate your own plugin's repository at commit time (smoke/typecheck as hard gat
 | `scripts/cli.mjs` | npm entry (`npx plugin-fast-adapt`), forwards to run.mjs |
 | `scripts/run.mjs` | One-command orchestration of the full chain (env → version → guide → scan → audit → smoke → typecheck), unified report plus a local run log; `--real-smoke` bridges upstream verify-runtime for a real-cold-boot tier |
 | `scripts/run-log.mjs` | Run-log viewing (list/show), cross-checking (doctor: run logs × host startup logs) and sanitised export (sanitize) |
-| `scripts/seams.mjs` | Seam query: dual-source verdict for one package/API symbol across official guide anchors and the local host install |
+| `scripts/seams.mjs` | Seam query: dual-source verdict for one package/API symbol across official guide anchors and the local host install; prefers the managed default-branch snapshot when no explicit guide root is given |
 | `scripts/scaffold.mjs` | Scaffold a plugin from zero: one command emits a runnable plugin in any of the five forms (package.json invariants + complete form entry + patch layer + naming projections), verified on creation |
 | `scripts/write-gate.mjs` | Gate a finished plugin: orchestrates smoke + activation readiness + four-dimension audit + official-guide scan into a birth certificate; only three hard gates auto-judge, soft metrics pass through untouched |
 | `scripts/env-doctor.mjs` | Probe the local DSH environment (version, overlay, plugins, processes, activation readiness, ghost host, tsconfig fake green) |
@@ -266,7 +272,7 @@ To gate your own plugin's repository at commit time (smoke/typecheck as hard gat
 | `scripts/codemod.mjs` | Deterministic code/package-surface autofix (Loader entry exports, peer deps, top-level await); dry-run by default, `--apply` writes with a backup |
 | `scripts/types-diff.mjs` | Host .d.ts and export-surface diff; synthesises virtual guides keyed by baseline version |
 | `scripts/fix-peer-deps.mjs` | Batch-move host core packages from dependencies into peerDependencies; dry-run by default, `--apply` writes with a backup |
-| `scripts/fleet-sweep.mjs` | Fleet-wide governance and inspection with a matrix board and JSON report; `--apply-compat` backs up before batch-writing ledgers |
+| `scripts/fleet-sweep.mjs` | Fleet-wide governance and inspection with a matrix board and JSON report; `--apply-compat` backs up before batch-writing ledgers, `--pr-ready` shortlists plugins safe to PR upstream (APP judged via `app.asar` bundled packages) |
 | `scripts/log-doctor.mjs` | One-command diagnosis of `~/.dsh/logs/` (startup header / failed plugins / waiting services / signal summary) |
 | `scripts/sync-skill.mjs` | Sync the skill surface to a downstream skill directory; `--check` reports drift |
 | `scripts/self-test.mjs` | Self-test |

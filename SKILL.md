@@ -62,8 +62,9 @@ node scripts/sync-skill.mjs --dest <下游技能目录>            # 同步
 - **自动化只吃机械可判的部分**。常设规则的自动化边界写死在 `standards-scan --rules` 的输出里：每条规则的「机械判据」一栏说清机器看什么、没看什么。判据收窄过三轮（第一版把模块级 `new Set()` 与 `Symbol.for` 全报成违规，实测在 dsh-image-gen 上 35 处命中全是常量表与编译产物），现在宁少不滥：**误报一次，使用者就不再信第二次**。
 - **批量修补的失败方向必须是报错而不是静默改坏**。`fix-peer-deps` 敢批量做，是因为「宿主核心包写进 dependencies」判据纯机械，且搬错位置会让 `npm install` 直接报缺依赖，不会变成看不见的运行时异常；默认 dry-run、`--apply` 才落盘且先备份。
 - **起子进程与删路径是本工具仅有的两类危险动作**。前者要净化环境（宿主的子进程凭证擦除会摘掉 `GIT_CONFIG_KEY_n` 却留下 `GIT_CONFIG_COUNT`，git 读到残缺配置组直接 fatal，本工具每条 git 调用都会静默失败）；后者要不跟随链接（`rmSync(recursive)` 删软链/junction 会删到目标里去）。两条都由 `scripts/lib/proc-env.mjs` 收口，新写的脚本一律走它，不要各自 `execFileSync` / `rmSync`。
-- **目标宿主版本按平台分派**。桌面 APP 跑的是自己捆的那份宿主，不是 npm 全局那份；两者错开时（2026-11-05 实测：APP `0.2.2-rc.1` vs npm `0.2.1-rc.5`），拿 npm 版本判 APP 插件会把两端都判错，而报告看起来和正常的一样。`fleet-sweep` 现在每项按平台取目标版本，摘要里同时给出 `desktopHostVersion` 与 `targetVersionByPlatform`。诚实边界：宿主实测走 `hostInfo.location` 那棵树，APP 自捆宿主的包不在里面，所以 APP 插件的「套件包不存在」只对 npm 树成立。
-- **集群治理与单兵深度结合**。宿主刚升级、要把整批插件过一遍时，先用 `node scripts/fleet-sweep.mjs` 做集群广度筛查与矩阵看板诊断，筛出有问题的插件再逐个回到适配车道深查。
+- **目标宿主版本按平台分派**。桌面 APP 跑的是自己捆的那份宿主，不是 npm 全局那份；两者错开时（2026-11-05 实测：APP `0.2.2-rc.1` vs npm `0.2.1-rc.5`），拿 npm 版本判 APP 插件会把两端都判错，而报告看起来和正常的一样。`fleet-sweep` 每项按平台取目标版本，摘要里同时给出 `desktopHostVersion` 与 `targetVersionByPlatform`；APP 插件的套件存在性按 `app.asar` 内真实捆绑的 `@deepseek-ai/*` 包判定（`lib/desktop-app.mjs` 只读 asar 头，不解包），不再错用 npm 树那一份。
+- **集群治理与单兵深度结合**。宿主刚升级、要把整批插件过一遍时，先用 `node scripts/fleet-sweep.mjs` 做集群广度筛查与矩阵看板诊断，筛出有问题的插件再逐个回到适配车道深查。工作区里的分组目录（形如 `Deepseek/`）会被下钻一层找插件；`~/.dsh/logs` 的宿主启动失败与未激活条目按包名关联进看板，健康态从 healthy 降为 warning，不静默略过。
+- **向外部仓提 PR 前过基线守卫**。本地副本过期还建分支，推上去就是分叉。`run-log.mjs sanitize --pr-draft` 与 `fleet-sweep.mjs --pr-ready` 先核对 `origin/HEAD`、npm 最新版与工作区干净度，落后或脏就拦；判定与拦截原因写在报告里（`ready` / `behind-upstream` / `dirty` / `npm-ahead` / `no-remote` / `remote-unreachable`）。
 - **工具不自带定时器**。上游盯哨 `guide-sync --check` 的退出码是语义化的（1 有新版、0 无需动作、2 判定失败），接 cron、launchd 还是 agent 轮询由用户定。
 
 ## 安全边界
@@ -114,8 +115,8 @@ npm test
 | 脚本 | 职责 |
 | --- | --- |
 | `run.mjs` | 一键编排全流程 + 写本地运行日志 |
-| `fleet-sweep.mjs` | 集群批量治理与巡检：扫描工作区或已安装整批插件，输出矩阵看板与 JSON 报告 |
-| `run-log.mjs` | 运行日志查看（list/show）与脱敏导出（sanitize）、日志交叉核对（doctor） |
+| `fleet-sweep.mjs` | 集群批量治理与巡检：扫描工作区（含分组目录下钻）或已安装整批插件，按平台取目标版本，APP 插件按 `app.asar` 捆绑包核查套件，并关联 `~/.dsh/logs` 的启动失败；输出矩阵看板与 JSON 报告；`--pr-ready` 筛出可安全提 PR 的目标 |
+| `run-log.mjs` | 运行日志查看（list/show）与脱敏导出（sanitize，`--pr-draft` 附带 PR 基线守卫）、日志交叉核对（doctor） |
 | `env-doctor.mjs` | 探测本机 DSH 环境：版本、覆盖层、共享农场悬空软链、两层 patch、插件、进程、幽灵宿主（进程代际）、tsconfig paths 假绿、宿主半与客户端半启用就绪度；`--brief` 省略 patch 行原文（约降 94% 体积） |
 | `env-heal.mjs` | 覆盖层旧包自愈（默认 dry-run） |
 | `guide-sync.mjs` | 定目标版本 + 取官方升级指南：默认分支受管快照按 1 小时 TTL 刷新，tag 快照仅在离线兜底并标 frozen |
@@ -124,7 +125,7 @@ npm test
 | `codemod.mjs` | 确定性代码与包面自动修补：修复 Loader 入口导出面、宿主核心包 peer 依赖、顶层 await；默认 dry-run，`--apply` 才落盘并备份 |
 | `types-diff.mjs` | 宿主 .d.ts 与导出面差分（包面真源）：比对前后两版符号指纹，提取破坏性删除并按基线版本合成虚拟指南落盘；`run.mjs` 自动编排留存签名快照，`code-scan` 按窗口基线消费 |
 | `fix-peer-deps.mjs` | 批量把宿主核心包从 dependencies 挪进 peerDependencies；默认 dry-run，`--apply` 才落盘并备份 |
-| `seams.mjs` | 接缝查询：包名或 API 符号在指南锚点表与本机宿主里的双源结论 |
+| `seams.mjs` | 接缝查询：包名或 API 符号在指南锚点表与本机宿主里的双源结论；无显式指南根时优先默认分支受管快照，再退宿主版本缓存 |
 | `quick-smoke.mjs` | 内存级 Cordis 冒烟，含 Mock 兜底披露 |
 | `plugin-audit.mjs` | 四维性能架构体检，可叠加官方指南交叉 |
 | `log-doctor.mjs` | 解析 `~/.dsh/logs/` 的宿主故障 |
@@ -134,4 +135,4 @@ npm test
 | `release-check.mjs` | 发布前预检：版本一致、`v<版本>` tag、npm 是否已发布、`npm pack` 必需文件与夹带、自检、工作区；只读，不自动打 tag 或发布 |
 | `cli.mjs` | npm bin 入口（`npx plugin-fast-adapt`），转发到 run.mjs |
 | `self-test.mjs` | 自检 |
-| `scripts/lib/` | 扫描器、指南解析、运行日志、客户端半判定、宿主发现与宿主模块探测、发布规则、`package.json` 读取、缓存根、备份约定（宿主发现、`package.json` 读取、缓存根、备份各为独立层，CLI 入口只 re-export，不反向依赖） |
+| `scripts/lib/` | 扫描器、指南解析、运行日志、客户端半判定、宿主发现与宿主模块探测、桌面 APP 与 asar 包面、PR 基线守卫、发布规则、`package.json` 读取、缓存根、备份约定（各层为独立模块，CLI 入口只 re-export，不反向依赖） |

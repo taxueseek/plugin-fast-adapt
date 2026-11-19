@@ -37,7 +37,8 @@ DSH（DeepSeek Harness）是一个「所有功能都以插件形式存在」的 
 
 - **适配到 0.2.2-rc.4，0.2.2-rc.5 实测通过**：直连官方 `docs/upgrade-guide/` 与 Release Notes，覆盖 `v0.1.7-rc.2` 至 `0.2.2-rc.4` 共 18 个版本（指南滞后时由 Release Note 转虚拟指南补上）。2026-11-19 在 DSH `0.2.2-rc.5`（npm `next` 最新通道；桌面 APP 捆绑 `0.2.2-rc.2`）实机验证通过——定版诚实判 `up-to-date-on-channel`，留存 `v0.2.2-rc.5` 签名快照，并诚实披露 `rc.5` 尚无官方文档。支持虚拟指南自动生成与三元版本账本快速探测
 - **本地环境权威锚定（零网络依赖）**：默认定版本严格收敛到本机已安装的 DSH 宿主版本（方案 B，零外部网络请求），免除官方源网络波动与 GitHub 频控影响；显式 `--check-upstream` 才核对上游
-- **集群全域多维治理看板**：新增 `fleet-sweep.mjs`，一键扫描整机 Web 插件、APP 桌面端插件、工作区源码与运行中服务，输出五大生命周期矩阵看板，支持 `--apply-compat` 批量安全修补
+- **集群全域多维治理看板**：新增 `fleet-sweep.mjs`，一键扫描整机 Web 插件、APP 桌面端插件、工作区源码与运行中服务，输出五大生命周期矩阵看板，支持 `--apply-compat` 批量安全修补；APP 插件按 `app.asar` 真实捆绑包判定套件存在性（不再错用 npm 树），工作区分组目录（如 `Deepseek/`）下钻一层发现插件，并把 `~/.dsh/logs` 的宿主启动失败关联进看板
+- **PR 基线真源守卫**：向其他插件提 PR 前用 `run-log.mjs sanitize --pr-draft` 与 `fleet-sweep.mjs --pr-ready` 核对 `origin/HEAD`、npm 最新版与工作区干净度，本地落后或有未提交改动时拦截，防止基于过期副本建分支导致上游分叉
 - **误报与低级错误硬守卫**：
   - 四层降噪 + 常量词边界正则匹配（避免 `ABORTED` 误伤 `FS_ABORTED`）
   - 虚拟 Release 指南与官方真实指南自动去重
@@ -122,6 +123,7 @@ node scripts/run.mjs <插件目录> --strict       # 扫描没跑或指南没覆
 node scripts/run-log.mjs list           # 回看历史运行（含工具版本@commit）
 node scripts/run-log.mjs doctor         # 运行日志 × 宿主启动日志交叉核对（插件报错先跑它）
 node scripts/run-log.mjs sanitize --latest --out share.json   # 脱敏后才可外发
+node scripts/run-log.mjs sanitize --latest --pr-draft         # 提 PR 前基线守卫：本地落后或工作区脏时拦截
 npm run release-check                   # 发布前预检：版本一致、tag、npm 发布状态、包内容、自检
 ```
 
@@ -137,6 +139,7 @@ node scripts/fleet-sweep.mjs --web             # 仅查看 Web 平台插件
 node scripts/fleet-sweep.mjs --app             # 仅查看 Desktop (APP) 桌面端插件
 node scripts/fleet-sweep.mjs --disabled        # 仅查看被标记 disabled 或未激活的插件清单与原因
 node scripts/fleet-sweep.mjs --target 0.2.2-rc.5 --apply-compat # 批量修补 0 破坏命中的 package.json
+node scripts/fleet-sweep.mjs --pr-ready [--offline]  # 筛出可向原仓安全提 PR 的插件（落后/脏工作区会被拦）
 ```
 
 详细操作 SOP 与多平台实战指引见 [references/user-guide.md](references/user-guide.md)。
@@ -162,7 +165,8 @@ node scripts/guide-sync.mjs <本机版本> --target <扫描目标> --clone
 node scripts/code-scan.mjs <插件目录> <upgrade-guide 目录> <本机版本> <目标版本>
 
 # 4b. 接缝查询：某个包/API 在官方指南与本机宿主里的双源结论
-#     （指南说没说 × 宿主 node_modules 实测在不在，双源一致才下「已移除」）
+#     （指南说没说 × 宿主实测在不在，双源一致才下「已移除」）
+#     无显式指南根时优先用默认分支受管快照，再退宿主版本缓存
 #     套件子包在宿主主包内部的 node_modules 下，路径解析见 lib/host-scope.mjs
 node scripts/seams.mjs dsh-settings
 ```
@@ -248,7 +252,7 @@ npm test   # node scripts/self-test.mjs，281 项断言
 | `scripts/cli.mjs` | npm 入口（`npx plugin-fast-adapt`），转发到 run.mjs |
 | `scripts/run.mjs` | 一键编排全流程（环境→定版→指南→扫描→体检→冒烟→typecheck），出统一报告并写本地运行日志；`scan.coverage` 记录指南覆盖到哪一版，`--strict` 把扫描未知当失败；`--real-smoke` 桥接原仓库 verify-runtime 补真冷启动档 |
 | `scripts/run-log.mjs` | 运行日志查看（list/show）、交叉核对（doctor：运行日志×宿主启动日志）与脱敏导出（sanitize） |
-| `scripts/seams.mjs` | 接缝查询：一个包名/API 符号在官方指南锚点表与本机宿主里的双源结论 |
+| `scripts/seams.mjs` | 接缝查询：一个包名/API 符号在官方指南锚点表与本机宿主里的双源结论；无显式指南根时优先默认分支受管快照 |
 | `scripts/scaffold.mjs` | 从零造插件：一条命令生成五形态可运行插件（package.json 不变量＋完整形态入口＋挂载层＋命名投影），生成即验证 |
 | `scripts/write-gate.mjs` | 造完即验：编排冒烟＋启用就绪＋四维体检＋官方指南核查出「出生证」；硬门禁仅三条自动判，软指标只透传不拍板 |
 | `scripts/env-doctor.mjs` | 探测本机 DSH 环境（版本、覆盖层、插件、进程、启用就绪度、幽灵宿主、tsconfig 假绿） |
@@ -262,7 +266,7 @@ npm test   # node scripts/self-test.mjs，281 项断言
 | `scripts/codemod.mjs` | 确定性代码与包面自动修补（Loader 入口导出面、peer 依赖、顶层 await）；默认 dry-run，`--apply` 才落盘并备份 |
 | `scripts/types-diff.mjs` | 宿主 .d.ts 与导出面差分，按基线版本合成虚拟指南落盘 |
 | `scripts/fix-peer-deps.mjs` | 批量把宿主核心包从 dependencies 挪进 peerDependencies；默认 dry-run，`--apply` 才落盘并备份 |
-| `scripts/fleet-sweep.mjs` | 集群批量治理与巡检，输出矩阵看板与 JSON 报告；`--apply-compat` 批量写账本前先备份 |
+| `scripts/fleet-sweep.mjs` | 集群批量治理与巡检，输出矩阵看板与 JSON 报告；`--apply-compat` 批量写账本前先备份，`--pr-ready` 筛出可安全提 PR 的插件（APP 按 `app.asar` 捆绑包判定） |
 | `scripts/log-doctor.mjs` | 一键解析 `~/.dsh/logs/` 的宿主故障（startup 头部/失败插件/等待服务/信号汇总） |
 | `scripts/sync-skill.mjs` | 把技能面同步到下游技能目录，`--check` 查漂移 |
 | `scripts/self-test.mjs` | 自检 |
