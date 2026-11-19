@@ -17,6 +17,7 @@
 //
 // fingerprint 是这条事故的稳定键（去重键），与 incident-ledger 的 id 对应。
 
+import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -25,8 +26,40 @@ import { scanPlugin } from '../code-scan.mjs'
 import { parseGuideMarkdown, extractAnchors } from './guide-parser.mjs'
 import { gitChildEnv, removeDirSafely } from './proc-env.mjs'
 import { probePackageJson, readPackageJson } from './package-json.mjs'
+import { phasesOf, summaryOf } from './run-states.mjs'
 
 const FIXTURES_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'fixtures')
+
+/**
+ * 索引摘要投影。与 lib/runlog.mjs 共用 lib/run-states.mjs 的 summaryOf——
+ * 这里只做「取记录 + 调真源」，不再自己写一遍投影（写一遍就是第二份判据）。
+ * @param {object} record run.mjs 的运行记录
+ */
+function projectRunSummary(record) {
+  return { phases: phasesOf(record), ...summaryOf(record) }
+}
+
+/**
+ * 跑一次 run.mjs 并取回 JSON 报告（夹具用；离线 + 关冒烟，只留要测的那一步判据）。
+ * @param {string} dir 插件目录
+ * @param {object} check 夹具的 check 段
+ * @returns {object} run.mjs 的 JSON 报告
+ */
+function runPipeline(dir, check = {}) {
+  const cacheDir = fs.mkdtempSync(path.join(path.dirname(FIXTURES_DIR), 'pfa-fixture-cache-'))
+  const args = [path.join(path.dirname(FIXTURES_DIR), 'scripts', 'run.mjs'), dir, '--offline', '--no-smoke', '--no-log', '--force']
+  if (check.target) args.push('--target', check.target)
+  try {
+    const out = execFileSync(process.execPath, args, {
+      encoding: 'utf8',
+      env: { ...process.env, DSH_PFA_CACHE_DIR: cacheDir },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    return JSON.parse(out.slice(out.indexOf('{'), out.lastIndexOf('}') + 1))
+  } finally {
+    removeDirSafely(cacheDir)
+  }
+}
 
 /** 夹具 id 清单（按目录名排序，输出稳定）。 */
 export function listFixtures(dir = FIXTURES_DIR) {
@@ -184,6 +217,31 @@ const CHECKERS = {
     return {
       pass: evaluateAssert(check.assert, { probePackageJson, readPackageJson, dir, probe, pkg }),
       detail: { probe: { status: probe.status, bom: probe.bom }, version: pkg?.version ?? null },
+    }
+  },
+
+  // typecheck 形态判定：对 input 目录真跑 run.mjs 的 typecheck 前置判据。
+  // 夹具的 input 就是「插件目录本身」，所以直接复用 run.mjs，不复制判据——
+  // 复制等于第二份判据，正是夹具要消灭的东西。
+  typecheck(id, check) {
+    const dir = inputDir(id)
+    const report = runPipeline(dir, check)
+    return {
+      pass: evaluateAssert(check.assert, { report, typecheck: report.typecheck }),
+      detail: { typecheck: report.typecheck },
+    }
+  },
+
+  // 运行日志投影：input/run-record.json 是一次真实运行记录，按索引摘要投影后
+  // 断言消费者（list/doctor）读到的值。直通记录的形状与全量报告不同，
+  // 投影少认一种就是静默失配。
+  runlog(id, check) {
+    const file = path.join(inputDir(id), 'run-record.json')
+    const record = JSON.parse(fs.readFileSync(file, 'utf8'))
+    const projected = projectRunSummary(record)
+    return {
+      pass: evaluateAssert(check.assert, { projected, phasesOf }),
+      detail: projected,
     }
   },
 }

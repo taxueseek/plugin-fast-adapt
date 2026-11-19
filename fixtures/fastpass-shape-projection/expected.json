@@ -1,0 +1,12 @@
+{
+  "id": "fastpass-shape-projection",
+  "source": "本机实测 2026-11-19（直通记录被 run-log list 显示成 ? 、doctor 判成 host-log-clean-scan-unknown）",
+  "symptom": "账本直通记录在 run-log list 里显示「命中=? 体检=? scan=?」，doctor 判「代码侧未核查」，而记录里 phases.scan 明明是 ok",
+  "rootCause": "直通记录把结论记在顶层（phases/findings/criticalOrHigh/auditScore），而索引投影只从 record.scan / record.audit / record.smoke 派生；phasesOf 也只认全量报告的字段形状",
+  "fix": "phasesOf 优先认 record.phases，索引投影两种形状都读，直通记录带全结论并加 hasConclusion 基线守卫",
+  "check": {
+    "kind": "runlog",
+    "assert": "projected.phases.scan === 'ok' && projected.phases.smoke === 'ok' && projected.findings === 0 && projected.criticalOrHigh === 0 && projected.auditScore === 100 && projected.smoke === true"
+  },
+  "fingerprint": "runlog:fastpass-shape:projection"
+}

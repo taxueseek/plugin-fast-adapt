@@ -1,0 +1,13 @@
+{
+  "time": "2026-11-19T12:24:25.549Z",
+  "plugin": { "name": "plugin-fast-adapt", "version": "0.4.2", "dir": "/x" },
+  "tool": { "version": "0.4.2", "commit": "73ea594", "dirty": false },
+  "host": { "version": "0.2.2-rc.5" },
+  "window": { "local": "0.2.2-rc.5", "target": "0.2.2-rc.5", "source": "host" },
+  "phases": { "scan": "ok", "smoke": "ok", "typecheck": "skipped", "realSmoke": null },
+  "fastPass": true,
+  "findings": 0,
+  "criticalOrHigh": 0,
+  "auditScore": 100,
+  "durationMs": 170
+}

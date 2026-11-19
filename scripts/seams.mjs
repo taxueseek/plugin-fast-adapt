@@ -23,6 +23,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { printJson, compareVersions, packageBase } from './lib/scanner.mjs'
+import { SYMBOL_TEXT_PRESENCE } from './lib/run-states.mjs'
 import { loadGuides, listGuideVersions } from './lib/guide-parser.mjs'
 import { pickMigrationSteps } from './code-scan.mjs'
 import { syncGuides } from './guide-sync.mjs'
@@ -152,7 +153,7 @@ function checkPackageOnHost(query, hostInfo) {
 // 可用（可能是压缩产物里的内部名），零命中也不代表不存在（可能在别处动态挂载）。
 function checkSymbolOnHost(query, hostInfo) {
   const roots = symbolSearchRoots(hostInfo)
-  if (!roots.length) return { kind: 'symbol', status: 'unknown', checkedWhere: null }
+  if (!roots.length) return { kind: 'symbol', status: SYMBOL_TEXT_PRESENCE.UNKNOWN, checkedWhere: null }
   const re = new RegExp(`\\b${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`)
   let files = 0
   let hits = 0
@@ -187,7 +188,7 @@ function checkSymbolOnHost(query, hostInfo) {
   for (const root of roots) walk(root, 0)
   return {
     kind: 'symbol',
-    status: hits > 0 ? 'text-present' : 'text-absent',
+    status: hits > 0 ? SYMBOL_TEXT_PRESENCE.TEXT_PRESENT : SYMBOL_TEXT_PRESENCE.TEXT_ABSENT,
     filesScanned: files,
     checkedWhere: roots.join(', '),
     caveat: '文本命中是弱证据：命中不代表该 API 对插件可用，零命中只覆盖宿主套件源码目录',
@@ -304,13 +305,13 @@ function synthesize(query, guideEvidence, hostEvidence, seamHit = null, eventHit
     return { verdict: 'introduced', text: `这是迁移目标（新写法），首见于 ${guideEvidence[0].version} 的指南——用它是已适配的标志` }
   }
   if (removedClaim) {
-    const statusText = hostEvidence?.status === 'text-present' ? '宿主套件源码仍出现该词（弱证据）' : hostEvidence?.status === 'text-absent' ? '宿主套件源码零命中' : '宿主侧未能实测'
+    const statusText = hostEvidence?.status === SYMBOL_TEXT_PRESENCE.TEXT_PRESENT ? '宿主套件源码仍出现该词（弱证据）' : hostEvidence?.status === SYMBOL_TEXT_PRESENCE.TEXT_ABSENT ? '宿主套件源码零命中' : '宿主侧未能实测'
     return { verdict: 'guide-claim-member', text: `指南把它标为已变更的成员/常量，${statusText}——按指南语境判断` }
   }
   if (hostEvidence?.status === 'present') return { verdict: 'host-present-no-guide-record', text: '宿主里有这个包，指南走廊未提及——未提及不等于官方承诺，升级窗口扫一遍 code-scan 更稳' }
   if (hostEvidence?.status === 'absent') return { verdict: 'host-absent-no-guide-record', text: '宿主里没有这个包，指南也未提及——本来就不存在，或名字拼写有误' }
-  if (hostEvidence?.status === 'text-present') return { verdict: 'text-present-no-guide-record', text: '宿主源码有该词（弱证据），指南未提及——未提及不代表 API 不存在' }
-  if (hostEvidence?.status === 'text-absent') return { verdict: 'no-record', text: '双源均无记录——指南未提及不是「API 不存在」的证据，去官方文档或宿主源码确认' }
+  if (hostEvidence?.status === SYMBOL_TEXT_PRESENCE.TEXT_PRESENT) return { verdict: 'text-present-no-guide-record', text: '宿主源码有该词（弱证据），指南未提及——未提及不代表 API 不存在' }
+  if (hostEvidence?.status === SYMBOL_TEXT_PRESENCE.TEXT_ABSENT) return { verdict: 'no-record', text: '双源均无记录——指南未提及不是「API 不存在」的证据，去官方文档或宿主源码确认' }
   return { verdict: 'unknown', text: '双源都未能取证（无指南根且探不到宿主）——先跑 guide-sync --clone 或 --guide 指定指南根' }
 }
 
@@ -355,7 +356,7 @@ export function querySeams(query, { guideRoot = undefined, hostInfo = undefined 
     ? isPackageLike
       ? checkPackageOnHost(query, resolvedHost)
       : checkSymbolOnHost(query, resolvedHost)
-    : { kind: isPackageLike ? 'package' : 'symbol', status: 'unknown', checkedWhere: null }
+    : { kind: isPackageLike ? 'package' : 'symbol', status: SYMBOL_TEXT_PRESENCE.UNKNOWN, checkedWhere: null }
 
   return {
     query,

@@ -21,7 +21,8 @@ import { readPackageJson, readPackageJsonStrict, probePackageJson } from './lib/
 import { NO_BACKUP, backupBeforeWrite } from './lib/backup.mjs'
 import { diagnoseLogs } from './log-doctor.mjs'
 import { listAsarDshPackages } from './lib/desktop-app.mjs'
-import { checkPrBaseline } from './lib/pr-gate.mjs'
+import { checkPrBaseline, PR_BASELINE_STATES } from './lib/pr-gate.mjs'
+import { BUILD_STATUS, LIFECYCLE_STATE, HEALTH_STATUS, PKG_PROBE_STATUS } from './lib/run-states.mjs'
 
 const TOOL_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -111,18 +112,18 @@ export function checkBuild(pluginRoot) {
   // 三态探测：missing 是正常形态（纯脚本目录），corrupt 是必须报出来的故障。
   // 旧实现把两者都吞成 null，BOM 或语法错误一律显示「解析失败」而不说为什么。
   const probe = probePackageJson(pluginRoot)
-  if (probe.status === 'missing') return { ok: true, status: 'N/A' }
-  if (probe.status === 'corrupt') {
+  if (probe.status === PKG_PROBE_STATUS.MISSING) return { ok: true, status: BUILD_STATUS.NOT_APPLICABLE }
+  if (probe.status === PKG_PROBE_STATUS.CORRUPT) {
     return {
       ok: false,
-      status: 'CORRUPTED',
+      status: BUILD_STATUS.CORRUPTED,
       reason: `package.json 解析失败${probe.bom ? '（文件带 UTF-8 BOM）' : ''}: ${probe.error}`,
     }
   }
   const pkg = probe.pkg
   const hasTsConfig = fs.existsSync(path.join(pluginRoot, 'tsconfig.json'))
   const hasSrc = fs.existsSync(path.join(pluginRoot, 'src'))
-  if (!hasTsConfig && !hasSrc) return { ok: true, status: 'OK' }
+  if (!hasTsConfig && !hasSrc) return { ok: true, status: BUILD_STATUS.OK }
 
   const entryRel =
     pkg.exports?.['.']?.default ||
@@ -131,9 +132,9 @@ export function checkBuild(pluginRoot) {
     'lib/index.js'
   const entryPath = path.resolve(pluginRoot, entryRel)
   if (!fs.existsSync(entryPath)) {
-    return { ok: false, status: 'UNBUILT', entryRel, reason: `产物缺失: ${entryRel}` }
+    return { ok: false, status: BUILD_STATUS.UNBUILT, entryRel, reason: `产物缺失: ${entryRel}` }
   }
-  return { ok: true, status: 'OK', entryRel }
+  return { ok: true, status: BUILD_STATUS.OK, entryRel }
 }
 
 // 探测工作区候选插件
@@ -308,9 +309,9 @@ export function discoverAllPlugins(
           entry.includes('disabled: true') ||
           group.globalPatchEntries?.some((e) => e.includes(pkgName) && e.includes('disabled: true'))
 
-        let state = 'ENABLED'
-        if (isDisabled) state = 'DISABLED'
-        else if (isRunningHost) state = 'RUNNING'
+        let state = LIFECYCLE_STATE.ENABLED
+        if (isDisabled) state = LIFECYCLE_STATE.DISABLED
+        else if (isRunningHost) state = LIFECYCLE_STATE.RUNNING
 
         list.push({
           sourceType: 'INSTALLED',
@@ -344,7 +345,7 @@ export function discoverAllPlugins(
         dir,
         profile: 'workspace',
         platform,
-        state: 'WORKSPACE',
+        state: LIFECYCLE_STATE.WORKSPACE,
         installed: false,
       })
     }
@@ -364,7 +365,7 @@ export function inspectPluginItem(
         dir: rawItem,
         profile: 'workspace',
         platform: 'core',
-        state: 'WORKSPACE',
+        state: LIFECYCLE_STATE.WORKSPACE,
         installed: false,
         sourceType: 'WORKSPACE',
       }
@@ -389,7 +390,7 @@ export function inspectPluginItem(
   const cacheKey = dir && !applyCompat && auditCache ? `${dir}\0${effectiveTarget || ''}\0${useAsar ? 'asar' : 'npm'}` : null
   const cached = cacheKey ? auditCache.get(cacheKey) : null
 
-  const build = cached ? cached.build : dir ? checkBuild(dir) : { ok: true, status: 'N/A' }
+  const build = cached ? cached.build : dir ? checkBuild(dir) : { ok: true, status: BUILD_STATUS.NOT_APPLICABLE }
   // 报告里那句「该包在当前本地宿主 (X) 中物理不存在」的 X 要与判定用的版本一致。
   // 当 APP 插件提供了 app.asar 包名集合时，直接按 asar 真实捆绑包判定，不再错用 npm 树。
   let platformHostInfo = platformTarget && hostInfo ? { ...hostInfo, version: platformTarget } : hostInfo
@@ -448,34 +449,34 @@ export function inspectPluginItem(
     }
   }
 
-  let healthStatus = 'healthy'
+  let healthStatus = HEALTH_STATUS.HEALTHY
   const issues = []
 
   if (!build.ok) {
-    healthStatus = 'broken'
+    healthStatus = HEALTH_STATUS.BROKEN
     issues.push(build.reason || '未构建')
   }
 
   if (criticalCount > 0 || highCount > 0) {
-    healthStatus = 'broken'
+    healthStatus = HEALTH_STATUS.BROKEN
     const highTitles = findings.filter((f) => f.severity === 'CRITICAL' || f.severity === 'HIGH').map((f) => f.title)
     issues.push(...highTitles)
   } else if (mediumCount > 0 || audit.overallScore < 85) {
-    if (healthStatus !== 'broken') healthStatus = 'warning'
+    if (healthStatus !== HEALTH_STATUS.BROKEN) healthStatus = HEALTH_STATUS.WARNING
     const medTitles = findings.filter((f) => f.severity === 'MEDIUM').map((f) => f.title)
     issues.push(...medTitles)
   }
 
   // 运行中幽灵代际关联
-  if (item.state === 'RUNNING' && envData?.ghostHost?.verdict === 'stale') {
+  if (item.state === LIFECYCLE_STATE.RUNNING && envData?.ghostHost?.verdict === 'stale') {
     issues.push(`幽灵代际风险: ${envData.ghostHost.reason}`)
-    if (healthStatus === 'healthy') healthStatus = 'warning'
+    if (healthStatus === HEALTH_STATUS.HEALTHY) healthStatus = HEALTH_STATUS.WARNING
   }
 
   // 宿主运行时日志故障关联（来自 ~/.dsh/logs 的最近失败记录）
-  if (item.installed && item.state !== 'DISABLED' && logFailures?.has(pkg.name || item.name)) {
+  if (item.installed && item.state !== LIFECYCLE_STATE.DISABLED && logFailures?.has(pkg.name || item.name)) {
     issues.push(`宿主日志异常: ${logFailures.get(pkg.name || item.name)}`)
-    if (healthStatus === 'healthy') healthStatus = 'warning'
+    if (healthStatus === HEALTH_STATUS.HEALTHY) healthStatus = HEALTH_STATUS.WARNING
   }
 
   return {
@@ -545,15 +546,15 @@ export function runFleetSweep(argv = process.argv.slice(2)) {
   // 条件筛选过滤
   if (args.filterWeb) items = items.filter((x) => x.platform === 'web')
   if (args.filterApp) items = items.filter((x) => x.platform === 'app')
-  if (args.filterRunning) items = items.filter((x) => x.state === 'RUNNING')
-  if (args.filterDisabled) items = items.filter((x) => x.state === 'DISABLED')
+  if (args.filterRunning) items = items.filter((x) => x.state === LIFECYCLE_STATE.RUNNING)
+  if (args.filterDisabled) items = items.filter((x) => x.state === LIFECYCLE_STATE.DISABLED)
   if (args.workspaceOnly) items = items.filter((x) => x.sourceType === 'WORKSPACE')
 
   // 分类统计
   const total = items.length
-  const healthy = items.filter((r) => r.healthStatus === 'healthy').length
-  const warning = items.filter((r) => r.healthStatus === 'warning').length
-  const broken = items.filter((r) => r.healthStatus === 'broken').length
+  const healthy = items.filter((r) => r.healthStatus === HEALTH_STATUS.HEALTHY).length
+  const warning = items.filter((r) => r.healthStatus === HEALTH_STATUS.WARNING).length
+  const broken = items.filter((r) => r.healthStatus === HEALTH_STATUS.BROKEN).length
 
   const byPlatform = {
     web: items.filter((x) => x.platform === 'web'),
@@ -562,9 +563,9 @@ export function runFleetSweep(argv = process.argv.slice(2)) {
   }
 
   const byState = {
-    running: items.filter((x) => x.state === 'RUNNING'),
-    enabled: items.filter((x) => x.state === 'ENABLED'),
-    disabled: items.filter((x) => x.state === 'DISABLED'),
+    running: items.filter((x) => x.state === LIFECYCLE_STATE.RUNNING),
+    enabled: items.filter((x) => x.state === LIFECYCLE_STATE.ENABLED),
+    disabled: items.filter((x) => x.state === LIFECYCLE_STATE.DISABLED),
     workspace: items.filter((x) => x.sourceType === 'WORKSPACE'),
   }
 
@@ -598,14 +599,14 @@ export function runFleetSweep(argv = process.argv.slice(2)) {
   if (args.prReady) {
     const baselineCache = new Map()
     for (const item of items) {
-      if (item.healthStatus === 'healthy' || !item.dir) continue
+      if (item.healthStatus === HEALTH_STATUS.HEALTHY || !item.dir) continue
       if (!baselineCache.has(item.dir)) {
         baselineCache.set(item.dir, checkPrBaseline(item.dir, { offline: args.offline, checkNpm: !args.offline }))
       }
       const baseline = baselineCache.get(item.dir)
       item.prBaseline = baseline
       if (baseline.ready) prReadyList.push(item)
-      else if (baseline.status !== 'no-remote') prBlockedList.push(item)
+      else if (baseline.status !== PR_BASELINE_STATES.NO_REMOTE) prBlockedList.push(item)
     }
     summary.prReadyCount = prReadyList.length
     summary.prReadyPlugins = prReadyList.map((p) => ({ name: p.name, version: p.version, dir: p.dir, remote: p.prBaseline.remote }))
@@ -626,7 +627,12 @@ export function runFleetSweep(argv = process.argv.slice(2)) {
     `【宿主状态】全局 DSH: ${hostInfo?.version || '未知'} | 活跃进程: ${(envData.runningProcesses || []).length} 个 | 幽灵代际: ${envData.ghostHost?.verdict || 'unknown'}\n\n`,
   )
 
-  const printSection = (title, list) => {
+  // 健康态 → 中文标签。展示层映射放这里，不放 lib/run-states.mjs——
+// 那个文件只收词表与纯判定，混进展示映射就会让「加一个状态」要改两处。
+const healthLabel = (status) =>
+  status === HEALTH_STATUS.HEALTHY ? '健康' : status === HEALTH_STATUS.WARNING ? '警告' : '高危'
+
+const printSection = (title, list) => {
     if (!list.length) return
     process.stdout.write(`\n┌─ ${title} (共 ${list.length} 个) ${'─'.repeat(Math.max(0, 70 - title.length))}\n`)
     process.stdout.write(
@@ -635,7 +641,7 @@ export function runFleetSweep(argv = process.argv.slice(2)) {
     process.stdout.write(`├${'─'.repeat(78)}\n`)
     for (const r of list) {
       const issueText = r.issues.length > 0 ? r.issues[0].slice(0, 26) : '正常健康'
-      const statusTag = r.healthStatus === 'healthy' ? '健康' : r.healthStatus === 'warning' ? '警告' : '高危'
+      const statusTag = healthLabel(r.healthStatus)
       process.stdout.write(
         `│ ${r.name.slice(0, 26).padEnd(28)} ${r.platform.padEnd(8)} ${(r.state + '/' + statusTag).padEnd(10)} ${r.buildStatus.padEnd(8)} ${(String(r.score) + '/100').padEnd(6)} ${issueText}\n`,
       )
@@ -665,7 +671,7 @@ export function runFleetSweep(argv = process.argv.slice(2)) {
 
   if (broken > 0) {
     process.stdout.write(`\n下一步指路: 存在 ${broken} 个故障插件，请使用单兵深度适配进行修复:\n`)
-    for (const r of items.filter((x) => x.healthStatus === 'broken' && x.dir)) {
+    for (const r of items.filter((x) => x.healthStatus === HEALTH_STATUS.BROKEN && x.dir)) {
       process.stdout.write(`  node scripts/run.mjs ${r.dir}\n`)
     }
   }

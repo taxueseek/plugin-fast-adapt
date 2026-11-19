@@ -1179,6 +1179,9 @@ test('run：离线全链编排产出统一报告并写日志；sanitize 脱敏�
   }))
   fs.mkdirSync(path.join(dir, 'src'), { recursive: true })
   fs.writeFileSync(path.join(dir, 'src', 'index.js'), 'export function apply() {}\n')
+  // 夹具测的是「typecheck 步骤能执行成功」，补 tsconfig 让判据走到执行层；
+  // 否则被「目标不含 tsconfig」的形态判定提前拦下，测不到本来要测的东西。
+  fs.writeFileSync(path.join(dir, 'tsconfig.json'), '{}\n')
 
   const runsDir = tmpPluginDir('runs')
   const env = cleanGitEnv({ ...process.env, DSH_PFA_RUNS_DIR: runsDir })
@@ -1190,6 +1193,9 @@ test('run：离线全链编排产出统一报告并写日志；sanitize 脱敏�
   assert.strictEqual(report.audit.overallScore, 100, '干净插件应满分')
   assert.strictEqual(report.typecheck.status, 'ok', 'typecheck 步骤应执行成功')
   assert.strictEqual(report.scan.skipped, true, '离线模式扫描跳过')
+  // 跳过取指南是用户显式要求的（--offline），与「指南根不存在」是两回事。
+  // 旧文案一律报「无指南根或无窗口」，把人推去找一个本来就故意没取的指南。
+  assert.match(report.scan.reason, /跳过取指南/, '离线跳过的 reason 应点明是本轮主动跳过，不是缺指南')
   // 窗口来源留痕：peer 声明了宿主包（dsh-tools 是 dsh-* 子包），起点取其下限
   assert.strictEqual(report.window.local, '0.2.1-rc.1')
   assert.strictEqual(report.window.source, 'peer')

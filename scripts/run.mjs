@@ -186,6 +186,20 @@ function runTypecheck(pluginRoot, stages) {
     stages.typecheck = { status: TYPECHECK_STATUS.SKIPPED, reason: '未声明 typecheck script' }
     return
   }
+  // 安装副本形态：package.json 的 typecheck 脚本引用 tsconfig，但 npm pack 的 files
+  // 白名单不含 tsconfig（本工具自己的 npm pack 实测 75 个文件里 0 个 tsconfig），
+  // 于是 tsc 报 TS5058「path does not exist」——这不是插件构建失败，是形态不适用。
+  // 判 fail 会给出退出码 2，把人推去修一个不存在的构建问题；本机 47 个有目录的
+  // 条目里 44 个是这种形态，历史至少 2 条真实假失败（dsh-workbuddy-connect）。
+  if (!fs.existsSync(path.join(pluginRoot, 'tsconfig.json'))) {
+    stages.typecheck = {
+      status: TYPECHECK_STATUS.SKIPPED,
+      reason: '目标不含 tsconfig.json，源码级构建验证不适用（安装副本常见：files 白名单不含 tsconfig）',
+      durationMs: 0,
+      hint: '这条不是构建失败。要验构建请指向插件源码仓（含 tsconfig 的那份），或把 tsconfig 加进 package.json 的 files。',
+    }
+    return
+  }
   const runner = fs.existsSync(path.join(pluginRoot, 'pnpm-lock.yaml')) ? 'pnpm' : 'npm'
   const started = Date.now()
   try {
@@ -365,8 +379,13 @@ if (lastRun && !isCustomRun && hostVersion && pluginPkg?.version) {
   const isPluginSame = lastRun.pluginVersion === pluginPkg.version
   const isToolSame = Boolean(lastRun.toolVersion) && lastRun.toolVersion === currentToolVersion
   const isClean = isPluginUnmodifiedSince(pluginDir, lastRun.time)
+  // 直通记录自己也进 getLatestSuccessfulRun 的候选，而它只是「复用上次结论」。
+  // 若上次直通没把结论带全（auditScore=null），下一次的基线就是 null，于是 null
+  // 会自我复制：doctor 永久显示「体检 ?」，而实际上次是全绿的。基线缺失结论时
+  // 不算可复用——回退到全量跑，让本次把结论补齐。
+  const hasConclusion = lastRun.auditScore != null && lastRun.findings != null
 
-  if (isHostSame && isPluginSame && isToolSame && isClean) {
+  if (isHostSame && isPluginSame && isToolSame && isClean && hasConclusion) {
     const elapsed = Date.now() - startedAt
     // --compact 是给子 Agent 回传用的机器可读通道，直通提示必须走 stderr，
     // 否则 JSON 前面会多出人类可读文本，子 Agent 解析直接崩。
@@ -385,7 +404,16 @@ if (lastRun && !isCustomRun && hostVersion && pluginPkg?.version) {
         window: lastRun.window || { local: hostVersion, target: hostVersion },
         phases: lastRun.phases || { scan: STAGE_STATUS.OK, smoke: SMOKE_STATUS.OK, typecheck: TYPECHECK_STATUS.SKIPPED, realSmoke: null },
         fastPass: true,
+        // 直通的语义是「复用上次健康结论」，所以上次的命中数与得分的原始值
+        // 必须一起带过来。只带 auditScore 时，索引里 findings/criticalOrHigh
+        // 投影成 null，list 显示「命中 ?」、doctor 读到 null——与 phases 同源
+        // 的形状失配（2026-11-19 实录）。0 是有效结论，不是缺失，照实带 0。
+        findings: lastRun.findings ?? 0,
+        criticalOrHigh: lastRun.criticalOrHigh ?? 0,
         auditScore: lastRun.auditScore,
+        // smoke 也带：索引的 smoke 字段从 record.smoke?.success 派生，直通记录
+        // 只有 phases.smoke。不带就投影成 null，list 的 smoke 列空着。
+        smoke: lastRun.smoke ?? (lastRun.phases?.smoke === SMOKE_STATUS.OK ? true : null),
         durationMs: elapsed,
       }
       writeRunLog(fastRecord, { toolDir: TOOL_DIR })
@@ -587,7 +615,13 @@ const skipReason = guideError
   ? `指南拉取失败: ${String(guideError).slice(0, 200)}`
   : stages.scan?.error
     ? `扫描执行失败: ${String(stages.scan.error).slice(0, 200)}`
-    : '无指南根或无窗口'
+    // 跳过取指南是用户显式要求的（--offline）或本轮没跑到，与「指南根不存在」
+    // 是两回事：后者要人去找指南，前者只要别把它当成缺指南。
+    : stages.guides?.status === STAGE_STATUS.SKIPPED && stages.guides?.reason
+      ? `本轮跳过取指南（${stages.guides.reason}）`
+      : windowLocal && windowTarget
+        ? '无指南根或无窗口'
+        : '扫描窗口缺失（本机宿主版本或目标版本未定）'
 const coverage = buildCoverage(scanResult, windowLocal, windowTarget, scanResult ? null : skipReason)
 const report = {
   time: new Date().toISOString(),

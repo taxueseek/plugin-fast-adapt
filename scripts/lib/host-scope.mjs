@@ -12,6 +12,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { HOST_PRESENCE } from './run-states.mjs'
 
 // 候选作用域按优先级返回（都已是 @deepseek-ai 目录，调用方直接拼包名）：
 //   1. 宿主主包内部套件目录（真实位置，npm 全局安装与 pnpm 都成立）

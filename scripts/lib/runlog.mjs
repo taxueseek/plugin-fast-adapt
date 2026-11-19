@@ -16,7 +16,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { gitChildEnv } from './proc-env.mjs'
-import { phasesOf, STAGE_STATUS, SMOKE_STATUS, TYPECHECK_STATUS } from './run-states.mjs'
+import { phasesOf, summaryOf, STAGE_STATUS, SMOKE_STATUS, TYPECHECK_STATUS } from './run-states.mjs'
 
 // 日志根可注入（DSH_PFA_RUNS_DIR）：self-test 用临时目录，不写真实用户缓存。
 // 默认根走 XDG_STATE 而非 ~/.cache——台账是有保留期的运行史不是可再生缓存，
@@ -145,11 +145,7 @@ export function writeRunLog(payload, { toolDir } = {}) {
       window: record.window ?? null,
       verdict: record.version?.verdict ?? null,
       phases: phasesOf(record),
-      findings: record.scan?.findingCount ?? null,
-      criticalOrHigh: record.scan?.criticalOrHigh ?? null,
-      auditScore: record.audit?.overallScore ?? null,
-      smoke: record.smoke?.success ?? null,
-      typecheck: record.typecheck?.status ?? null,
+      ...summaryOf(record),
       durationMs: record.durationMs ?? null,
     }
     fs.appendFileSync(indexFile(), `${JSON.stringify(summary)}\n`)

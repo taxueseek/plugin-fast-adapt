@@ -99,6 +99,8 @@ node scripts/run.mjs <插件目录> [--target <版本>] [--from <版本>] [--no-
 
 按上面四步依次跑环境、定版、指南、扫描、体检、冒烟、typecheck（执行插件自有的 typecheck script，与冒烟同信任级），输出一份统一 JSON 报告；扫描窗口自动取「插件在宿主包上声明的 peer 下限 → 宿主版本」的走廊（`--from`/`--target` 可覆盖，倒挂自动回退并留痕）。指南步骤会把窗口终点作为 `--target` 传给 `guide-sync`，按分支快照取语料，不再跟官方最新版本走。
 
+typecheck 的两种跳过要分清：**工具链缺失**（runner 不在 PATH，按 PATH 预检判定）与**形态不适用**（目标不含 `tsconfig.json`，安装副本常见——`package.json` 的 `files` 白名单不含 tsconfig，`tsc -p tsconfig.json` 必报 TS5058）。两者都判 `skipped` 并给补法，都不算构建失败；只有 runner 在 PATH 上且构建确实失败才判 `fail`（退出码 2）。判据是纯机械的，不匹配错误文本。
+
 `scan.coverage` 记本轮指南实际覆盖到哪一版（`coveredUpTo` / `complete`）。没扫或覆盖不全时屏幕明说「不能当查干净」，不再只打「命中 0 处」；`--strict` 让这两种未知态退出 2，供 CI 用，默认退出码语义不变。未知开关会直接报错（`--no-smoek` 这类拼写错误不再静默照跑）。
 
 `--real-smoke` 默认关，显式启用后桥接原仓库 plugin-upgrade 的 `verify-runtime.mjs`：干净 profile 安装→启动→四类归因（插件代码、依赖解析、profile 配置、宿主运行时），fail 计入退出码 2。脚本不在本机（探测兄弟仓 `dsh-plugin-upgrade-skill`，或 `PFA_VERIFY_RUNTIME` 指路径）时诚实跳过给补法，Windows 按 POSIX-only 声明跳过。退出码：0 干净，2 有 critical/high 命中、typecheck 红、真冷启动失败，或 `--strict` 下扫描未知。

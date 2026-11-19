@@ -12,6 +12,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { PKG_PROBE_STATUS } from './run-states.mjs'
 
 /** UTF-8 BOM。JSON.parse 不认它，而 Windows 编辑器与部分脚本会写进去。 */
 const BOM = '\uFEFF'
@@ -86,12 +87,12 @@ export function readPackageJsonStrict(dir) {
  */
 export function probePackageJson(dir) {
   const file = resolvePkgPath(dir)
-  if (!fs.existsSync(file)) return { status: 'missing', pkg: null, file, error: null, bom: false }
+  if (!fs.existsSync(file)) return { status: PKG_PROBE_STATUS.MISSING, pkg: null, file, error: null, bom: false }
   const bom = hasBom(file)
   try {
-    return { status: 'ok', pkg: JSON.parse(readTextStrippingBom(file)), file, error: null, bom }
+    return { status: PKG_PROBE_STATUS.OK, pkg: JSON.parse(readTextStrippingBom(file)), file, error: null, bom }
   } catch (err) {
-    return { status: 'corrupt', pkg: null, file, error: err.message, bom }
+    return { status: PKG_PROBE_STATUS.CORRUPT, pkg: null, file, error: err.message, bom }
   }
 }
 

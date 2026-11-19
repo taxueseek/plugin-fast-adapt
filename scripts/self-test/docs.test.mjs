@@ -112,45 +112,98 @@ test('文档安全姿态与常设规则条数对齐代码（防 README 与代码
   }
 })
 
-test('状态词表：run.mjs 与 runlog.mjs 不再手写阶段状态字面量（单一真源对账）', async () => {
+test('状态词表：状态字面量只从 lib/run-states.mjs 取（单一真源对账）', async () => {
   // 这一条是「同一类问题只修了一处」的机器版：run.mjs 曾 24 处手写 status 字面量，
   // runlog.mjs 又按另一套派生逻辑读它们。加一个状态名要改 N 处，漏一处就是静默失配。
   // 现在写入点与派生都从 lib/run-states.mjs 取值，门禁钉住这件事不再回退。
+  // 扫描面原先只有 run.mjs 与 runlog.mjs，fleet-sweep 的构建/生命周期/健康三套
+  // 字面量在门禁盲区里——2026-11-19 起扫描面是全 scripts/**/*.mjs（含 self-test 自身）。
   const root = path.resolve(import.meta.dirname, '..', '..')
   const read = (f) => fs.readFileSync(path.join(root, f), 'utf8')
-  const { STAGE_STATUS, TYPECHECK_STATUS, SMOKE_STATUS, REAL_SMOKE_STATUS, ALL_STATUSES } = await import('../lib/run-states.mjs')
-  const runSrc = read('scripts/run.mjs')
-  const runlogSrc = read('scripts/lib/runlog.mjs')
+  const { STAGE_STATUS, TYPECHECK_STATUS, SMOKE_STATUS, REAL_SMOKE_STATUS, BUILD_STATUS, LIFECYCLE_STATE, HEALTH_STATUS, PKG_PROBE_STATUS, HOST_PRESENCE, CHECK_VERDICT, SYMBOL_TEXT_PRESENCE, ALL_STATUSES } = await import('../lib/run-states.mjs')
 
   // 1. 词表本身自洽：不同词表之间的值可以同名（ok/skipped/error 是多阶段共用的），
   //    但同一张表内不允许两个键指向同一个值（那才是真的重复定义）。
-  const vocab = { STAGE_STATUS, TYPECHECK_STATUS, SMOKE_STATUS, REAL_SMOKE_STATUS }
+  const vocab = { STAGE_STATUS, TYPECHECK_STATUS, SMOKE_STATUS, REAL_SMOKE_STATUS, BUILD_STATUS, LIFECYCLE_STATE, HEALTH_STATUS, PKG_PROBE_STATUS, HOST_PRESENCE, CHECK_VERDICT, SYMBOL_TEXT_PRESENCE }
   for (const [name, table] of Object.entries(vocab)) {
     const values = Object.values(table)
     assert.strictEqual(new Set(values).size, values.length, `${name} 内有两个键指向同一个状态值`)
   }
-  assert.deepStrictEqual([...ALL_STATUSES].sort(), ['error', 'fail', 'inconclusive', 'ok', 'skipped'], 'ALL_STATUSES 并集漂移')
+  // 逐张表断言，不用扁平字母序：扁平比在「新增一张表」时只报「并集漂移」，
+  // 逐张比能直接指出是哪一面漏了。
+  assert.deepStrictEqual([...Object.values(STAGE_STATUS)].sort(), ['error', 'ok', 'skipped'])
+  assert.deepStrictEqual([...Object.values(TYPECHECK_STATUS)].sort(), ['fail', 'ok', 'skipped'])
+  assert.deepStrictEqual([...Object.values(SMOKE_STATUS)].sort(), ['error', 'fail', 'ok', 'skipped'])
+  assert.deepStrictEqual([...Object.values(REAL_SMOKE_STATUS)].sort(), ['fail', 'inconclusive', 'ok', 'skipped'])
+  assert.deepStrictEqual([...Object.values(BUILD_STATUS)].sort(), ['CORRUPTED', 'N/A', 'OK', 'UNBUILT'])
+  assert.deepStrictEqual([...Object.values(LIFECYCLE_STATE)].sort(), ['DISABLED', 'ENABLED', 'RUNNING', 'WORKSPACE'])
+  assert.deepStrictEqual([...Object.values(HEALTH_STATUS)].sort(), ['broken', 'healthy', 'warning'])
+  assert.deepStrictEqual([...Object.values(PKG_PROBE_STATUS)].sort(), ['corrupt', 'missing', 'ok'])
+  assert.deepStrictEqual([...Object.values(HOST_PRESENCE)].sort(), ['absent', 'present', 'unknown'])
+  assert.deepStrictEqual([...Object.values(CHECK_VERDICT)].sort(), ['fail', 'pass', 'skip', 'unknown', 'warn'])
+  assert.deepStrictEqual([...Object.values(SYMBOL_TEXT_PRESENCE)].sort(), ['text-absent', 'text-present', 'unknown'])
+  // 并集是所有表的去重新增集合，与逐张表自洽互为校验
+  const union = [...new Set(Object.values(vocab).flatMap((t) => Object.values(t)))].sort()
+  assert.deepStrictEqual([...ALL_STATUSES].sort(), union, 'ALL_STATUSES 与各表并集不一致')
 
-  // 2. 写入点不再出现裸字面量。允许出现在注释里（说明文字），不允许出现在
-  //    `status:` 赋值或 `===` 比较的位置。
-  const literalUse = (src, label) => {
-    const offenders = []
-    for (const [i, line] of src.split('\n').entries()) {
-      const code = line.replace(/^\s*\/\/.*$/, '').trim()
-      if (!code) continue
-      if (/status:\s*'/.test(code) || /status\s*===\s*'/.test(code) || /status\s*!==\s*'/.test(code)) {
-        offenders.push(`${label}:${i + 1}: ${code}`)
-      }
-    }
-    return offenders
-  }
-  const offenders = [...literalUse(runSrc, 'run.mjs'), ...literalUse(runlogSrc, 'runlog.mjs')]
-  assert.deepStrictEqual(offenders, [], `这些位置仍在手写状态字面量，应改走 lib/run-states.mjs：\n${offenders.join('\n')}`)
+  // 2. 全 scripts/**/*.mjs 扫描面：不允许手写词表外的状态字面量。
+  //    判据按**值域**判，不按字段名判：`status` 这个字段名在本仓横跨构建面、
+  //    宿主在场面、检查结论面与符号搜索面（host-scope / seams / release-rules /
+  //    plugin-audit / code-scan 各用各的面），按字段名映射到单面会误报一大片。
+  //    值落在任一词表内 = 合法；一个都不落 = 手写了新状态，必须进词表。
+  //    注释行跳过（说明文字不算违规）。
+  const allStatusValues = new Set(Object.values(vocab).flatMap((t) => Object.values(t)))
+  const STATUS_FIELD_NAMES = ['status', 'state', 'healthStatus', 'buildStatus']
+  const srcFiles = listScriptsRecursive(path.join(root, 'scripts'), root)
+  const offenders = srcFiles.flatMap((f) => literalUse(read(f), f, STATUS_FIELD_NAMES, allStatusValues))
+  assert.deepStrictEqual(offenders, [], `这些位置手写了词表外的状态字面量，应改走 lib/run-states.mjs：\n${offenders.join('\n')}`)
 
   // 3. runlog 的 phasesOf 只从词表派生，不再有自己的字面量分支
+  const runlogSrc = read('scripts/lib/runlog.mjs')
   assert.ok(/phasesOf/.test(runlogSrc), 'runlog.mjs 应使用词表导出的 phasesOf')
   assert.ok(!/record\.typecheck\.status \?\?/.test(runlogSrc), 'runlog 不应再自己派生 typecheck 状态（已收进 run-states.phasesOf）')
+
+  // 4. phasesOf 必须认 fast-pass 记录的顶层 phases 形状。
+  //    实录：2026-11-19T12:24:25.549Z 的直通记录被 list 显示成 "?"、doctor 判成
+  //    scan-unknown，而记录里 phases.scan 明明是 ok。派生少认一种形状 = 静默失配。
+  const { phasesOf } = await import('../lib/run-states.mjs')
+  const fastPassRecord = { phases: { scan: 'ok', smoke: 'ok', typecheck: 'skipped', realSmoke: null } }
+  assert.deepStrictEqual(phasesOf(fastPassRecord), fastPassRecord.phases, '直通记录的 phases 应原样投影，不能变成全 null')
+  // 全量报告形状不能被直通分支吃掉
+  assert.strictEqual(
+    phasesOf({ scan: { findingCount: 0 }, smoke: { success: true }, typecheck: { status: 'ok' } }).scan,
+    'ok',
+    '全量报告仍应从 scan/smoke 字段派生',
+  )
+  assert.strictEqual(phasesOf({}).scan, null, '无字段仍为 null（未知）')
 })
+
+/** 抓一个源文件里的状态字面量。注释行跳过（说明文字不算违规）。
+ *  值在 allowedValues 外即违规——判据是值域而非字段名，见上方说明。 */
+function literalUse(src, label, fieldNames, allowedValues) {
+  const offenders = []
+  for (const [i, line] of src.split('\n').entries()) {
+    const code = line.replace(/^\s*\/\/.*$/, '').trim()
+    if (!code) continue
+    for (const field of fieldNames) {
+      const m = code.match(new RegExp(`${field}:\\s*'([^']*)'`)) || code.match(new RegExp(`${field}\\s*(?:===|!==)\\s*'([^']*)'`))
+      if (m && !allowedValues.has(m[1])) offenders.push(`${label}:${i + 1}: ${code}`)
+    }
+  }
+  return offenders
+}
+
+/** 递归列出 scripts/ 下的 .mjs（相对仓库根），跳过 node_modules 与 tmp。 */
+function listScriptsRecursive(dir, root) {
+  const out = []
+  for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (ent.name === 'node_modules' || ent.name === 'tmp') continue
+    const full = path.join(dir, ent.name)
+    if (ent.isDirectory()) out.push(...listScriptsRecursive(full, root))
+    else if (ent.name.endsWith('.mjs')) out.push(path.relative(root, full))
+  }
+  return out.sort()
+}
 
 test('文档分层：过程报告（research/）不进技能面，技能面文件都在 package.json files 白名单里', async () => {
   // argo v2.13.0 的文档分层收口（docs/ 87→26）：真源、生成物、公开文档、过程报告

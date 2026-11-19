@@ -1,0 +1,12 @@
+{
+  "id": "typecheck-installed-copy",
+  "source": "本机实测 2026-11-06（dsh-workbuddy-connect 8 次运行指向已安装副本，2 次 typecheck=fail）",
+  "symptom": "对 ~/.dsh/profiles/*/node_modules/<plugin> 跑 run.mjs，typecheck 判 fail 并给退出码 2",
+  "rootCause": "安装副本的 package.json 声明了 tsc -p tsconfig.json，但 npm pack 的 files 白名单不含 tsconfig，tsc 报 TS18003/TS5058；旧判据把形态不适用当成构建失败",
+  "fix": "typecheck 前判 tsconfig.json 是否存在，不存在记 skipped 并给补法",
+  "check": {
+    "kind": "typecheck",
+    "assert": "report.typecheck.status === 'skipped' && /tsconfig/.test(report.typecheck.reason)"
+  },
+  "fingerprint": "run-typecheck:installed-copy:no-tsconfig"
+}

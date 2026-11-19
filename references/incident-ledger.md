@@ -26,6 +26,8 @@
 | `scan-code-boundary` | 常量锚点 `ABORTED` 子串误伤 `FS_ABORTED` | 本机实测（v0.2.2 降噪复盘） | `fixtures/scan-code-boundary/` |
 | `bom-silent-null` | `package.json` 带 UTF-8 BOM 读不出元信息，被吞成 null 继续跑 | 上游 issue #12322；本机实测 2026-11-05 | `fixtures/bom-silent-null/` |
 | `regex-literal-masking` | 本工具自扫报出两处 lifecycle 误报，位置在自己的检测器源码里 | 本机实测 2026-11-09（fleet 场测） | `fixtures/regex-literal-masking/` |
+| `typecheck-installed-copy` | 对已安装副本跑 typecheck，`tsc -p tsconfig.json` 报 TS18003/TS5058 被判成构建失败并给退出码 2；安装副本的 `files` 白名单不含 tsconfig，本机 47 个有目录条目里 44 个是这种形态 | 本机实测 2026-11-06（dsh-workbuddy-connect 8 次运行指向已安装副本，2 次 `typecheck=fail`） | `fixtures/typecheck-installed-copy/` |
+| `fastpass-shape-projection` | 账本直通记录被 `run-log list` 显示成「命中=? 体检=? scan=?」、被 doctor 判成「代码侧未核查」，而记录里 `phases.scan` 明明是 `ok`；基线缺结论时 `null` 还会在直通链上自我复制 | 本机实测 2026-11-19 | `fixtures/fastpass-shape-projection/` |
 
 ## F4 场测结论（2026-11-09）
 

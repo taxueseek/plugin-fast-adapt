@@ -171,6 +171,9 @@ test('方案 B 工具链缺失：runner 不在 PATH 判 skipped 而非 fail（20
   )
   fs.writeFileSync(path.join(dir, 'pnpm-lock.yaml'), '')
   fs.writeFileSync(path.join(dir, 'index.js'), 'export function apply() {}\n')
+  // 这两个夹具测的是「runner 在不在 PATH」，不是「有没有 tsconfig」。
+  // 补 tsconfig 让判据走到工具链那一层，否则会被前置的形态判定提前拦下。
+  fs.writeFileSync(path.join(dir, 'tsconfig.json'), '{}\n')
 
   // 造一个不含 pnpm 的 PATH：只留 node 所在目录与系统基础目录
   const nodeBin = path.dirname(process.execPath)
@@ -198,6 +201,9 @@ test('方案 B 工具链误判防护：runner 在 PATH 但内层命令缺 → fa
   )
   fs.writeFileSync(path.join(dir, 'pnpm-lock.yaml'), '')
   fs.writeFileSync(path.join(dir, 'index.js'), 'export function apply() {}\n')
+  // 这两个夹具测的是「runner 在不在 PATH」，不是「有没有 tsconfig」。
+  // 补 tsconfig 让判据走到工具链那一层，否则会被前置的形态判定提前拦下。
+  fs.writeFileSync(path.join(dir, 'tsconfig.json'), '{}\n')
 
   const bin = tmpPluginDir('stub-bin')
   if (process.platform === 'win32') {
@@ -366,4 +372,29 @@ test('方案 1 & 2 环境层：parsePatchEntries 剥离深层 config 列表与 c
   const split = checkPrefixSplit({ version: '0.2.2-alpha.2', location: '/a' }, '0.2.1-rc.4')
   assert.strictEqual(split?.mismatch, true)
   assert.strictEqual(checkPrefixSplit({ version: '0.2.2-alpha.2' }, '0.2.2-alpha.2'), null)
+})
+
+test('方案 B 形态判定：不含 tsconfig 的安装副本 typecheck 判 skipped 而非 fail（2026-11-06 dsh-workbuddy-connect 实录）', () => {
+  // 实录：对 ~/.dsh/profiles/*/node_modules/<plugin> 跑 run.mjs，package.json 声明了
+  // "typecheck": "tsc -p tsconfig.json"，但 npm pack 的 files 白名单不含 tsconfig
+  // （本工具自己的 npm pack 实测 75 个文件里 0 个 tsconfig），tsc 报 TS5058
+  // 「path does not exist」，旧判据判 fail 并给退出码 2——把人推去修一个不存在的构建问题。
+  // 本机 47 个有目录的条目里 44 个是这种形态。判 fail 是假失败，判 skipped 才是事实。
+  const dir = tmpPluginDir('plan-b-installed-copy')
+  fs.writeFileSync(
+    path.join(dir, 'package.json'),
+    JSON.stringify({ name: 't-installed-copy', version: '1.0.0', scripts: { typecheck: 'tsc -p tsconfig.json' } }),
+  )
+  fs.mkdirSync(path.join(dir, 'lib'), { recursive: true })
+  fs.writeFileSync(path.join(dir, 'lib', 'index.js'), 'export function apply() {}\n')
+
+  const out = execFileSync(
+    process.execPath,
+    [path.join(SCRIPTS, 'run.mjs'), dir, '--offline', '--no-smoke', '--no-log', '--target', '0.2.1-rc.3'],
+    { encoding: 'utf8' },
+  )
+  const report = JSON.parse(out.slice(0, out.lastIndexOf('}') + 1))
+  assert.strictEqual(report.typecheck.status, 'skipped', '安装副本不含 tsconfig 应判 skipped，不是 fail')
+  assert.match(report.typecheck.reason, /tsconfig/, 'reason 应点明形态原因')
+  assert.ok(report.typecheck.hint, '应给出「这条不是构建失败」的说明，避免误读成构建红')
 })

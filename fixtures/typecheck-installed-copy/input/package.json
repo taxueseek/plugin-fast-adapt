@@ -1,0 +1,6 @@
+{
+  "name": "t-installed-copy",
+  "version": "1.0.0",
+  "scripts": { "typecheck": "tsc -p tsconfig.json" },
+  "main": "lib/index.js"
+}
