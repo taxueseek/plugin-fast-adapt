@@ -1,6 +1,6 @@
 {
   "name": "plugin-fast-adapt",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "Adapt DSH plugins to new host releases: official-guide-driven breaking-change scans, in-memory smoke tests, fleet governance and five-form scaffolding, plus code review, plugin authoring and environment diagnosis",
   "author": {
     "name": "taxueseek"
