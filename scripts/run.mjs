@@ -26,7 +26,7 @@ import { probeEnvironment } from './env-doctor.mjs'
 import { auditPlugin } from './plugin-audit.mjs'
 import { writeRunLog, getLatestSuccessfulRun, isPluginUnmodifiedSince } from './lib/runlog.mjs'
 import { readPackageJson, readPackageJsonStrict } from './lib/package-json.mjs'
-import { STAGE_STATUS, TYPECHECK_STATUS, SMOKE_STATUS, REAL_SMOKE_STATUS } from './lib/run-states.mjs'
+import { STAGE_STATUS, TYPECHECK_STATUS, SMOKE_STATUS, REAL_SMOKE_STATUS, projectSmokeReport } from './lib/run-states.mjs'
 import {
   extractHostSignature,
   saveCachedSignature,
@@ -363,7 +363,7 @@ const isCustomRun = Boolean(valueOf('from') || valueOf('target') || flag('real-s
 if (lastRun && !isCustomRun && hostVersion && pluginPkg?.version) {
   const isHostSame = lastRun.hostVersion === hostVersion
   const isPluginSame = lastRun.pluginVersion === pluginPkg.version
-  const isToolSame = (lastRun.toolVersion || currentToolVersion) === currentToolVersion
+  const isToolSame = Boolean(lastRun.toolVersion) && lastRun.toolVersion === currentToolVersion
   const isClean = isPluginUnmodifiedSince(pluginDir, lastRun.time)
 
   if (isHostSame && isPluginSame && isToolSame && isClean) {
@@ -383,7 +383,7 @@ if (lastRun && !isCustomRun && hostVersion && pluginPkg?.version) {
         tool: { version: currentToolVersion },
         host: { version: hostVersion },
         window: lastRun.window || { local: hostVersion, target: hostVersion },
-        phases: { scan: STAGE_STATUS.OK, smoke: SMOKE_STATUS.OK, typecheck: TYPECHECK_STATUS.SKIPPED, realSmoke: null },
+        phases: lastRun.phases || { scan: STAGE_STATUS.OK, smoke: SMOKE_STATUS.OK, typecheck: TYPECHECK_STATUS.SKIPPED, realSmoke: null },
         fastPass: true,
         auditScore: lastRun.auditScore,
         durationMs: elapsed,
@@ -499,7 +499,7 @@ if (offline) {
 let typesDiff = null
 if (offline) {
   stages.typesDiff = { status: STAGE_STATUS.SKIPPED, reason: '--offline' }
-} else if (guideRoot && windowLocal && windowTarget && env.globalDsh?.location) {
+} else if (windowLocal && windowTarget && env.globalDsh?.location) {
   try {
     const currentSig = extractHostSignature(env.globalDsh.location)
     saveCachedSignature(currentSig.version, currentSig)
@@ -524,7 +524,7 @@ if (offline) {
           synth = { written: guides.length, file }
         }
         stages.typesDiff = {
-          status: REAL_SMOKE_STATUS.OK,
+          status: STAGE_STATUS.OK,
           base: windowLocal,
           target: currentSig.version,
           breakingCount: diff.breakingCount,
@@ -538,7 +538,7 @@ if (offline) {
     stages.typesDiff = { status: STAGE_STATUS.ERROR, error: String(err?.message || err).slice(0, 300) }
   }
 } else {
-  stages.typesDiff = { status: STAGE_STATUS.SKIPPED, reason: '无指南根或未检测到宿主安装位置' }
+  stages.typesDiff = { status: STAGE_STATUS.SKIPPED, reason: '未检测到宿主安装位置或窗口缺失' }
 }
 
 // 4. 扫描（宿主实测核查内置；第五个参数让包面差分合成的虚拟指南并入扫描）
@@ -631,20 +631,7 @@ const report = {
         compatPatch: auditReport.compatPatch ?? null,
       }
     : null,
-  smoke: smokeResult
-    ? smokeResult.success
-      ? { success: true, durationMs: smokeResult.durationMs, registeredToolsCount: smokeResult.registeredToolsCount, mockFallbacks: smokeResult.mockFallbacks }
-      : {
-          status: SMOKE_STATUS.ERROR,
-          success: false,
-          stage: smokeResult.stage || 'runtime_execution',
-          error: smokeResult.error,
-          undeclaredInjectAccess: smokeResult.undeclaredInjectAccess,
-          skipped: false,
-        }
-    : stages.smoke?.status === SMOKE_STATUS.ERROR
-      ? { status: SMOKE_STATUS.ERROR, success: false, stage: stages.smoke.stage || 'runtime_execution', error: stages.smoke.error, skipped: false }
-      : { skipped: true },
+  smoke: projectSmokeReport(smokeResult, stages.smoke),
   typecheck: stages.typecheck ?? { skipped: true },
   realSmoke,
   durationMs,
@@ -744,7 +731,10 @@ if (flag('compact')) {
   const scanFindings = report.scan?.findings || []
   const auditFindings = report.audit?.findings || []
   const blockers = [
-    ...scanFindings.filter((f) => f.severity === 'CRITICAL' || f.severity === 'HIGH').map((f) => ({
+    ...scanFindings.filter((f) => {
+      const s = String(f.severity || '').toLowerCase()
+      return s === 'critical' || s === 'high'
+    }).map((f) => ({
       source: 'scan',
       severity: f.severity,
       symbol: f.symbol,

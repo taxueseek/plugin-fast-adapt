@@ -121,6 +121,11 @@ test('插件形态：Cordis ctx.inject 回调解包 commandCtx.commands 并遵�
     const doctorRes = await fastAdaptCmd.handler({ rawInput: `doctor ${ROOT}`, attachments: [] })
     assert.strictEqual(doctorRes?.kind, 'success')
     assert.match(doctorRes.text, /\[Fast-Adapt Doctor\]/)
+    // 回归：probeEnvironment 返回 env.activation.verdict，不再读错路径退化成恒定 N/A
+    const doctorTool = registeredTools.find((t) => t.name === 'dsh_fast_adapt_doctor')
+    const doctorData = await doctorTool.execute({ pluginDir: ROOT })
+    assert.ok(['OK', 'WARN', 'ERROR'].includes(doctorData.activation), `pluginDir 形态应返回真实 activation 判定，实际：${doctorData.activation}`)
+    assert.ok(doctorRes.text.includes(`激活: ${doctorData.activation}`), '命令与工具应返回一致的 activation 判定')
     const smokeRes = await fastAdaptCmd.handler({ rawInput: `smoke ${ROOT}`, attachments: [] })
     assert.strictEqual(smokeRes?.kind, 'success')
     assert.match(smokeRes.text, /\[Fast-Adapt Smoke\]/)

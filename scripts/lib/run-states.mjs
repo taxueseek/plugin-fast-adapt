@@ -96,3 +96,39 @@ export function phasesOf(record) {
     realSmoke: record.realSmoke == null ? null : record.realSmoke.skipped ? REAL_SMOKE_STATUS.SKIPPED : (record.realSmoke.status ?? null),
   }
 }
+
+/**
+ * 统一投影 report.smoke 的最终形状，消除 run.mjs 中的多层三目嵌套。
+ * @param {object|null} smokeResult quick-smoke.mjs 的输出
+ * @param {object|undefined} stageSmoke stages.smoke（如未构建拦截）
+ */
+export function projectSmokeReport(smokeResult, stageSmoke) {
+  if (smokeResult) {
+    if (smokeResult.success) {
+      return {
+        success: true,
+        durationMs: smokeResult.durationMs,
+        registeredToolsCount: smokeResult.registeredToolsCount,
+        mockFallbacks: smokeResult.mockFallbacks,
+      }
+    }
+    return {
+      status: SMOKE_STATUS.ERROR,
+      success: false,
+      stage: smokeResult.stage || 'runtime_execution',
+      error: smokeResult.error,
+      undeclaredInjectAccess: smokeResult.undeclaredInjectAccess,
+      skipped: false,
+    }
+  }
+  if (stageSmoke?.status === SMOKE_STATUS.ERROR) {
+    return {
+      status: SMOKE_STATUS.ERROR,
+      success: false,
+      stage: stageSmoke.stage || 'runtime_execution',
+      error: stageSmoke.error,
+      skipped: false,
+    }
+  }
+  return { skipped: true }
+}

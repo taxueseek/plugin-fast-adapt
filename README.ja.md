@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md) | 日本語
 
-[![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D22.13-blue.svg)](package.json) [![Dependencies](https://img.shields.io/badge/dependencies-0-blue.svg)](#依存関係とセルフテスト) [![Self-test](https://img.shields.io/badge/self--test-273%20passing-brightgreen.svg)](#依存関係とセルフテスト)
+[![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D22.13-blue.svg)](package.json) [![Dependencies](https://img.shields.io/badge/dependencies-0-blue.svg)](#依存関係とセルフテスト) [![Self-test](https://img.shields.io/badge/self--test-276%20passing-brightgreen.svg)](#依存関係とセルフテスト)
 
 > **DSH は新しいバージョンをリリースするたびに、既存のプラグインが起動できなくなることがあります。** このスキルはベンダー公式のアップグレードガイドを直接読み込み、プラグインのコードを走査して、どの破壊的変更に踏み込んだかと、ベンダー自身の修正手順を報告します。さらに、コマンド 1 つで動作するプラグインをゼロから生成して検証することもできます。**0.2.2-rc.4 まで対応、0.2.2-rc.5 で実機検証済み**: 公式ガイドは `v0.1.7-rc.2` から `0.2.2-rc.4` まで 18 バージョンをカバーし（ガイド項目が未整備の版は公式 Release Note を仮想ガイドとして補完）、最新の `next` チャネルおよびローカルグローバルホスト **0.2.2-rc.5**（デスクトップ APP 同梱版 `0.2.2-rc.2`）で実機検証済みです——バージョン解決は正直に `up-to-date-on-channel` と判定し、`v0.2.2-rc.5` シグネチャスナップショットを保存、ヘルスチェック 100/100・インメモリスモーク 4ms を通過しました。`0.2.2-rc.5` にはまだ公式ガイド文書が存在しないため、台帳は「`0.2.2-rc.4` までしかカバーされておらずクリーンとは言い切れない」と正直に明示します。ローカル環境への権威アンカー、Release Note からの破壊的変更抽出、フリート全体の多次元一括管理にも対応しています。
 
@@ -18,7 +18,7 @@
 | 変更 1 件の検証 | 3,600 秒の実ホストコールドスタート → ミリ秒級のインメモリスモークテスト（未ビルド成果物のハード遮断とホストモジュールのフォールバック付き） |
 | ゴーストホスト | ディスクは新コードなのに実行中プロセスが旧コードを動かしているときに警告（バージョン文字列ではなくプロセス起動時刻を比較） |
 | 偽グリーン検出 | `tsconfig` の `paths` が存在しない checkout を指しているときに警告（ローカルゲートが全緑でも実際には壊れている状態） |
-| セルフテスト | 273 個のアサーション、オフラインで実行可能 |
+| セルフテスト | 276 個のアサーション、オフラインで実行可能 |
 | 外部依存 | 0（Node 組み込みモジュール + `git`/`npm` コマンドのみ） |
 | クロスプラットフォーム | macOS、Linux 標準パス、Termux モバイル、コンテナ環境をネイティブサポート（XDG 準拠） |
 | プラグイン生成 | コマンド 1 つで 5 形態の実行可能プラグインを生成し、生成時点で検証 |
@@ -48,7 +48,7 @@ DSH（DeepSeek Harness）は「すべての機能がプラグインとして存�
 - **クロスプラットフォームとコンテナ対応**：絶対パスのハードコードを排除し、Linux 標準パス（`/usr/lib/node_modules`）、Termux（`$PREFIX/lib/node_modules`）、`npm_config_prefix` に対応。環境変数 `DSH_HOST_PATH` / `DSH_LOCATION` での直接上書きと、XDG キャッシュ仕様の厳格な遵守
 - **検証が安い**：インメモリ Cordis スモークテストはミリ秒から秒で結果を出し、実ホストのコールドスタート不要。実際の証拠が必要なときは `--real-smoke` でクリーンな profile への実インストール・実起動を追加
 - **外部依存ゼロ**：Node 組み込みモジュールと `git`/`npm` コマンドのみ。TypeScript も AST ライブラリも HTTP クライアントも不要
-- **再現可能**：273 個のアサーションをオフラインで実行可能。CI は ubuntu / macOS / Windows の 3 プラットフォームで実行し、タグを打つとリリースプレフライトが走る
+- **再現可能**：276 個のアサーションをオフラインで実行可能。CI は ubuntu / macOS / Windows の 3 プラットフォームで実行し、タグを打つとリリースプレフライトが走る
 - **適応だけではない**：`scaffold.mjs` がコマンド 1 つで 5 形態の実行可能プラグインを生成（実基底クラスでのロード検証付き）、`write-gate.mjs` が完成時に「出生証明書」を発行
 - **サイレント失敗にも判定基準あり**：`ghostHost` はプロセス起動時刻とディスク変更時刻を比較して「ディスクは新版、メモリは旧版」を捕捉。`falseGreen` は `tsconfig` の `paths` が存在しない checkout を指すときの TypeScript のサイレントフォールバックを捕捉。どちらも報告のみで判断を代行せず、証拠は出力に書かれる
 - **限界への誠実さ**：スモークテストの合格 ≠ ホスト互換。この一文はツールの出力自体に書かれている
@@ -234,7 +234,7 @@ TypeScript も AST ライブラリも HTTP クライアントも不要。Node 22
 セルフテスト:
 
 ```sh
-npm test   # node scripts/self-test.mjs、273 個のアサーション
+npm test   # node scripts/self-test.mjs、276 個のアサーション
 ```
 
 開発者はコミット前ゲートの有効化を推奨（1 回だけ）: `git config core.hooksPath .githooks`——コミットのたびにセルフテストが走り、下流同期のし忘れはその瞬間に止められます。

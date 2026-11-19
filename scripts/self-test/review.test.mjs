@@ -186,3 +186,60 @@ test('audit：cordis.patch.yml 含 !!js 报 P0 阻断', () => {
   assert.strictEqual(finding.priority, 'P0')
   assert.ok(report.scores.resilience <= 80)
 })
+
+test('run-log --pr-draft：脱敏输出 doc-gap 与 package.json 建议', async () => {
+  const { formatPrDraft } = await import('../run-log.mjs')
+  const os = await import('node:os')
+  const fakeHome = os.default.homedir()
+  const md = formatPrDraft({
+    plugin: { name: 'dsh-demo', version: '1.0.0', dir: path.join(fakeHome, 'src', 'dsh-demo') },
+    host: { version: '0.2.2-rc.5' },
+    window: { local: '0.2.2-rc.1', target: '0.2.2-rc.5' },
+    tool: { version: '0.4.2' },
+    scan: {
+      docGapSymbols: ['@deepseek-ai/dsh-old'],
+      findings: [{ severity: 'critical', symbol: '@deepseek-ai/dsh-old', message: `Found in ${fakeHome}/src/dsh-demo/index.js` }],
+    },
+    audit: {
+      overallScore: 95,
+      peerPatch: [{ package: '@deepseek-ai/dsh', from: '^0.2.1', to: '^0.2.2-rc.5' }],
+      compatPatch: [{ field: 'dsh.compatibility.dsh', from: '^0.2.1', to: '^0.2.1 || ^0.2.2-rc.5' }],
+    },
+  })
+  assert.ok(md.includes('doc-gap'), '应列出上游文档缺口')
+  assert.ok(md.includes('@deepseek-ai/dsh-old'), '应包含缺失符号')
+  assert.ok(md.includes('dsh.compatibility.dsh'), '应包含 compatPatch 建议')
+  assert.ok(!md.includes(fakeHome), 'PR 草稿必须脱敏本机 home 路径')
+})
+
+test('run --compact：包含小写 critical/high 的 code-scan 阻断项', () => {
+  const dir = tmpPluginDir('compact-scan-blocker')
+  fs.writeFileSync(
+    path.join(dir, 'package.json'),
+    JSON.stringify({
+      name: 'compact-scan-blocker',
+      version: '1.0.0',
+      main: 'index.js',
+      peerDependencies: { '@deepseek-ai/dsh': '^0.2.1' },
+    }),
+  )
+  // 使用已移除包名触发 code-scan critical 命中（若本机无指南缓存则跳过扫描，不误报）
+  fs.writeFileSync(path.join(dir, 'index.js'), "import x from '@deepseek-ai/dsh-nonexistent-removed'\nexport function apply() { return x }\n")
+
+  let stdout = ''
+  try {
+    stdout = execFileSync(
+      process.execPath,
+      [path.join(SCRIPTS, 'run.mjs'), dir, '--no-clone', '--no-smoke', '--no-typecheck', '--no-log', '--compact'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+    )
+  } catch (err) {
+    stdout = err.stdout || ''
+  }
+  const parsed = JSON.parse(stdout)
+  assert.ok(Array.isArray(parsed.blockers), '应输出 blockers 数组')
+  // 若指南缓存存在且命中了 critical/high，blockers 里必须有 source === 'scan'
+  if (parsed.verdict === 'FAIL') {
+    assert.ok(parsed.blockers.some((b) => b.source === 'scan'), 'FAIL 时 blockers 必须包含小写 critical/high 的 scan 命中')
+  }
+})

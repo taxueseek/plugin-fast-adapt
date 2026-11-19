@@ -19,7 +19,7 @@ import fs from 'node:fs'
 import { STAGE_STATUS } from './lib/run-states.mjs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { listRuns, resolveRunFile, sanitizeRun, getLogRoot } from './lib/runlog.mjs'
+import { listRuns, resolveRunFile, sanitizeRun, sanitizeText, getLogRoot } from './lib/runlog.mjs'
 import { diagnoseLogs, DEFAULT_LOGS_DIR } from './log-doctor.mjs'
 import { printJson } from './lib/scanner.mjs'
 
@@ -122,6 +122,50 @@ function printDoctorText(report) {
   process.stderr.write('\n边界: 交叉核对只对齐两边的文本记录，不替人拍板；宿主日志无记录不等于装载正常（可能没轮到它启动）。\n')
 }
 
+export function formatPrDraft(runData) {
+  const plugin = `${runData?.plugin?.name || 'unknown'} v${runData?.plugin?.version || '?'}`
+  const host = runData?.host?.version || 'unknown'
+  const win = runData?.window ? `${runData.window.local || '?'} → ${runData.window.target || '?'}` : '?'
+  const docGaps = runData?.scan?.docGapSymbols || []
+  const blockers = (runData?.scan?.findings || []).filter((f) => {
+    const s = String(f.severity || '').toLowerCase()
+    return s === 'critical' || s === 'high'
+  })
+  const peers = runData?.audit?.peerPatch || []
+  const compats = runData?.audit?.compatPatch || []
+
+  const lines = [
+    `## DSH 适配反馈：${plugin} × ${host}`,
+    '',
+    `- **适配窗口**：\`${win}\``,
+    `- **工具版本**：\`plugin-fast-adapt v${runData?.tool?.version || '?'}\``,
+    `- **体检得分**：\`${runData?.audit?.overallScore ?? '?'}/100\``,
+    '',
+  ]
+  if (docGaps.length > 0) {
+    lines.push('### 上游文档缺口（doc-gap，包面差分补报）')
+    for (const sym of docGaps) lines.push(`- \`${sym}\``)
+    lines.push('')
+  }
+  if (blockers.length > 0) {
+    lines.push('### 代码破坏性命中（Critical / High）')
+    for (const b of blockers.slice(0, 10)) {
+      lines.push(`- [${b.severity}] \`${b.symbol || b.file || '?'}\`: ${b.message || b.detail || ''}`)
+    }
+    lines.push('')
+  }
+  if (peers.length > 0 || compats.length > 0) {
+    lines.push('### 建议修补（package.json）')
+    for (const p of peers) lines.push(`- \`peerDependencies.${p.package}\`: \`${p.from}\` → \`${p.to}\``)
+    for (const c of compats) lines.push(`- \`${c.field}\`: \`${c.from ?? 'null'}\` → \`${c.to}\``)
+    lines.push('')
+  }
+  if (docGaps.length === 0 && blockers.length === 0 && peers.length === 0 && compats.length === 0) {
+    lines.push('本轮运行未发现 doc-gap、阻断命中或待修补声明。', '')
+  }
+  return sanitizeText(lines.join('\n'))
+}
+
 // CLI（带主模块守卫：被 self-test import 时不执行）
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) {
 if (command === 'list') {
@@ -170,10 +214,11 @@ if (command === 'sanitize') {
   const id = findId(args)
   const file = id && resolveRunFile(id)
   if (!file) {
-    process.stderr.write('用法: node scripts/run-log.mjs sanitize <id|路径|--latest> [--out 文件]\n')
+    process.stderr.write('用法: node scripts/run-log.mjs sanitize <id|路径|--latest> [--pr-draft] [--out 文件]\n')
     process.exit(1)
   }
-  const sanitized = sanitizeRun(file)
+  const prDraft = args.includes('--pr-draft')
+  const sanitized = prDraft ? formatPrDraft(JSON.parse(fs.readFileSync(file, 'utf8'))) : sanitizeRun(file)
   const outAt = args.indexOf('--out')
   if (outAt !== -1 && args[outAt + 1]) {
     fs.writeFileSync(args[outAt + 1], sanitized)

@@ -15,7 +15,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { printJson, isPluginForm } from './lib/scanner.mjs'
-import { findGlobalDsh, listInstalledPlugins, probeEnvironment } from './env-doctor.mjs'
+import { listInstalledPlugins, probeEnvironment } from './env-doctor.mjs'
 import { auditPlugin, peerPatchFor, compatPatchFor } from './plugin-audit.mjs'
 import { readPackageJson, readPackageJsonStrict, probePackageJson } from './lib/package-json.mjs'
 import { NO_BACKUP, backupBeforeWrite } from './lib/backup.mjs'
@@ -241,18 +241,18 @@ export function discoverAllPlugins(
   { scanInstalled = true, scanWorkspace = true, envData = null, includeOfficial = false } = {},
 ) {
   const list = []
-  const seenPaths = new Set()
   const dshHome = envData?.dshDir || process.env.DSH_PFA_DSH_HOME || null
   const hostLoc = envData?.globalDsh?.location ? path.resolve(envData.globalDsh.location) : null
 
   // 1. 扫描安装环境中的插件
   if (scanInstalled && envData) {
     const installedProfiles = envData.installedPlugins || []
-    // 找出当前活跃的 profile（如运行了 dsh web，则 runningProfile = 'web'）
+    // 找出当前活跃的 profile（如运行了 dsh web，则 runningProfile = 'web'；macOS 桌面端对应 desktop）
     const runningProfiles = new Set()
     for (const proc of envData.runningProcesses || []) {
       const m = proc.command?.match(/\bdsh\s+(web|desktop|serve|tui|headless)\b/)
       if (m) runningProfiles.add(m[1])
+      else if (proc.command?.includes('DeepSeek Harness.app')) runningProfiles.add('desktop')
     }
 
     for (const group of installedProfiles) {
@@ -308,7 +308,6 @@ export function discoverAllPlugins(
   if (scanWorkspace) {
     const wsDirs = discoverWorkspacePlugins(targetDirs.length > 0 ? targetDirs : [process.cwd()])
     for (const dir of wsDirs) {
-      seenPaths.add(dir)
       const pkg = readPackageJson(dir)
 
       let platform = 'core'
@@ -336,7 +335,7 @@ export function discoverAllPlugins(
 // 统一巡检与问题诊断
 export function inspectPluginItem(
   rawItem,
-  { hostInfo = null, targetVersion = null, envData = null, applyCompat = false } = {},
+  { hostInfo = null, targetVersion = null, envData = null, applyCompat = false, auditCache = null } = {},
 ) {
   const item = typeof rawItem === 'string'
     ? {
@@ -363,30 +362,38 @@ export function inspectPluginItem(
     pkg = readPackageJson(dir) ?? pkg
   }
 
-  const build = dir ? checkBuild(dir) : { ok: true, status: 'N/A' }
+  // 同一物理目录在多个 profile（如 desktop / desktop-diag2 / web）下以软链复用，
+  // 同目录同目标版本的只读构建检查与四维审计结果完全一致，缓存复用免去重复全量文件扫描。
+  const cacheKey = dir && !applyCompat && auditCache ? `${dir}\0${effectiveTarget || ''}` : null
+  const cached = cacheKey ? auditCache.get(cacheKey) : null
+
+  const build = cached ? cached.build : dir ? checkBuild(dir) : { ok: true, status: 'N/A' }
   // 报告里那句「该包在当前本地宿主 (X) 中物理不存在」的 X 要与判定用的版本一致。
   // 注意诚实边界：宿主实测走的是 hostInfo.location 指向的那棵树（本机是 npm 全局宿主），
   // APP 自捆宿主的包不在那棵树里，所以 APP 插件的「套件包不存在」只对 npm 树成立——
   // 版本标对是为了不给人「APP 树也查过了」的错觉。
   const platformHostInfo = platformTarget && hostInfo ? { ...hostInfo, version: platformTarget } : hostInfo
-  let audit = null
-  if (dir) {
-    try {
-      audit = auditPlugin(dir, {
-        hostInfo: platformHostInfo,
-        targetVersion: effectiveTarget,
-      })
-    } catch (err) {
-      audit = { overallScore: 0, scores: {}, findings: [{ severity: 'CRITICAL', title: err.message }] }
+  let audit = cached ? cached.audit : null
+  if (!audit) {
+    if (dir) {
+      try {
+        audit = auditPlugin(dir, {
+          hostInfo: platformHostInfo,
+          targetVersion: effectiveTarget,
+        })
+      } catch (err) {
+        audit = { overallScore: 0, scores: {}, findings: [{ severity: 'CRITICAL', title: err.message }] }
+      }
+    } else {
+      audit = {
+        overallScore: 100,
+        scores: { performance: 100, resilience: 100, contextBudget: 100, lifecycle: 100 },
+        findings: [],
+        peerPatch: [],
+        compatPatch: [],
+      }
     }
-  } else {
-    audit = {
-      overallScore: 100,
-      scores: { performance: 100, resilience: 100, contextBudget: 100, lifecycle: 100 },
-      findings: [],
-      peerPatch: [],
-      compatPatch: [],
-    }
+    if (cacheKey) auditCache.set(cacheKey, { build, audit })
   }
 
   let findings = audit.findings || []
@@ -465,8 +472,8 @@ export function inspectPluginItem(
 
 export function runFleetSweep(argv = process.argv.slice(2)) {
   const args = parseArgs(argv)
-  const envData = probeEnvironment(process.cwd())
-  const hostInfo = findGlobalDsh()
+  const envData = probeEnvironment(process.cwd(), { skipTsconfig: true, skipActivation: true })
+  const hostInfo = envData.globalDsh
   const targetVer = args.target || hostInfo?.version || '0.2.1'
 
   // 判定扫描范围：默认工作区 + 安装环境全域梳理；若显式指定了目录且未加 --installed 则只扫描指定目录
@@ -479,12 +486,14 @@ export function runFleetSweep(argv = process.argv.slice(2)) {
     envData,
     includeOfficial: args.includeOfficial,
   })
+  const auditCache = new Map()
   let items = rawList.map((item) =>
     inspectPluginItem(item, {
       hostInfo,
       targetVersion: targetVer,
       envData,
       applyCompat: args.applyCompat,
+      auditCache,
     }),
   )
 
@@ -541,8 +550,8 @@ export function runFleetSweep(argv = process.argv.slice(2)) {
 
   if (args.json) {
     printJson(summary)
-    const exitCode = broken > 0 || (args.strict && warning > 0) ? 2 : 0
-    process.exit(exitCode)
+    process.exitCode = broken > 0 || (args.strict && warning > 0) ? 2 : 0
+    return
   }
 
   // 格式化看板呈现

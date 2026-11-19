@@ -670,7 +670,8 @@ export function checkPrefixSplit(globalDsh, cliVersion) {
 
 // ── 主流程 ──────────────────────────────────────────────────────────────────
 
-export function probeEnvironment(targetDir = process.cwd()) {
+export function probeEnvironment(targetDir = process.cwd(), opts = {}) {
+  const { skipTsconfig = false, skipActivation = false } = opts || {}
   const globalDsh = findGlobalDsh()
   let cliVersion = null
   if (globalDsh?.source === 'node_modules') {
@@ -724,27 +725,36 @@ export function probeEnvironment(targetDir = process.cwd()) {
     .filter(([name]) => isDshPackage(name))
     .map(([name, range]) => ({ package: name, range, floor: peerFloor(range) }))
 
-  const activation = diagnoseActivation(targetDir, installedPlugins)
+  const activation = skipActivation
+    ? {
+        checked: false,
+        verdict: 'N/A',
+        client: { declared: false, findings: [], perProfile: [], verdict: 'OK' },
+        clientRisks: [],
+      }
+    : diagnoseActivation(targetDir, installedPlugins)
 
   // 客户端半（dsh.client）三层判定：宿主半冒烟覆盖不到的另一半。
   // web profile 与桌面 APP 共用同一套 platform:web 前端，这里一视同仁。
-  const clientHalf = diagnoseClientHalf({
-    pluginDir: targetDir,
-    hostRoots: candidateGlobalRoots(),
-    profiles: profiles.map((name) => ({ name, dir: path.join(dshDir(), 'profiles', name) })),
-  })
-  if (clientHalf.checked && activation.checked) {
-    const order = { OK: 0, WARN: 1, ERROR: 2 }
-    if (order[clientHalf.verdict] > order[activation.verdict]) activation.verdict = clientHalf.verdict
-    activation.client = {
-      declared: clientHalf.declared,
-      platform: clientHalf.platform,
-      bundleReady: clientHalf.bundleReady,
-      findings: clientHalf.findings ?? [],
-      perProfile: clientHalf.perProfile ?? [],
-      verdict: clientHalf.verdict,
+  if (!skipActivation) {
+    const clientHalf = diagnoseClientHalf({
+      pluginDir: targetDir,
+      hostRoots: candidateGlobalRoots(),
+      profiles: profiles.map((name) => ({ name, dir: path.join(dshDir(), 'profiles', name) })),
+    })
+    if (clientHalf.checked && activation.checked) {
+      const order = { OK: 0, WARN: 1, ERROR: 2 }
+      if (order[clientHalf.verdict] > order[activation.verdict]) activation.verdict = clientHalf.verdict
+      activation.client = {
+        declared: clientHalf.declared,
+        platform: clientHalf.platform,
+        bundleReady: clientHalf.bundleReady,
+        findings: clientHalf.findings ?? [],
+        perProfile: clientHalf.perProfile ?? [],
+        verdict: clientHalf.verdict,
+      }
+      activation.clientRisks = clientHalf.findings?.filter((f) => f.severity !== 'info') ?? []
     }
-    activation.clientRisks = clientHalf.findings?.filter((f) => f.severity !== 'info') ?? []
   }
 
   return {
@@ -752,7 +762,9 @@ export function probeEnvironment(targetDir = process.cwd()) {
     globalDsh,
     desktopApp,
     ghostHost: checkGhostHost(globalDsh, running),
-    falseGreen: checkTsconfigFalseGreen(targetDir),
+    falseGreen: skipTsconfig
+      ? { checked: false, tsconfigs: [], findings: [], count: 0 }
+      : checkTsconfigFalseGreen(targetDir),
     profiles,
     overlayFindings: overlay,
     sharedFarmFindings: sharedFarm,

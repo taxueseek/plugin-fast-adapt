@@ -211,3 +211,29 @@ test('checkBuild 三态：缺 package.json 是 N/A，带 BOM 的坏文件报 COR
     fs.rmSync(bom, { recursive: true, force: true })
   }
 })
+
+test('集群治理：auditCache 复用同目录同版本结果，且识别 DeepSeek Harness.app 运行态', async () => {
+  const { discoverAllPlugins } = await import('../fleet-sweep.mjs')
+  const dir = tmpPluginDir('fleet-cache')
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'p-cache', version: '1.0.0', main: 'index.js' }))
+  fs.writeFileSync(path.join(dir, 'index.js'), 'export default {}')
+
+  const cache = new Map()
+  const first = inspectPlugin({ name: 'p-cache', dir, platform: 'web', state: 'ENABLED' }, { targetVersion: '0.2.2-rc.5', auditCache: cache })
+  assert.strictEqual(cache.size, 1, '首次巡检应写入 auditCache')
+  const second = inspectPlugin({ name: 'p-cache', dir, platform: 'desktop', state: 'DISABLED' }, { targetVersion: '0.2.2-rc.5', auditCache: cache })
+  assert.strictEqual(second.score, first.score)
+  assert.strictEqual(second.state, 'DISABLED', '复用审计结果时应保留各自条目元信息')
+
+  const found = discoverAllPlugins([], {
+    scanInstalled: true,
+    scanWorkspace: false,
+    envData: {
+      dshDir: tmpPluginDir('mock-dsh-home'),
+      runningProcesses: [{ command: '/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness' }],
+      installedPlugins: [{ profile: 'desktop', patchEntries: ['- my-desktop-plugin'] }],
+    },
+  })
+  assert.strictEqual(found.length, 1)
+  assert.strictEqual(found[0].state, 'RUNNING', 'DeepSeek Harness.app 运行中应把 desktop profile 标为 RUNNING')
+})
