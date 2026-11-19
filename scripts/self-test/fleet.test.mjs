@@ -287,3 +287,82 @@ test('seams：resolveGuideRoot 优先使用 harness-guides-branch 分支快照',
     else process.env.DSH_PFA_CACHE_DIR = prev
   }
 })
+
+test('PR 基线守卫：识别 no-remote / ready / dirty / behind-upstream / npm-ahead 五态（零网络 bare 仓）', async () => {
+  const { checkPrBaseline, PR_BASELINE_STATES } = await import('../lib/pr-gate.mjs')
+  const { gitChildEnv } = await import('../lib/proc-env.mjs')
+  const env = gitChildEnv().env
+  const git = (cwd, args) => execFileSync('git', ['-C', cwd, ...args], { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+
+  // 1. 非 git 目录 → no-remote
+  const nonGit = tmpPluginDir('pr-nongit')
+  assert.strictEqual(checkPrBaseline(nonGit).status, PR_BASELINE_STATES.NO_REMOTE)
+
+  // 2. 本地 bare remote + clone（零网络）
+  const bare = tmpPluginDir('pr-bare')
+  fs.rmSync(bare, { recursive: true, force: true })
+  fs.mkdirSync(bare, { recursive: true })
+  execFileSync('git', ['init', '--bare', bare], { env, stdio: 'ignore' })
+
+  const cloneA = tmpPluginDir('pr-clone-a')
+  fs.rmSync(cloneA, { recursive: true, force: true })
+  execFileSync('git', ['clone', bare, cloneA], { env, stdio: 'ignore' })
+  git(cloneA, ['config', 'user.email', 'test@example.com'])
+  git(cloneA, ['config', 'user.name', 'Test'])
+  fs.writeFileSync(path.join(cloneA, 'package.json'), JSON.stringify({ name: 'pr-demo', version: '0.1.0', main: 'index.js' }))
+  fs.writeFileSync(path.join(cloneA, 'index.js'), 'export default {}')
+  git(cloneA, ['add', '.'])
+  git(cloneA, ['commit', '-m', 'init'])
+  git(cloneA, ['push', '-u', 'origin', 'HEAD'])
+
+  // 2a. ready（npm 同版）
+  const rReady = checkPrBaseline(cloneA, { npmVersionFetcher: () => '0.1.0' })
+  assert.strictEqual(rReady.status, PR_BASELINE_STATES.READY)
+  assert.strictEqual(rReady.ready, true)
+
+  // 2b. npm-ahead（npm 有新版）
+  const rNpmAhead = checkPrBaseline(cloneA, { npmVersionFetcher: () => '0.2.0' })
+  assert.strictEqual(rNpmAhead.status, PR_BASELINE_STATES.NPM_AHEAD)
+  assert.strictEqual(rNpmAhead.ready, false)
+
+  // 2c. dirty（未提交改动）
+  fs.writeFileSync(path.join(cloneA, 'index.js'), 'export default { dirty: true }')
+  const rDirty = checkPrBaseline(cloneA, { npmVersionFetcher: () => '0.1.0' })
+  assert.strictEqual(rDirty.status, PR_BASELINE_STATES.DIRTY)
+  git(cloneA, ['checkout', '--', 'index.js'])
+
+  // 2d. behind-upstream（另一份 clone 推了新提交）
+  const cloneB = tmpPluginDir('pr-clone-b')
+  fs.rmSync(cloneB, { recursive: true, force: true })
+  execFileSync('git', ['clone', bare, cloneB], { env, stdio: 'ignore' })
+  git(cloneB, ['config', 'user.email', 'test@example.com'])
+  git(cloneB, ['config', 'user.name', 'Test'])
+  fs.writeFileSync(path.join(cloneB, 'index.js'), 'export default { v: 2 }')
+  git(cloneB, ['add', '.'])
+  git(cloneB, ['commit', '-m', 'upstream update'])
+  git(cloneB, ['push'])
+
+  const rBehind = checkPrBaseline(cloneA, { npmVersionFetcher: () => '0.1.0' })
+  assert.strictEqual(rBehind.status, PR_BASELINE_STATES.BEHIND_UPSTREAM)
+  assert.strictEqual(rBehind.ready, false)
+  assert.strictEqual(rBehind.action, 'git pull --ff-only')
+})
+
+test('fleet-sweep --pr-ready --offline --json：输出 prReadyPlugins 与 prBlockedPlugins', () => {
+  const ws = tmpPluginDir('fleet-pr-ready')
+  const p = path.join(ws, 'dsh-pr-dirty')
+  fs.mkdirSync(p, { recursive: true })
+  fs.writeFileSync(path.join(p, 'package.json'), JSON.stringify({ name: 'dsh-pr-dirty', version: '1.0.0', main: 'index.js', dsh: {} }))
+  fs.writeFileSync(path.join(p, 'index.js'), 'import x from "@deepseek-ai/dsh-nonexistent-pkg"; export default x')
+
+  let stdout = ''
+  try {
+    stdout = execFileSync(process.execPath, [path.join(SCRIPTS, 'fleet-sweep.mjs'), ws, '--pr-ready', '--offline', '--json'], { encoding: 'utf8' })
+  } catch (err) {
+    stdout = err.stdout || ''
+  }
+  const report = JSON.parse(stdout)
+  assert.strictEqual(report.prReadyCount, 0)
+  assert.ok(Array.isArray(report.prReadyPlugins))
+  assert.ok(Array.isArray(report.prBlockedPlugins))
+})

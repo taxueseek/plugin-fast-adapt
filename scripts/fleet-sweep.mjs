@@ -21,6 +21,7 @@ import { readPackageJson, readPackageJsonStrict, probePackageJson } from './lib/
 import { NO_BACKUP, backupBeforeWrite } from './lib/backup.mjs'
 import { diagnoseLogs } from './log-doctor.mjs'
 import { listAsarDshPackages } from './lib/desktop-app.mjs'
+import { checkPrBaseline } from './lib/pr-gate.mjs'
 
 const TOOL_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -38,6 +39,8 @@ function parseArgs(argv) {
   let adapt = false
   let applyCompat = false
   let includeOfficial = false
+  let prReady = false
+  let offline = false
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
@@ -52,6 +55,8 @@ function parseArgs(argv) {
       adapt = true
       applyCompat = true
     } else if (a === '--include-official') includeOfficial = true
+    else if (a === '--pr-ready') prReady = true
+    else if (a === '--offline') offline = true
     else if (a === '--json') json = true
     else if (a === '--strict') strict = true
     else if (a === '--target') target = argv[++i] ?? null
@@ -69,6 +74,8 @@ function parseArgs(argv) {
           '  --adapt            批量评估目标版本准入账本与 Peer 修补建议\n' +
           '  --apply-compat     对 0 代码破坏性命中的插件自动写入 package.json 兼容账本与 Peer 范围\n' +
           '  --include-official 包含宿主官方内置 @deepseek-ai/dsh-* 组件\n' +
+          '  --pr-ready         核对非健康工作区插件的 Git/npm 基线，筛出可安全提 PR 的目标\n' +
+          '  --offline          配合 --pr-ready 使用，跳过远端 git ls-remote 与 npm 联网核对\n' +
           '  --json             输出完整结构化分类 JSON 报告\n' +
           '  --strict           存在任何 warning 或 broken 时以退出码 2 退出\n' +
           '  --target <版本>    指定目标宿主版本（默认取本机当前宿主）\n',
@@ -93,6 +100,8 @@ function parseArgs(argv) {
     adapt,
     applyCompat,
     includeOfficial,
+    prReady,
+    offline,
   }
 }
 
@@ -584,6 +593,25 @@ export function runFleetSweep(argv = process.argv.slice(2)) {
     plugins: items,
   }
 
+  let prReadyList = []
+  let prBlockedList = []
+  if (args.prReady) {
+    const baselineCache = new Map()
+    for (const item of items) {
+      if (item.healthStatus === 'healthy' || !item.dir) continue
+      if (!baselineCache.has(item.dir)) {
+        baselineCache.set(item.dir, checkPrBaseline(item.dir, { offline: args.offline, checkNpm: !args.offline }))
+      }
+      const baseline = baselineCache.get(item.dir)
+      item.prBaseline = baseline
+      if (baseline.ready) prReadyList.push(item)
+      else if (baseline.status !== 'no-remote') prBlockedList.push(item)
+    }
+    summary.prReadyCount = prReadyList.length
+    summary.prReadyPlugins = prReadyList.map((p) => ({ name: p.name, version: p.version, dir: p.dir, remote: p.prBaseline.remote }))
+    summary.prBlockedPlugins = prBlockedList.map((p) => ({ name: p.name, version: p.version, dir: p.dir, status: p.prBaseline.status, reason: p.prBaseline.reason }))
+  }
+
   if (args.json) {
     printJson(summary)
     process.exitCode = broken > 0 || (args.strict && warning > 0) ? 2 : 0
@@ -639,6 +667,16 @@ export function runFleetSweep(argv = process.argv.slice(2)) {
     process.stdout.write(`\n下一步指路: 存在 ${broken} 个故障插件，请使用单兵深度适配进行修复:\n`)
     for (const r of items.filter((x) => x.healthStatus === 'broken' && x.dir)) {
       process.stdout.write(`  node scripts/run.mjs ${r.dir}\n`)
+    }
+  }
+
+  if (args.prReady) {
+    process.stdout.write(`\n【PR 基线筛选】可安全建 PR 分支: ${prReadyList.length} 个 | 被拦截(落后/脏工作区): ${prBlockedList.length} 个\n`)
+    for (const p of prReadyList) {
+      process.stdout.write(`  [READY]   ${p.name}@${p.version} (${p.prBaseline.remote})\n`)
+    }
+    for (const p of prBlockedList) {
+      process.stdout.write(`  [BLOCKED] ${p.name}@${p.version} (${p.prBaseline.status}: ${p.prBaseline.reason})\n`)
     }
   }
 

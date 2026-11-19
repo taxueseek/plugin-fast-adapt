@@ -20,6 +20,7 @@ import { STAGE_STATUS } from './lib/run-states.mjs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { listRuns, resolveRunFile, sanitizeRun, sanitizeText, getLogRoot } from './lib/runlog.mjs'
+import { checkPrBaseline } from './lib/pr-gate.mjs'
 import { diagnoseLogs, DEFAULT_LOGS_DIR } from './log-doctor.mjs'
 import { printJson } from './lib/scanner.mjs'
 
@@ -122,7 +123,7 @@ function printDoctorText(report) {
   process.stderr.write('\n边界: 交叉核对只对齐两边的文本记录，不替人拍板；宿主日志无记录不等于装载正常（可能没轮到它启动）。\n')
 }
 
-export function formatPrDraft(runData) {
+export function formatPrDraft(runData, { baseline = null } = {}) {
   const plugin = `${runData?.plugin?.name || 'unknown'} v${runData?.plugin?.version || '?'}`
   const host = runData?.host?.version || 'unknown'
   const win = runData?.window ? `${runData.window.local || '?'} → ${runData.window.target || '?'}` : '?'
@@ -134,14 +135,23 @@ export function formatPrDraft(runData) {
   const peers = runData?.audit?.peerPatch || []
   const compats = runData?.audit?.compatPatch || []
 
-  const lines = [
+  const lines = []
+  if (baseline && !baseline.ready) {
+    lines.push(
+      `> [!CAUTION]`,
+      `> **PR 基线未就绪（${baseline.status}）**：${baseline.reason}${baseline.action ? `（建议先执行 \`${baseline.action}\`）` : ''}`,
+      '',
+    )
+  }
+  lines.push(
     `## DSH 适配反馈：${plugin} × ${host}`,
     '',
     `- **适配窗口**：\`${win}\``,
     `- **工具版本**：\`plugin-fast-adapt v${runData?.tool?.version || '?'}\``,
     `- **体检得分**：\`${runData?.audit?.overallScore ?? '?'}/100\``,
+    ...(baseline?.ready ? [`- **PR 基线**：\`${baseline.status}\`（\`${baseline.localHead?.slice(0, 7) || '?'}\`）`] : []),
     '',
-  ]
+  )
   if (docGaps.length > 0) {
     lines.push('### 上游文档缺口（doc-gap，包面差分补报）')
     for (const sym of docGaps) lines.push(`- \`${sym}\``)
@@ -214,17 +224,31 @@ if (command === 'sanitize') {
   const id = findId(args)
   const file = id && resolveRunFile(id)
   if (!file) {
-    process.stderr.write('用法: node scripts/run-log.mjs sanitize <id|路径|--latest> [--pr-draft] [--out 文件]\n')
+    process.stderr.write('用法: node scripts/run-log.mjs sanitize <id|路径|--latest> [--pr-draft] [--offline] [--force] [--out 文件]\n')
     process.exit(1)
   }
   const prDraft = args.includes('--pr-draft')
-  const sanitized = prDraft ? formatPrDraft(JSON.parse(fs.readFileSync(file, 'utf8'))) : sanitizeRun(file)
+  let baseline = null
+  let sanitized = ''
+  if (prDraft) {
+    const runData = JSON.parse(fs.readFileSync(file, 'utf8'))
+    if (runData?.plugin?.dir) {
+      baseline = checkPrBaseline(runData.plugin.dir, { offline: args.includes('--offline') })
+    }
+    sanitized = formatPrDraft(runData, { baseline })
+  } else {
+    sanitized = sanitizeRun(file)
+  }
   const outAt = args.indexOf('--out')
   if (outAt !== -1 && args[outAt + 1]) {
     fs.writeFileSync(args[outAt + 1], sanitized)
     process.stderr.write(`脱敏完成 → ${args[outAt + 1]}\n`)
   } else {
     process.stdout.write(sanitized)
+  }
+  if (prDraft && baseline && !baseline.ready && !args.includes('--force')) {
+    process.stderr.write(`\n[PR 守卫拦截] ${baseline.status}: ${baseline.reason}${baseline.action ? `（先执行: ${baseline.action}；强行生成加 --force）` : ''}\n`)
+    process.exit(2)
   }
   process.exit(0)
 }
