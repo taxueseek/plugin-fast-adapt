@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D22.13-blue.svg)](package.json) [![外部依赖](https://img.shields.io/badge/外部依赖-0-blue.svg)](#依赖与自检) [![自检](https://img.shields.io/badge/自检-301项断言-brightgreen.svg)](#依赖与自检)
 
-> **内置安全防护。** 核心诊断与扫描命令（`env-doctor`、`code-scan`、`plugin-audit`、`log-doctor`、`seams`）严格只读；`env-heal` 默认 dry-run，执行时移入 `~/.dsh/.trash/` 而非直接删除。自动改代码仅限 3 类机械可判定场景，必须显式传入 `--apply` / `--apply-compat` 才写入，且写入前强制备份至 `.pfa-backup/`（已受 `.gitignore` 与发布门禁拦截）。工具绝不修改 DSH 本体或 `~/.dsh` 配置，并默认锚定本地版本、零网络请求。
+> **内置安全防护。** 核心诊断与扫描命令（`env-doctor`、`code-scan`、`plugin-audit`、`log-doctor`、`seams`）严格只读（`run-log` 同为只读，仅 `sanitize --out <file>` 会把脱敏导出写入指定路径）；`env-heal` 默认 dry-run，执行时移入 `~/.dsh/.trash/` 而非直接删除。自动改代码仅限 3 类机械可判定场景，必须显式传入 `--apply` / `--apply-compat` 才写入，且写入前强制备份至 `.pfa-backup/`（已受 `.gitignore` 与发布门禁拦截）。工具绝不修改 DSH 本体或 `~/.dsh` 配置，并默认锚定本地版本、零网络请求。
 
 > **DSH 每次发新版，老插件就可能启动不了。** 这个技能直连 DeepSeek 官方升级指南，扫你的插件代码，报出踩了哪几条破坏性变更、官方给的修法是什么；还能一条命令从零造出可运行的插件。**已适配到 0.2.2-rc.4，并在 0.2.2-rc.5 上实测通过**：官方指南已覆盖 `v0.1.7-rc.2` 至 `0.2.2-rc.4` 共 18 个版本（无指南条目时由官方 Release Note 转虚拟指南补上）；在当前 npm `next` 通道与本机全局宿主 **0.2.2-rc.5**（桌面 APP 捆绑 `0.2.2-rc.2`）上实机验证通过——定版诚实判 `up-to-date-on-channel`，留存 `v0.2.2-rc.5` 签名快照，体检 100/100、内存冒烟 4ms 通过。因 `0.2.2-rc.5` 尚无官方指南文档，账本会明说「只覆盖到 `0.2.2-rc.4`，不能当查干净」，绝不假装全覆盖。支持本地环境权威锚定、Release Note 破坏性变更提取与整机集群多维批量治理。
 
