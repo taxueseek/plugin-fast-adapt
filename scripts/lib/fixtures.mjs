@@ -27,6 +27,7 @@ import { parseGuideMarkdown, extractAnchors } from './guide-parser.mjs'
 import { gitChildEnv, removeDirSafely } from './proc-env.mjs'
 import { probePackageJson, readPackageJson } from './package-json.mjs'
 import { phasesOf, summaryOf } from './run-states.mjs'
+import { resolvePackageSubpathOnHost } from './host-scope.mjs'
 
 const FIXTURES_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'fixtures')
 
@@ -242,6 +243,16 @@ const CHECKERS = {
     return {
       pass: evaluateAssert(check.assert, { projected, phasesOf }),
       detail: projected,
+    }
+  },
+
+  // 子路径导出面判定：input/host 下放模拟宿主包，按 Node.js package.json#exports 规则核查导入子路径
+  subpath(id, check) {
+    const hostLocation = path.join(inputDir(id), 'host', 'node_modules', '@deepseek-ai', 'dsh')
+    const result = resolvePackageSubpathOnHost(check.specifier, { location: hostLocation })
+    return {
+      pass: evaluateAssert(check.assert, { result }),
+      detail: result,
     }
   },
 }

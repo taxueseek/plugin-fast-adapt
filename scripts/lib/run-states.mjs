@@ -125,6 +125,57 @@ export const CHECK_VERDICT = Object.freeze({
 /** PR 基线态真源在 lib/pr-gate.mjs（PR_BASELINE_STATES），这里不复制——
  *  复制就会变成第二份真源，pr-gate 改状态名时这里静默漂移。 */
 
+/** 幽灵宿主判定态（env-doctor ghostHost.verdict）。 */
+export const GHOST_HOST_VERDICT = Object.freeze({
+  OK: 'ok',
+  STALE: 'stale',
+  NO_RUNNING_HOST: 'no-running-host',
+  UNKNOWN: 'unknown',
+})
+
+/** 启用就绪度判定态（env-doctor activation.verdict / clientHalf.verdict）。 */
+export const ACTIVATION_VERDICT = Object.freeze({
+  OK: 'OK',
+  WARN: 'WARN',
+  ERROR: 'ERROR',
+  NOT_APPLICABLE: 'N/A',
+})
+
+/** 宿主日志总判态（log-doctor verdict）。 */
+export const LOG_DOCTOR_VERDICT = Object.freeze({
+  CLEAN: 'clean',
+  WARNINGS: 'warnings',
+  HOST_FAILURE: 'host-failure',
+})
+
+/** 运行日志 × 宿主日志交叉核对判定态（run-log doctor verdict）。 */
+export const CORRELATE_VERDICT = Object.freeze({
+  HOST_LOG_CLEAN: 'host-log-clean',
+  HOST_LOG_CLEAN_SCAN_UNKNOWN: 'host-log-clean-scan-unknown',
+  HOST_LOG_STALE: 'host-log-stale',
+  LOG_HIT_SCAN_CLEAN: 'log-hit-scan-clean',
+  LOG_HIT_SCAN_HIT: 'log-hit-scan-hit',
+})
+
+/** 上游版本通道位置判定态（guide-sync resolveTargetVersion verdict）。 */
+export const VERSION_VERDICT = Object.freeze({
+  UPGRADE_AVAILABLE: 'upgrade-available',
+  UP_TO_DATE_ON_CHANNEL: 'up-to-date-on-channel',
+  AHEAD_OF_UPSTREAM: 'ahead-of-upstream',
+  UNKNOWN_LOCAL: 'unknown-local',
+})
+
+/** 所有合法的 verdict 值并集（供文档/代码一致门禁校验）。 */
+export const ALL_VERDICTS = Object.freeze([
+  ...new Set([
+    ...Object.values(GHOST_HOST_VERDICT),
+    ...Object.values(ACTIVATION_VERDICT),
+    ...Object.values(LOG_DOCTOR_VERDICT),
+    ...Object.values(CORRELATE_VERDICT),
+    ...Object.values(VERSION_VERDICT),
+  ]),
+])
+
 /** 所有合法的状态值并集。自检用它做「字面量 == 词表」的对账。 */
 export const ALL_STATUSES = Object.freeze([
   ...new Set([

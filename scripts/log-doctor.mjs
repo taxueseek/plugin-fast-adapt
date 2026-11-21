@@ -16,6 +16,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { printJson } from './lib/scanner.mjs'
 import { DEFAULT_CRASH_DIR, CRASH_REPORT_NAME, listCrashReports, parseCrashReport } from './lib/desktop-app.mjs'
+import { LOG_DOCTOR_VERDICT } from './lib/run-states.mjs'
 
 export const DEFAULT_LOGS_DIR = path.join(os.homedir(), '.dsh', 'logs')
 
@@ -24,6 +25,8 @@ const SIGNALS = [
   { id: 'port-in-use', re: /EADDRINUSE/, action: '端口被旧宿主进程占用：lsof -nP -iTCP:<port> -sTCP:LISTEN 找到 PID 后结束它，或换端口重启。' },
   { id: 'undeclared-inject', re: /without inject/, action: '插件访问了未声明 inject 的宿主服务：在该插件入口补 inject 声明，或改用 ctx.get("<服务>") 弱依赖降级。' },
   { id: 'inactive-required-service', re: /cannot get required service .* in inactive context/, action: '强注入的服务在宿主里没有提供方：确认宿主版本确实提供该服务，或改弱依赖。' },
+  { id: 'package-subpath-not-exported', re: /ERR_PACKAGE_PATH_NOT_EXPORTED/, action: '插件导入了宿主包未在 exports 公开的子路径（如 ./internal）：先核对上游是否已发新版适配，未发则按官方迁移指南替换公开入口并回传 PR。' },
+  { id: 'module-not-found', re: /ERR_MODULE_NOT_FOUND/, action: '插件或共享农场找不到目标模块：跑 env-doctor 查 sharedFarmFindings 悬空软链与 overlayFindings，或核对包是否已从宿主移除。' },
   { id: 'patch-entry-not-found', re: /patch: entry .* not found/, action: 'cordis.patch.yml 挂了不存在的插件条目：从 patch 层移除或修正包名/挂载 id。' },
   { id: 'entry-not-activate', re: /entry did not activate|entries did not activate/, action: '有可选条目未激活：看 inactiveEntries 里每条的错误原文定位插件；客户端半卡 loading 时再核 dsh.client.inject 名册与产物。' },
   // 必须排在 entry-not-activate 后面：同一段警告先报未激活，再细分出抢锁这一类
@@ -66,7 +69,7 @@ export function listLogFiles(logsDir = DEFAULT_LOGS_DIR, { limit = 10, pattern =
 // 旧实现只匹配首行，给出的动作固定指向客户端名册；2026-10-27 实录的真因是
 // task-board 账本锁被另一宿主进程占住，名册建议完全跑偏。
 export function parseInactiveEntries(text) {
-  const out = []
+  const byKey = new Map()
   const lines = text.split('\n')
   for (let i = 0; i < lines.length; i++) {
     const head = lines[i].match(/:\s*warning:\s*(\d+)\s+entr(?:y|ies) did not activate/)
@@ -78,11 +81,15 @@ export function parseInactiveEntries(text) {
       if (/^\s+at\s/.test(line)) continue
       const m = line.match(/^(\S+) \(([^)]+)\): (.*)$/)
       if (!m) break
-      out.push({ id: m[1], package: m[2], error: m[3].trim() })
+      const entry = { id: m[1], package: m[2], error: m[3].trim() }
+      const key = `${entry.id}\0${entry.package}\0${entry.error}`
+      const prev = byKey.get(key)
+      if (prev) prev.count = (prev.count || 1) + 1
+      else byKey.set(key, entry)
       taken++
     }
   }
-  return out
+  return [...byKey.values()]
 }
 
 // ── startup 日志解析 ────────────────────────────────────────────────────────
@@ -286,10 +293,10 @@ export function diagnoseLogs({ logsDir = DEFAULT_LOGS_DIR, limit = 5, pattern = 
     signalSummary: ranked,
     // 崩溃报告本身就是致命错误的证据：有一份就是 host-failure
     verdict: ranked.length === 0 && crashReports.length === 0
-      ? 'clean'
-      : crashReports.length > 0 || ranked.some((r) => ['port-in-use', 'undeclared-inject', 'inactive-required-service', 'entry-not-activate'].includes(r.id))
-        ? 'host-failure'
-        : 'warnings',
+      ? LOG_DOCTOR_VERDICT.CLEAN
+      : crashReports.length > 0 || ranked.some((r) => ['port-in-use', 'undeclared-inject', 'inactive-required-service', 'entry-not-activate', 'package-subpath-not-exported'].includes(r.id))
+        ? LOG_DOCTOR_VERDICT.HOST_FAILURE
+        : LOG_DOCTOR_VERDICT.WARNINGS,
   }
 }
 
@@ -332,8 +339,11 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.met
   }
   for (const run of report.runs) {
     if (!run.inactiveEntries?.length) continue
-    process.stderr.write(`\n[${run.file}] 未激活条目 ${run.inactiveEntries.length} 个\n`)
-    for (const e of run.inactiveEntries) process.stderr.write(`  ${e.id} ← ${e.package}\n    ${e.error}\n`)
+    process.stderr.write(`\n[${run.file}] 未激活条目 ${run.inactiveEntries.length} 类\n`)
+    for (const e of run.inactiveEntries) {
+      const repeat = e.count > 1 ? ` (×${e.count})` : ''
+      process.stderr.write(`  ${e.id} ← ${e.package}${repeat}\n    ${e.error}\n`)
+    }
   }
   process.stderr.write(`\n桌面 APP 崩溃报告: ${report.crashReports.length} 份（${report.crashDir}）\n`)
   for (const c of report.crashReports) {

@@ -16,7 +16,7 @@
 // failedPlugins/waitingForServices 说装载侧状态，两边以前要各跑一个命令再人肉对。
 
 import fs from 'node:fs'
-import { STAGE_STATUS } from './lib/run-states.mjs'
+import { STAGE_STATUS, CORRELATE_VERDICT } from './lib/run-states.mjs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { listRuns, resolveRunFile, sanitizeRun, sanitizeText, getLogRoot } from './lib/runlog.mjs'
@@ -51,29 +51,32 @@ export function correlateRuns({ limit = 20, logsDir = DEFAULT_LOGS_DIR } = {}) {
 
   const diag = diagnoseLogs({ logsDir, limit: 20, pattern: null })
   const plugins = [...latestByPlugin.entries()].map(([name, run]) => {
+    const runTimeMs = run.time ? Date.parse(run.time) : NaN
     const hits = []
     for (const logRun of diag.runs) {
       for (const fp of logRun.failedPlugins || []) {
         if (fp.plugin === name || fp.package === name) {
-          hits.push({ log: logRun.file, what: 'failed-plugin', detail: fp.error || fp.plugin })
+          hits.push({ log: logRun.file, mtimeMs: logRun.mtimeMs ?? 0, what: 'failed-plugin', detail: fp.error || fp.plugin })
         }
       }
       for (const w of logRun.waitingForServices || []) {
-        if (w.plugin === name) hits.push({ log: logRun.file, what: 'waiting-services', detail: w.missing })
+        if (w.plugin === name) hits.push({ log: logRun.file, mtimeMs: logRun.mtimeMs ?? 0, what: 'waiting-services', detail: w.missing })
       }
       for (const em of logRun.errorMessages || []) {
         const text = em.args.join(' ')
-        if (text.includes(name)) hits.push({ log: logRun.file, what: 'error-message', detail: text.slice(0, 200) })
+        if (text.includes(name)) hits.push({ log: logRun.file, mtimeMs: logRun.mtimeMs ?? 0, what: 'error-message', detail: text.slice(0, 200) })
       }
     }
     const codeSideClean = run.phases?.scan === STAGE_STATUS.OK && !(run.criticalOrHigh > 0)
     // 扫描没跑（skipped/error/旧条目无 phases）时代码侧是未知，不能与宿主日志干净合成「一致」
     const codeSideUnknown = run.phases?.scan !== STAGE_STATUS.OK
+    // 宿主日志早于最近一次干净扫描时，属历史遗留日志，不应误判当前代码或当前装载异常
+    const allHitsOlderThanRun = hits.length > 0 && Number.isFinite(runTimeMs) && hits.every((h) => h.mtimeMs > 0 && h.mtimeMs < runTimeMs)
     const verdict = hits.length === 0
-      ? codeSideUnknown ? 'host-log-clean-scan-unknown' : 'host-log-clean'
+      ? codeSideUnknown ? CORRELATE_VERDICT.HOST_LOG_CLEAN_SCAN_UNKNOWN : CORRELATE_VERDICT.HOST_LOG_CLEAN
       : codeSideClean
-        ? 'log-hit-scan-clean'
-        : 'log-hit-scan-hit'
+        ? allHitsOlderThanRun ? CORRELATE_VERDICT.HOST_LOG_STALE : CORRELATE_VERDICT.LOG_HIT_SCAN_CLEAN
+        : CORRELATE_VERDICT.LOG_HIT_SCAN_HIT
     return {
       plugin: name,
       latestRun: {
@@ -87,13 +90,15 @@ export function correlateRuns({ limit = 20, logsDir = DEFAULT_LOGS_DIR } = {}) {
       hostLogHits: hits,
       verdict,
       advice:
-        verdict === 'host-log-clean'
+        verdict === CORRELATE_VERDICT.HOST_LOG_CLEAN
           ? '宿主日志无该插件的失败记录——状态一致，无事可做'
-          : verdict === 'host-log-clean-scan-unknown'
+          : verdict === CORRELATE_VERDICT.HOST_LOG_CLEAN_SCAN_UNKNOWN
             ? '宿主日志无该插件的失败记录，但最近一次 run 没跑扫描（看 scan.reason）——代码侧未核查，不算一致'
-            : verdict === 'log-hit-scan-clean'
-            ? '宿主日志报了它、但最近一次 run 的扫描干净——嫌疑在装载/挂载/环境侧（env-doctor 看 activation 双半），不在代码踩雷'
-            : '宿主日志与最近一次 run 都有问题——先按 run 的命中清代码，再回来看宿主日志是否消停',
+            : verdict === CORRELATE_VERDICT.HOST_LOG_STALE
+              ? '宿主日志的失败记录早于最近一次干净扫描——属历史遗留日志，重启宿主后如无新错即可忽略'
+              : verdict === CORRELATE_VERDICT.LOG_HIT_SCAN_CLEAN
+                ? '宿主日志报了它、但最近一次 run 的扫描干净——嫌疑在装载/挂载/环境侧（env-doctor 看 activation 双半），不在代码踩雷'
+                : '宿主日志与最近一次 run 都有问题——先按 run 的命中清代码，再回来看宿主日志是否消停',
     }
   })
 
@@ -143,6 +148,11 @@ export function formatPrDraft(runData, { baseline = null } = {}) {
       '',
     )
   }
+  const phases = runData?.phases || {
+    scan: runData?.scan?.skipped ? 'skipped' : runData?.scan ? 'ok' : null,
+    smoke: runData?.smoke?.skipped ? 'skipped' : runData?.smoke?.success === true ? 'ok' : runData?.smoke?.success === false ? 'fail' : null,
+    typecheck: runData?.typecheck?.status ?? (runData?.typecheck?.skipped ? 'skipped' : null),
+  }
   lines.push(
     `## DSH 适配反馈：${plugin} × ${host}`,
     '',
@@ -150,6 +160,15 @@ export function formatPrDraft(runData, { baseline = null } = {}) {
     `- **工具版本**：\`plugin-fast-adapt v${runData?.tool?.version || '?'}\``,
     `- **体检得分**：\`${runData?.audit?.overallScore ?? '?'}/100\``,
     ...(baseline?.ready ? [`- **PR 基线**：\`${baseline.status}\`（\`${baseline.localHead?.slice(0, 7) || '?'}\`）`] : []),
+    '',
+    '### 验证证据（Minimal 兼容闭环）',
+    '',
+    '| 核验项 | 结果 |',
+    '| --- | --- |',
+    `| 代码扫描 (\`code-scan\`) | \`${phases.scan ?? '?'}\`（Critical/High 命中: \`${blockers.length}\`） |`,
+    `| 内存冒烟 (\`quick-smoke\`) | \`${phases.smoke ?? '?'}\` |`,
+    `| 类型检查 (\`typecheck\`) | \`${phases.typecheck ?? '?'}\` |`,
+    `| 架构体检 (\`plugin-audit\`) | \`${runData?.audit?.overallScore ?? '?'}/100\` |`,
     '',
   )
   if (docGaps.length > 0) {
@@ -170,7 +189,24 @@ export function formatPrDraft(runData, { baseline = null } = {}) {
     for (const c of compats) lines.push(`- \`${c.field}\`: \`${c.from ?? 'null'}\` → \`${c.to}\``)
     lines.push('')
   }
-  if (docGaps.length === 0 && blockers.length === 0 && peers.length === 0 && compats.length === 0) {
+  if (baseline?.diffStat) {
+    const safeHost = String(host).replace(/[^a-zA-Z0-9._-]/g, '-')
+    lines.push(
+      '### 本地适配改动摘要（git diff --stat）',
+      '```',
+      baseline.diffStat,
+      '```',
+      '',
+      '### Minimal PR 提交指引（请保持仅含兼容修复，不夹带无关重构）',
+      '```sh',
+      `git checkout -b fix/dsh-${safeHost}-compat`,
+      'git status -s',
+      `git commit -am "fix: adapt to @deepseek-ai/dsh ${host}"`,
+      '```',
+      '',
+    )
+  }
+  if (docGaps.length === 0 && blockers.length === 0 && peers.length === 0 && compats.length === 0 && !baseline?.diffStat) {
     lines.push('本轮运行未发现 doc-gap、阻断命中或待修补声明。', '')
   }
   return sanitizeText(lines.join('\n'))
@@ -233,7 +269,7 @@ if (command === 'sanitize') {
   if (prDraft) {
     const runData = JSON.parse(fs.readFileSync(file, 'utf8'))
     if (runData?.plugin?.dir) {
-      baseline = checkPrBaseline(runData.plugin.dir, { offline: args.includes('--offline') })
+      baseline = checkPrBaseline(runData.plugin.dir, { offline: args.includes('--offline'), allowDirtyOnHead: true })
     }
     sanitized = formatPrDraft(runData, { baseline })
   } else {

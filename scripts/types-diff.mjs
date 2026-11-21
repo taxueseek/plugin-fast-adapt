@@ -25,24 +25,26 @@ import {
   writeSynthesizedGuides,
   saveCachedSignature,
   loadCachedSignature,
+  fetchVersionSignatureFromNpm,
 } from './lib/types-diff.mjs'
 import { findGlobalDsh } from './env-doctor.mjs'
 import { printJson } from './lib/scanner.mjs'
 import { readPackageJson } from './lib/package-json.mjs'
 
 function parseArgs(argv) {
-  const out = { from: null, to: null, current: false, save: false, json: false, synth: false }
+  const out = { from: null, to: null, fetch: null, current: false, save: false, json: false, synth: false }
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i]
     if (a === '--from') out.from = argv[++i]
     else if (a === '--to') out.to = argv[++i]
+    else if (a === '--fetch') out.fetch = argv[++i]
     else if (a === '--current') out.current = true
     else if (a === '--save') out.save = true
     else if (a === '--json') out.json = true
     else if (a === '--synth') out.synth = true
     else if (a === '--help') out.help = true
     else if (a.startsWith('--')) {
-      process.stderr.write(`未知参数「${a}」\n用法: node scripts/types-diff.mjs --from <旧> --to <新> [--json] | --current [--save]\n`)
+      process.stderr.write(`未知参数「${a}」\n用法: node scripts/types-diff.mjs --from <旧> --to <新> [--json] | --current [--save] | --fetch <版本>\n`)
       process.exit(2)
     }
   }
@@ -68,16 +70,33 @@ function resolveSig(spec) {
   throw new Error(`找不到签名来源（既非本地路径，亦无缓存版本签名）: ${spec}`)
 }
 
-export function runTypesDiffCli(argv = process.argv.slice(2)) {
+export async function runTypesDiffCli(argv = process.argv.slice(2)) {
   const args = parseArgs(argv)
 
   if (args.help) {
     process.stderr.write(
       '用法: node scripts/types-diff.mjs --from <旧版/路径> --to <新版/路径> [--json] [--synth]\n' +
-        '      node scripts/types-diff.mjs --current [--save] [--json]\n\n' +
+        '      node scripts/types-diff.mjs --current [--save] [--json]\n' +
+        '      node scripts/types-diff.mjs --fetch <历史版本> [--json]\n\n' +
         '通过对比宿主前后两版 .d.ts 与导出面，全自动计算破坏性变更（REMOVED），生成自动适配虚拟指南。\n'
     )
     return 0
+  }
+
+  // 模式 0：从 npm tarball 免装机拉取并缓存指定历史版本签名（F3）
+  if (args.fetch) {
+    try {
+      const res = await fetchVersionSignatureFromNpm(args.fetch)
+      if (args.json) {
+        printJson(res)
+        return 0
+      }
+      process.stdout.write(`✓ 已获取宿主 v${res.signature.version} 签名（来源: ${res.source}）${res.savedFile ? `\n💾 已缓存至: ${res.savedFile}` : ''}\n`)
+      return 0
+    } catch (err) {
+      process.stderr.write(`拉取历史版本签名失败: ${err.message}\n`)
+      return 2
+    }
   }
 
   // 模式 1：提取当前宿主签名
@@ -161,5 +180,5 @@ export function runTypesDiffCli(argv = process.argv.slice(2)) {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename || '')) {
-  process.exit(runTypesDiffCli())
+  Promise.resolve(runTypesDiffCli()).then((code) => process.exit(code))
 }

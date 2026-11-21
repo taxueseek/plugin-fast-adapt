@@ -19,11 +19,38 @@ import path from 'node:path'
 import { printJson, scanSource, satisfiesRange, packageBase, parseVersion, isDshHostPackage, isPluginForm } from './lib/scanner.mjs'
 import { findSourceFiles, pickScanRoots, scanPluginFromGuideRoot } from './code-scan.mjs'
 import { findGlobalDsh } from './env-doctor.mjs'
-import { packageOnHost } from './lib/host-scope.mjs'
+import { packageOnHost, resolvePackageSubpathOnHost } from './lib/host-scope.mjs'
 import { scanStandards, standardsScore, STANDARDS_RULES } from './lib/standards.mjs'
 import { readPackageJsonStrict } from './lib/package-json.mjs'
+import { HOST_PRESENCE } from './lib/run-states.mjs'
 
 const STANDARDS_RULES_LENGTH = STANDARDS_RULES.length
+// 编译/打包后的巨型产物（如 lib/client.js 4.9MB/12.8 万行 esbuild 捆绑包，或压缩单行包）：
+// 逐字符词法扫描与 2 万+ 字符串约定漂移正则耗时 250~700ms，且打包产物不适用源码级
+// 性能/生命周期规则；仅保留轻量的 import 抽取以维持 resilience 缺包核查不降级。
+const COMPILED_BUNDLE_BYTES = 128 * 1024
+const MINIFIED_AVG_LINE_LEN = 300
+
+function isCompiledBundle(rel, source) {
+  if (source.length <= COMPILED_BUNDLE_BYTES) return false
+  const posixRel = rel.split(path.sep).join('/')
+  if (/(?:^|\/)(?:lib|dist)\//.test(posixRel)) return true
+  let lines = 1
+  for (let i = 0; i < source.length; i++) {
+    if (source.charCodeAt(i) === 10) lines++
+  }
+  return source.length / lines > MINIFIED_AVG_LINE_LEN
+}
+
+function extractImportsFast(source) {
+  const imports = []
+  const re = /(?:from\s+|import\s*\(\s*|require\s*\(\s*)['"]([^'"\n]{1,200})['"]/g
+  let m
+  while ((m = re.exec(source)) !== null) {
+    imports.push({ source: m[1], kind: 'value' })
+  }
+  return imports
+}
 
 // 上游已移除或非核心、不该被普通插件强 import 的包
 const RISKY_IMPORTS = new Set([
@@ -244,8 +271,13 @@ export function auditPlugin(pluginDir, { scanResult = null, targetVersion = null
     const rel = path.relative(root, file)
     const isClientFile = /(?:^|[\\/])(?:client|web|ui)(?:[\\/]|$)|\.client\.[jt]sx?$|\.tsx$/i.test(rel)
     const source = fs.readFileSync(file, 'utf8')
-    sourceFiles.push({ file: rel.split(path.sep).join('/'), source })
-    const scanned = scanSource(source)
+    const bundled = isCompiledBundle(rel, source)
+    if (!bundled) {
+      sourceFiles.push({ file: rel.split(path.sep).join('/'), source })
+    }
+    const scanned = bundled
+      ? { imports: extractImportsFast(source), calls: [], memberAccess: [], strings: [] }
+      : scanSource(source)
 
     const callNames = new Set(scanned.calls.map((c) => c.name))
     const memberNames = new Set(scanned.memberAccess.map((m) => m.member))
@@ -329,11 +361,11 @@ export function auditPlugin(pluginDir, { scanResult = null, targetVersion = null
         const base = packageBase(rawPkg)
         const check = hostInfoResolved.asarPackages
           ? {
-              exists: hostInfoResolved.asarPackages.has(base),
+              status: hostInfoResolved.asarPackages.has(base) ? HOST_PRESENCE.PRESENT : HOST_PRESENCE.ABSENT,
               checkedWhere: `app.asar/dsh/node_modules/${base}`,
             }
           : packageOnHost(base, hostInfoResolved)
-        if (check.status === 'absent') {
+        if (check.status === HOST_PRESENCE.ABSENT) {
           report.findings.push({
             dimension: 'resilience',
             severity: 'HIGH',
@@ -342,6 +374,20 @@ export function auditPlugin(pluginDir, { scanResult = null, targetVersion = null
             detail: `该包在当前本地宿主 (${hostInfoResolved.version || '未知版本'}) 中物理不存在（检查位置: ${check.checkedWhere}）。请核对宿主改动或改用替代包（如 @deepseek-ai/dsh-official-bundles）。`,
           })
           deduct('resilience', 50, 15)
+        } else if (!hostInfoResolved.asarPackages && rawPkg !== base) {
+          // 子路径导出面校验（publint/attw 同构）：静态拦截 ERR_PACKAGE_PATH_NOT_EXPORTED
+          const subCheck = resolvePackageSubpathOnHost(rawPkg, hostInfoResolved)
+          if (subCheck.reason === 'subpath-not-exported') {
+            report.findings.push({
+              dimension: 'resilience',
+              severity: 'HIGH',
+              priority: 'P0',
+              file: rel,
+              title: `导入了宿主包未公开的子路径 (${rawPkg})`,
+              detail: `包 ${base} 的 package.json#exports 未导出 "${subCheck.subpath}"，运行时必抛 ERR_PACKAGE_PATH_NOT_EXPORTED（已公开导出: ${subCheck.publicSubpaths.join(', ') || '仅根入口'}）。请改用公开入口或核对上游适配版本。`,
+            })
+            deduct('resilience', 50, 20)
+          }
         }
       }
     }

@@ -1,0 +1,13 @@
+{
+  "id": "subpath-not-exported",
+  "fingerprint": "host-scope:subpath-not-exported",
+  "source": "本机实测 2026-11-21（dsh-web.log 中 @linxin666/dsh-agents 20 次 ERR_PACKAGE_PATH_NOT_EXPORTED）",
+  "symptom": "插件导入宿主包未公开子路径（如 @deepseek-ai/dsh-subagent/internal），包存在检查放过但启动必抛 ERR_PACKAGE_PATH_NOT_EXPORTED",
+  "rootCause": "host-scope.mjs 只检查包目录是否存在，未按 Node.js package.json#exports 规则校验子路径导出面",
+  "fix": "在 host-scope.mjs 新增 matchExportsSubpath 与 resolvePackageSubpathOnHost，并在 plugin-audit.mjs 中对带子路径的 @deepseek-ai/* 导入做静态拦截",
+  "check": {
+    "kind": "subpath",
+    "specifier": "@deepseek-ai/dsh-subagent/internal",
+    "assert": "result.status === 'absent' && result.reason === 'subpath-not-exported' && result.publicSubpaths.includes('.')"
+  }
+}

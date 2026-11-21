@@ -51,12 +51,14 @@ test('插件形态：inject 只声明宿主确实提供的服务（不含 cordis
   const declared = [...m[1].matchAll(/['"]([^'"]+)['"]/g)].map((x) => x[1])
   assert.ok(declared.length > 0, 'inject 不应为空')
 
-  // 硬判据：cordis 旧式 command 面在 DSH 里不存在，写进 inject 就是静默 pending
+  // 硬判据：cordis 旧式 command 面在 DSH 里不存在，写进 inject 就是静默 pending；
+  // 可选服务 commands 已改在 apply 内按需 ctx.inject(['commands']) 解析，不应放进顶层强依赖。
   assert.ok(
     !declared.includes('command'),
     `inject 不得含 cordis 旧式 'command' 面（DSH 只提供 'commands'）：${declared.join(', ')}`,
   )
-  assert.ok(declared.includes('commands'), '命令面应声明宿主真实提供的 commands 服务')
+  assert.ok(declared.includes('tools'), '顶层 inject 应声明核心 tools 服务')
+  assert.ok(!declared.includes('commands'), '可选服务 commands 不应写进顶层强 inject，否则无 commands 服务时整插件静默 pending')
 
   // 有宿主清单时逐条核对；没有则只跑上面的硬判据
   const ids = hostServiceIds()

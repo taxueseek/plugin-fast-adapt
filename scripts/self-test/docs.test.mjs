@@ -120,15 +120,24 @@ test('状态词表：状态字面量只从 lib/run-states.mjs 取（单一真源
   // 字面量在门禁盲区里——2026-11-19 起扫描面是全 scripts/**/*.mjs（含 self-test 自身）。
   const root = path.resolve(import.meta.dirname, '..', '..')
   const read = (f) => fs.readFileSync(path.join(root, f), 'utf8')
-  const { STAGE_STATUS, TYPECHECK_STATUS, SMOKE_STATUS, REAL_SMOKE_STATUS, BUILD_STATUS, LIFECYCLE_STATE, HEALTH_STATUS, PKG_PROBE_STATUS, HOST_PRESENCE, CHECK_VERDICT, SYMBOL_TEXT_PRESENCE, ALL_STATUSES } = await import('../lib/run-states.mjs')
+  const {
+    STAGE_STATUS, TYPECHECK_STATUS, SMOKE_STATUS, REAL_SMOKE_STATUS,
+    BUILD_STATUS, LIFECYCLE_STATE, HEALTH_STATUS, PKG_PROBE_STATUS,
+    HOST_PRESENCE, CHECK_VERDICT, SYMBOL_TEXT_PRESENCE, ALL_STATUSES,
+    GHOST_HOST_VERDICT, ACTIVATION_VERDICT, LOG_DOCTOR_VERDICT,
+    CORRELATE_VERDICT, VERSION_VERDICT, ALL_VERDICTS,
+  } = await import('../lib/run-states.mjs')
 
   // 1. 词表本身自洽：不同词表之间的值可以同名（ok/skipped/error 是多阶段共用的），
   //    但同一张表内不允许两个键指向同一个值（那才是真的重复定义）。
   const vocab = { STAGE_STATUS, TYPECHECK_STATUS, SMOKE_STATUS, REAL_SMOKE_STATUS, BUILD_STATUS, LIFECYCLE_STATE, HEALTH_STATUS, PKG_PROBE_STATUS, HOST_PRESENCE, CHECK_VERDICT, SYMBOL_TEXT_PRESENCE }
-  for (const [name, table] of Object.entries(vocab)) {
+  const verdictVocab = { GHOST_HOST_VERDICT, ACTIVATION_VERDICT, LOG_DOCTOR_VERDICT, CORRELATE_VERDICT, VERSION_VERDICT }
+  for (const [name, table] of Object.entries({ ...vocab, ...verdictVocab })) {
     const values = Object.values(table)
     assert.strictEqual(new Set(values).size, values.length, `${name} 内有两个键指向同一个状态值`)
   }
+  const verdictUnion = [...new Set(Object.values(verdictVocab).flatMap((t) => Object.values(t)))].sort()
+  assert.deepStrictEqual([...ALL_VERDICTS].sort(), verdictUnion, 'ALL_VERDICTS 与各 verdict 词表并集不一致')
   // 逐张表断言，不用扁平字母序：扁平比在「新增一张表」时只报「并集漂移」，
   // 逐张比能直接指出是哪一面漏了。
   assert.deepStrictEqual([...Object.values(STAGE_STATUS)].sort(), ['error', 'ok', 'skipped'])

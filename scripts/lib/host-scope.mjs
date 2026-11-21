@@ -14,6 +14,116 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { HOST_PRESENCE } from './run-states.mjs'
 
+const pkgExportsCache = new Map()
+
+function readHostPackageExports(pkgDir) {
+  const pkgJsonPath = path.join(pkgDir, 'package.json')
+  if (pkgExportsCache.has(pkgJsonPath)) return pkgExportsCache.get(pkgJsonPath)
+  try {
+    const raw = fs.readFileSync(pkgJsonPath, 'utf8').replace(/^\uFEFF/, '')
+    const pkg = JSON.parse(raw)
+    const entry = { hasExports: Object.prototype.hasOwnProperty.call(pkg, 'exports'), exports: pkg.exports }
+    pkgExportsCache.set(pkgJsonPath, entry)
+    return entry
+  } catch {
+    return { hasExports: false, exports: undefined }
+  }
+}
+
+/**
+ * 按 Node.js package.json#exports 规则静态判定子路径是否对外公开（零依赖，publint/attw 同构）。
+ * @param {unknown} exportsField package.json 的 exports 字段
+ * @param {string} subpath 归一后的子路径（如 '.' 或 './internal'）
+ * @returns {{ exported: boolean, matchedKey: string|null, publicSubpaths: string[] }}
+ */
+export function matchExportsSubpath(exportsField, subpath) {
+  if (exportsField == null) return { exported: true, matchedKey: null, publicSubpaths: [] }
+  if (typeof exportsField === 'string' || Array.isArray(exportsField)) {
+    return { exported: subpath === '.', matchedKey: subpath === '.' ? '.' : null, publicSubpaths: ['.'] }
+  }
+  if (typeof exportsField !== 'object') {
+    return { exported: false, matchedKey: null, publicSubpaths: [] }
+  }
+
+  const keys = Object.keys(exportsField)
+  const isSubpathMap = keys.some((k) => k.startsWith('.'))
+  if (!isSubpathMap) {
+    // 纯条件对象（{ import, default, types }）等价于只导出根入口 '.'
+    return { exported: subpath === '.', matchedKey: subpath === '.' ? '.' : null, publicSubpaths: ['.'] }
+  }
+
+  const publicSubpaths = keys.filter((k) => k.startsWith('.') && exportsField[k] !== null)
+
+  // 1. 精确匹配优先（显式 null 表示禁止导入）
+  if (Object.prototype.hasOwnProperty.call(exportsField, subpath)) {
+    return {
+      exported: exportsField[subpath] !== null,
+      matchedKey: exportsField[subpath] !== null ? subpath : null,
+      publicSubpaths,
+    }
+  }
+
+  // 2. 通配符匹配（./foo/*），按前缀最长优先
+  const patterns = keys
+    .filter((k) => k.startsWith('.') && k.includes('*'))
+    .sort((a, b) => b.indexOf('*') - a.indexOf('*'))
+  for (const pat of patterns) {
+    const star = pat.indexOf('*')
+    const prefix = pat.slice(0, star)
+    const suffix = pat.slice(star + 1)
+    if (subpath.startsWith(prefix) && subpath.endsWith(suffix) && subpath.length >= prefix.length + suffix.length) {
+      const target = exportsField[pat]
+      return { exported: target !== null, matchedKey: target !== null ? pat : null, publicSubpaths }
+    }
+  }
+
+  return { exported: false, matchedKey: null, publicSubpaths }
+}
+
+/**
+ * 核查完整导入说明符（含子路径，如 @deepseek-ai/dsh-subagent/internal）在目标宿主上是否可解析。
+ * 在「包存在」的基础上叠加 package.json#exports 子路径门禁，静态拦截 ERR_PACKAGE_PATH_NOT_EXPORTED。
+ */
+export function resolvePackageSubpathOnHost(specifier, hostInfo) {
+  const raw = String(specifier || '')
+  const parts = raw.split('/')
+  const pkgBase = raw.startsWith('@') ? parts.slice(0, 2).join('/') : parts[0]
+  const rest = raw.startsWith('@') ? parts.slice(2).join('/') : parts.slice(1).join('/')
+  const subpath = rest ? `./${rest}` : '.'
+
+  const baseCheck = packageOnHost(pkgBase, hostInfo)
+  if (baseCheck.status !== HOST_PRESENCE.PRESENT || subpath === '.') {
+    return { ...baseCheck, pkgBase, subpath, reason: null, publicSubpaths: [] }
+  }
+
+  const { hasExports, exports: exportsField } = readHostPackageExports(baseCheck.checkedWhere)
+  if (!hasExports) {
+    return { ...baseCheck, pkgBase, subpath, reason: null, publicSubpaths: [] }
+  }
+
+  const matched = matchExportsSubpath(exportsField, subpath)
+  if (!matched.exported) {
+    return {
+      status: HOST_PRESENCE.ABSENT,
+      checkedWhere: path.join(baseCheck.checkedWhere, 'package.json'),
+      pkgBase,
+      subpath,
+      reason: 'subpath-not-exported',
+      publicSubpaths: matched.publicSubpaths,
+    }
+  }
+
+  return {
+    status: HOST_PRESENCE.PRESENT,
+    checkedWhere: baseCheck.checkedWhere,
+    pkgBase,
+    subpath,
+    matchedKey: matched.matchedKey,
+    reason: null,
+    publicSubpaths: matched.publicSubpaths,
+  }
+}
+
 // 候选作用域按优先级返回（都已是 @deepseek-ai 目录，调用方直接拼包名）：
 //   1. 宿主主包内部套件目录（真实位置，npm 全局安装与 pnpm 都成立）
 //   2. 全局 node_modules 的 @deepseek-ai 目录（兜住把套件包平铺安装的宿主形态）

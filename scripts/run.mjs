@@ -24,9 +24,21 @@ import { fileURLToPath } from 'node:url'
 import { printJson, computeWindow, compareVersions } from './lib/scanner.mjs'
 import { probeEnvironment } from './env-doctor.mjs'
 import { auditPlugin } from './plugin-audit.mjs'
+import { runGuideSync } from './guide-sync.mjs'
+import { scanPluginFromGuideRoot } from './code-scan.mjs'
+import { checkBuild } from './fleet-sweep.mjs'
+import { checkPrBaselineAsync } from './lib/pr-gate.mjs'
 import { writeRunLog, getLatestSuccessfulRun, isPluginUnmodifiedSince } from './lib/runlog.mjs'
 import { readPackageJson, readPackageJsonStrict } from './lib/package-json.mjs'
-import { STAGE_STATUS, TYPECHECK_STATUS, SMOKE_STATUS, REAL_SMOKE_STATUS, projectSmokeReport } from './lib/run-states.mjs'
+import {
+  STAGE_STATUS,
+  TYPECHECK_STATUS,
+  SMOKE_STATUS,
+  REAL_SMOKE_STATUS,
+  GHOST_HOST_VERDICT,
+  VERSION_VERDICT,
+  projectSmokeReport,
+} from './lib/run-states.mjs'
 import {
   extractHostSignature,
   saveCachedSignature,
@@ -441,29 +453,6 @@ if (lastRun && !isCustomRun && hostVersion && pluginPkg?.version) {
   }
 }
 
-function checkBuildArtifact(pluginRoot) {
-  const pkg = readPackageJson(pluginRoot)
-  if (!pkg) return { ok: true }
-  const hasTsConfig = fs.existsSync(path.join(pluginRoot, 'tsconfig.json'))
-  const hasSrc = fs.existsSync(path.join(pluginRoot, 'src'))
-  if (!hasTsConfig && !hasSrc) return { ok: true }
-
-  const entryRel =
-    pkg.exports?.['.']?.default ||
-    (typeof pkg.exports?.['.'] === 'string' ? pkg.exports['.'] : null) ||
-    pkg.main ||
-    'lib/index.js'
-  const entryPath = path.resolve(pluginRoot, entryRel)
-  if (!fs.existsSync(entryPath)) {
-    return {
-      ok: false,
-      entryRel,
-      reason: `未找到构建入口产物: ${entryRel}。请先执行构建 (如 pnpm run build 或 npm run build)。`,
-    }
-  }
-  return { ok: true, entryRel }
-}
-
 // 2. 定版本：以本地宿主环境为唯一基准（方案 B，零网络、防服务压力）
 // 只有显式传入 --target 或 --check-upstream 时，才访问官方 npm registry
 const offline = flag('offline')
@@ -472,14 +461,27 @@ const checkUpstream = flag('check-upstream')
 
 let versionResult = null
 let officialTarget = null
+let pluginUpstream = null
 
 if (explicitTarget) {
   officialTarget = explicitTarget
   stages.version = { status: STAGE_STATUS.OK, resolution: { target: explicitTarget, source: 'explicit-flag' } }
   versionResult = { resolution: stages.version.resolution }
 } else if (checkUpstream && hostVersion && !offline) {
-  versionResult = runStep('guide-sync.mjs', [hostVersion], 'version', stages)
-  officialTarget = versionResult?.resolution?.target ?? hostVersion
+  const vStarted = Date.now()
+  try {
+    const [syncRes, upstreamRes] = await Promise.all([
+      runGuideSync(hostVersion, { clone: false, branchSnapshot: true }),
+      checkPrBaselineAsync(pluginDir, { offline: false, checkNpm: true, allowDirtyOnHead: true }),
+    ])
+    versionResult = syncRes
+    pluginUpstream = upstreamRes
+    stages.version = { status: STAGE_STATUS.OK, durationMs: Date.now() - vStarted, output: syncRes }
+    officialTarget = versionResult?.resolution?.target ?? hostVersion
+  } catch (err) {
+    stages.version = { status: STAGE_STATUS.ERROR, durationMs: Date.now() - vStarted, error: String(err?.message || err).slice(0, 500) }
+    officialTarget = hostVersion
+  }
 } else {
   stages.version = {
     status: STAGE_STATUS.OK,
@@ -491,6 +493,12 @@ if (explicitTarget) {
   }
   versionResult = { resolution: stages.version.resolution }
   officialTarget = hostVersion
+}
+
+if (checkUpstream && !offline && !pluginUpstream) {
+  try {
+    pluginUpstream = await checkPrBaselineAsync(pluginDir, { offline: false, checkNpm: true, allowDirtyOnHead: true })
+  } catch {}
 }
 
 // 扫描窗口：起点取插件在宿主包（@deepseek-ai/dsh 及 dsh-* 子包）上声明的
@@ -507,16 +515,23 @@ const windowInfo = computeWindow({
 const windowLocal = windowInfo.local
 const windowTarget = windowInfo.target
 
-// 3. 指南（分支快照优先；显式把扫描窗口终点传过去，别拿官方最新版本顶替）
-// 旧实现只传本机版本：guide-sync 会优先取官方 target（可能是个还没打 tag 的版本），
-// npm 发版早于上游打 tag 时整段扫描跳过，而本机其实已有可用的指南快照。
+// 3. 指南（进程内调用 runGuideSync，省去一次 Node 子进程冷启动；分支快照优先）
 let guideRoot = null
 if (offline) {
   stages.guides = { status: STAGE_STATUS.SKIPPED, reason: '--offline' }
 } else if (windowLocal && windowTarget) {
-  const syncArgs = [windowLocal, ...(flag('no-clone') ? [] : ['--clone']), '--target', windowTarget]
-  const cloned = runStep('guide-sync.mjs', syncArgs, 'guides', stages)
-  guideRoot = cloned?.guides?.root ?? null
+  const gStarted = Date.now()
+  try {
+    const cloned = await runGuideSync(windowLocal, {
+      clone: !flag('no-clone'),
+      targetVersion: windowTarget,
+      branchSnapshot: true,
+    })
+    stages.guides = { status: STAGE_STATUS.OK, durationMs: Date.now() - gStarted, output: cloned }
+    guideRoot = cloned?.guides?.root ?? null
+  } catch (err) {
+    stages.guides = { status: STAGE_STATUS.ERROR, durationMs: Date.now() - gStarted, error: String(err?.message || err).slice(0, 500) }
+  }
 }
 
 // 3.5 宿主签名差分（包面真源）：官方指南滞后或漏记时（#5816 类），包面 diff 是
@@ -529,8 +544,10 @@ if (offline) {
   stages.typesDiff = { status: STAGE_STATUS.SKIPPED, reason: '--offline' }
 } else if (windowLocal && windowTarget && env.globalDsh?.location) {
   try {
-    const currentSig = extractHostSignature(env.globalDsh.location)
-    saveCachedSignature(currentSig.version, currentSig)
+    // 当前宿主版本的签名快照已缓存时直接复用，省去每次 ~250ms 的全量 .d.ts 扫描与 780KB 磁盘重写
+    const cachedCurrent = hostVersion ? loadCachedSignature(hostVersion) : null
+    const currentSig = cachedCurrent || extractHostSignature(env.globalDsh.location)
+    if (!cachedCurrent) saveCachedSignature(currentSig.version, currentSig)
     if (windowLocal === currentSig.version) {
       stages.typesDiff = {
         status: STAGE_STATUS.SKIPPED,
@@ -569,33 +586,44 @@ if (offline) {
   stages.typesDiff = { status: STAGE_STATUS.SKIPPED, reason: '未检测到宿主安装位置或窗口缺失' }
 }
 
-// 4. 扫描（宿主实测核查内置；第五个参数让包面差分合成的虚拟指南并入扫描）
+// 4. 扫描（进程内调用 scanPluginFromGuideRoot，复用 env.globalDsh 免重复探测与 Node 启动）
 let scanResult = null
 if (guideRoot && windowLocal && windowTarget) {
-  scanResult = runStep('code-scan.mjs', [pluginDir, guideRoot, windowLocal, windowTarget, synthesizedGuidesDir()], 'scan', stages)
-  if (scanResult) {
+  const sStarted = Date.now()
+  try {
+    scanResult = scanPluginFromGuideRoot(pluginDir, guideRoot, {
+      localVersion: windowLocal,
+      targetVersion: windowTarget,
+      synthesizedDir: synthesizedGuidesDir(),
+      hostInfo: env.globalDsh ?? null,
+    })
     const sev = Object.fromEntries((scanResult.bySeverity || []).map(([k, v]) => [k, v]))
     scanResult.criticalOrHigh = (sev.critical || 0) + (sev.high || 0)
+    stages.scan = { status: STAGE_STATUS.OK, durationMs: Date.now() - sStarted, output: scanResult }
+  } catch (err) {
+    stages.scan = { status: STAGE_STATUS.ERROR, durationMs: Date.now() - sStarted, error: String(err?.message || err).slice(0, 500) }
   }
 }
 
-// 5. 体检（进程内，复用扫描结果交叉版本建议）
+// 5. 体检（进程内，复用扫描结果与宿主信息交叉版本建议）
 let auditReport = null
 try {
-  auditReport = auditPlugin(pluginDir, { scanResult, targetVersion: windowTarget })
+  auditReport = auditPlugin(pluginDir, { scanResult, targetVersion: windowTarget, hostInfo: env.globalDsh ?? null })
   stages.audit = { status: STAGE_STATUS.OK, scores: auditReport.scores, overallScore: auditReport.overallScore, findings: auditReport.findings.length }
 } catch (err) {
   stages.audit = { status: STAGE_STATUS.ERROR, error: err.message?.slice(0, 500) }
 }
 
-// 6. 冒烟（前置低级错误拦截：未构建则阻断冒烟）
+// 6. 冒烟（前置低级错误拦截：复用 fleet-sweep 的三态 checkBuild，未构建/损坏则阻断冒烟）
 let smokeResult = null
-const buildCheck = checkBuildArtifact(pluginDir)
+const buildCheck = checkBuild(pluginDir)
 if (!buildCheck.ok) {
   stages.smoke = {
     status: SMOKE_STATUS.ERROR,
     stage: 'entry_resolution',
-    error: buildCheck.reason,
+    error: buildCheck.entryRel
+      ? `未找到构建入口产物: ${buildCheck.entryRel}。请先执行构建 (如 pnpm run build 或 npm run build)。`
+      : buildCheck.reason,
   }
 } else if (!flag('no-smoke')) {
   smokeResult = runStep('quick-smoke.mjs', [pluginDir], 'smoke', stages)
@@ -632,6 +660,7 @@ const report = {
   env: stages.env,
   version: versionResult?.resolution ?? null,
   guides: stages.guides?.output?.guides ?? null,
+  ...(pluginUpstream ? { pluginUpstream } : {}),
   typesDiff: stages.typesDiff ?? null,
   scan: scanResult
     ? {
@@ -676,7 +705,10 @@ const criticalOrHigh = report.scan?.criticalOrHigh ?? 0
 const verdictLines = []
 verdictLines.push(`插件 ${pluginPkg.name}@${pluginPkg.version} × 宿主 ${hostVersion ?? '未知'}（窗口 ${windowLocal} → ${windowTarget}）`)
 if (report.env?.desktopMismatch) verdictLines.push(`⚠ ${report.env.desktopMismatch}`)
-if (report.env?.ghostHost?.verdict === 'stale') verdictLines.push(`⚠ 幽灵宿主：${report.env.ghostHost.reason}——先重启宿主，否则改完也验不到`)
+if (report.env?.ghostHost?.verdict === GHOST_HOST_VERDICT.STALE) verdictLines.push(`⚠ 幽灵宿主：${report.env.ghostHost.reason}——先重启宿主，否则改完也验不到`)
+if (pluginUpstream?.upstreamUpdated) {
+  verdictLines.push(`⚠ 插件上游已有更新（${pluginUpstream.status}）：${pluginUpstream.reason}——建议先执行 ${pluginUpstream.action || '拉取上游'}，避免重复适配`)
+}
 if ((report.env?.falseGreen?.count ?? 0) > 0) {
   const aliases = report.env.falseGreen.findings.map((f) => f.alias).join('、')
   verdictLines.push(`⚠ tsconfig 假绿 ${report.env.falseGreen.count} 处（${aliases}）：paths 指向不存在的目录，typecheck 可能全绿——先修路径再信构建结果`)
@@ -684,7 +716,7 @@ if ((report.env?.falseGreen?.count ?? 0) > 0) {
 if (report.window.fallback) {
   verdictLines.push(`⚠ 扫描窗口倒挂（起点 ${report.window.fallback.rejectedFrom} > 终点 ${windowTarget}），已回退起点为宿主版本 ${report.window.fallback.to ?? '未知'}——peer 声明或 --from 有误，倒挂会让扫描静默跳过`)
 }
-if (report.host.versionVerdict === 'upgrade-available') verdictLines.push(`宿主可升级: 官方 ${officialTarget}（当前 ${hostVersion}）；本轮按在跑宿主适配，要跟新版重跑 --target ${officialTarget}`)
+if (report.host.versionVerdict === VERSION_VERDICT.UPGRADE_AVAILABLE) verdictLines.push(`宿主可升级: 官方 ${officialTarget}（当前 ${hostVersion}）；本轮按在跑宿主适配，要跟新版重跑 --target ${officialTarget}`)
 // 「没扫」与「扫了但指南没覆盖到目标版本」都是未知，不能落成「命中 0 处」的干净结论
 const scanCoverage = report.scan?.coverage
 if (report.guides?.frozen) {
@@ -759,6 +791,12 @@ if (exitFail) {
 if (!exitFail) {
   if (report.typecheck?.status === TYPECHECK_STATUS.SKIPPED && report.typecheck?.hint) next.push(`typecheck 未验成：${report.typecheck.hint}`)
   if (realSmoke?.status === REAL_SMOKE_STATUS.INCONCLUSIVE && realSmoke?.hint) next.push(`真冷启动未验成：${realSmoke.hint}`)
+  if (pluginUpstream?.ready && pluginUpstream?.dirty) {
+    verdictLines.push('提示: 本地适配改动基于最新上游基线且验证通过，可用 node scripts/run-log.mjs sanitize --latest --pr-draft 生成脱敏 PR 草稿')
+  }
+}
+if ((report.audit?.peerPatch?.length ?? 0) > 0 || (report.audit?.compatPatch?.length ?? 0) > 0) {
+  verdictLines.push(`提示: 发现 ${report.audit.peerPatch?.length ?? 0} 条 peer / ${report.audit.compatPatch?.length ?? 0} 条 compat 声明待补，可用 node scripts/codemod.mjs ${pluginDir} 或 fleet-sweep --apply-compat 预览修补`)
 }
 
 if (flag('compact')) {

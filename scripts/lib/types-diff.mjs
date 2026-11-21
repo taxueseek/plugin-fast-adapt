@@ -13,6 +13,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import zlib from 'node:zlib'
 import { prepareLexicalView, compareVersions } from './scanner.mjs'
 import { cacheRoot } from './cache-root.mjs'
 
@@ -369,4 +370,126 @@ export function loadSynthesizedGuides(baseVersion, opts = {}) {
   } catch {
     return []
   }
+}
+
+/**
+ * 零依赖轻量 tar 解包器：仅提取 package.json 与 .d.ts 文本文件，跳过所有二进制/源码块。
+ * 遵循标准 POSIX ustar 512 字节头，用于从 npm tarball 免装机抽取历史版本 API 签名。
+ * @param {Buffer} tarBuf 解压后的 tar Buffer
+ * @returns {Map<string, string>} 相对包根路径 -> UTF-8 内容
+ */
+export function parseTarTextEntries(tarBuf) {
+  const files = new Map()
+  let offset = 0
+  const len = tarBuf.length
+  while (offset + 512 <= len) {
+    const header = tarBuf.subarray(offset, offset + 512)
+    // 全零块表示归档结束
+    let allZero = true
+    for (let i = 0; i < 512; i++) {
+      if (header[i] !== 0) { allZero = false; break }
+    }
+    if (allZero) break
+
+    const rawName = header.subarray(0, 100).toString('utf8').replace(/\0.*$/, '')
+    const rawPrefix = header.subarray(345, 500).toString('utf8').replace(/\0.*$/, '')
+    const fullName = rawPrefix ? `${rawPrefix}/${rawName}` : rawName
+    const sizeStr = header.subarray(124, 136).toString('utf8').replace(/\0.*$/, '').trim()
+    const size = parseInt(sizeStr, 8) || 0
+    const typeFlag = String.fromCharCode(header[156] || 48)
+    const dataStart = offset + 512
+    const nextOffset = dataStart + Math.ceil(size / 512) * 512
+
+    if ((typeFlag === '0' || typeFlag === '\0') && size > 0 && dataStart + size <= len) {
+      // 剥离 npm tarball 首层 package/ 前缀
+      const rel = fullName.replace(/^[^/]+\//, '')
+      if (rel === 'package.json' || rel.endsWith('.d.ts')) {
+        files.set(rel, tarBuf.subarray(dataStart, dataStart + size).toString('utf8'))
+      }
+    }
+    offset = nextOffset
+  }
+  return files
+}
+
+/**
+ * 从 npm .tgz Buffer 直接提取单包签名图谱（0 外部依赖，无需装包）。
+ * @param {Buffer} gzBuf gzip 压缩的 npm tarball
+ * @param {{ fallbackVersion?: string }} [opts]
+ */
+export function extractSignatureFromTarballBuffer(gzBuf, { fallbackVersion = '0.0.0' } = {}) {
+  const tarBuf = zlib.gunzipSync(gzBuf)
+  const files = parseTarTextEntries(tarBuf)
+  const pkgRaw = files.get('package.json')
+  if (!pkgRaw) throw new Error('tarball 缺少 package.json')
+  const pkg = JSON.parse(pkgRaw.replace(/^\uFEFF/, ''))
+
+  const subpaths = []
+  if (pkg.exports && typeof pkg.exports === 'object') {
+    for (const key of Object.keys(pkg.exports)) {
+      if (key.startsWith('.')) subpaths.push(key)
+    }
+  }
+
+  const candNames = [
+    pkg.types,
+    pkg.typings,
+    pkg.exports?.['.']?.types,
+    pkg.exports?.['.']?.import?.types,
+    'index.d.ts',
+    'lib/index.d.ts',
+    'dist/index.d.ts',
+    pkg.main ? pkg.main.replace(/\.(?:js|mjs|cjs)$/, '.d.ts') : null,
+  ]
+    .filter(Boolean)
+    .map((p) => String(p).replace(/^\.\//, ''))
+
+  let dtsFile = null
+  let symbols = []
+  for (const cand of candNames) {
+    if (files.has(cand)) {
+      dtsFile = cand
+      symbols = extractSymbolsFromDts(files.get(cand))
+      break
+    }
+  }
+
+  const pkgName = pkg.name || '@deepseek-ai/dsh'
+  const version = pkg.version || fallbackVersion
+  const pkgSig = { package: pkgName, version, subpaths, dtsFile, symbols }
+  return {
+    version,
+    packages: { [pkgName]: pkgSig },
+    source: 'npm-tarball',
+    timestamp: Date.now(),
+  }
+}
+
+/**
+ * 按需从 npm registry 拉取指定版本的 tarball 并抽签名落盘缓存（补齐离线旧版基线 F3）。
+ * @param {string} version 目标版本号（如 0.2.2-rc.3）
+ * @param {{ pkgName?: string, fetcher?: typeof fetch, save?: boolean }} [opts]
+ */
+export async function fetchVersionSignatureFromNpm(
+  version,
+  { pkgName = '@deepseek-ai/dsh', fetcher = null, save = true } = {},
+) {
+  const bare = String(version).replace(/^v/, '')
+  const cached = loadCachedSignature(bare)
+  if (cached) return { signature: cached, source: 'cache', savedFile: null }
+
+  const doFetch = fetcher || ((url, init) => fetch(url, init))
+  const encoded = encodeURIComponent(pkgName).replace('%40', '@')
+  const metaRes = await doFetch(`https://registry.npmjs.org/${encoded}/${bare}`, { signal: AbortSignal.timeout(15000) })
+  if (!metaRes.ok) throw new Error(`npm registry 返回 ${metaRes.status}（${pkgName}@${bare}）`)
+  const meta = await metaRes.json()
+  const tarballUrl = meta?.dist?.tarball
+  if (!tarballUrl) throw new Error(`${pkgName}@${bare} 缺少 dist.tarball`)
+
+  const tgzRes = await doFetch(tarballUrl, { signal: AbortSignal.timeout(30000) })
+  if (!tgzRes.ok) throw new Error(`下载 tarball 失败 (${tgzRes.status}): ${tarballUrl}`)
+  const gzBuf = Buffer.from(await tgzRes.arrayBuffer())
+  const signature = extractSignatureFromTarballBuffer(gzBuf, { fallbackVersion: bare })
+  const savedFile = save ? saveCachedSignature(bare, signature) : null
+  return { signature, source: 'npm-tarball', savedFile }
 }

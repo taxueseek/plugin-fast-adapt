@@ -21,8 +21,8 @@ import { readPackageJson, readPackageJsonStrict, probePackageJson } from './lib/
 import { NO_BACKUP, backupBeforeWrite } from './lib/backup.mjs'
 import { diagnoseLogs } from './log-doctor.mjs'
 import { listAsarDshPackages } from './lib/desktop-app.mjs'
-import { checkPrBaseline, PR_BASELINE_STATES } from './lib/pr-gate.mjs'
-import { BUILD_STATUS, LIFECYCLE_STATE, HEALTH_STATUS, PKG_PROBE_STATUS } from './lib/run-states.mjs'
+import { checkPrBaselineAsync, PR_BASELINE_STATES } from './lib/pr-gate.mjs'
+import { BUILD_STATUS, LIFECYCLE_STATE, HEALTH_STATUS, PKG_PROBE_STATUS, GHOST_HOST_VERDICT } from './lib/run-states.mjs'
 
 const TOOL_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -384,11 +384,15 @@ export function inspectPluginItem(
     pkg = readPackageJson(dir) ?? pkg
   }
 
-  // 同一物理目录在多个 profile（如 desktop / desktop-diag2 / web）下以软链复用，
-  // 同目录同目标版本同宿主包源的只读构建检查与四维审计结果完全一致，缓存复用免去重复全量文件扫描。
+  // 同一物理目录（软链复用）或同一已安装包版本（多 profile 独立拷贝，如 web/desktop/desktop-diag2）
+  // 在同目标版本与同宿主包源下的只读构建检查与四维审计结果完全一致，缓存复用免去重复全量文件扫描。
   const useAsar = item.platform === 'app' && Boolean(asarPackages)
-  const cacheKey = dir && !applyCompat && auditCache ? `${dir}\0${effectiveTarget || ''}\0${useAsar ? 'asar' : 'npm'}` : null
-  const cached = cacheKey ? auditCache.get(cacheKey) : null
+  const dirCacheKey = dir && !applyCompat && auditCache ? `${dir}\0${effectiveTarget || ''}\0${useAsar ? 'asar' : 'npm'}` : null
+  const pkgCacheKey =
+    dir && item.installed && !applyCompat && auditCache && pkg.name && pkg.version && pkg.version !== '0.0.0'
+      ? `pkg:${pkg.name}@${pkg.version}\0${effectiveTarget || ''}\0${useAsar ? 'asar' : 'npm'}`
+      : null
+  const cached = (dirCacheKey && auditCache.get(dirCacheKey)) || (pkgCacheKey && auditCache.get(pkgCacheKey)) || null
 
   const build = cached ? cached.build : dir ? checkBuild(dir) : { ok: true, status: BUILD_STATUS.NOT_APPLICABLE }
   // 报告里那句「该包在当前本地宿主 (X) 中物理不存在」的 X 要与判定用的版本一致。
@@ -415,7 +419,8 @@ export function inspectPluginItem(
         compatPatch: [],
       }
     }
-    if (cacheKey) auditCache.set(cacheKey, { build, audit })
+    if (dirCacheKey) auditCache.set(dirCacheKey, { build, audit })
+    if (pkgCacheKey) auditCache.set(pkgCacheKey, { build, audit })
   }
 
   let findings = audit.findings || []
@@ -468,7 +473,7 @@ export function inspectPluginItem(
   }
 
   // 运行中幽灵代际关联
-  if (item.state === LIFECYCLE_STATE.RUNNING && envData?.ghostHost?.verdict === 'stale') {
+  if (item.state === LIFECYCLE_STATE.RUNNING && envData?.ghostHost?.verdict === GHOST_HOST_VERDICT.STALE) {
     issues.push(`幽灵代际风险: ${envData.ghostHost.reason}`)
     if (healthStatus === HEALTH_STATUS.HEALTHY) healthStatus = HEALTH_STATUS.WARNING
   }
@@ -498,7 +503,7 @@ export function inspectPluginItem(
   }
 }
 
-export function runFleetSweep(argv = process.argv.slice(2)) {
+export async function runFleetSweep(argv = process.argv.slice(2)) {
   const args = parseArgs(argv)
   const envData = probeEnvironment(process.cwd(), { skipTsconfig: true, skipActivation: true })
   const hostInfo = envData.globalDsh
@@ -518,7 +523,8 @@ export function runFleetSweep(argv = process.argv.slice(2)) {
   const logFailures = new Map()
   if (scanInstalled) {
     try {
-      const diag = diagnoseLogs({ limit: 3, pattern: null })
+      // 优先匹配宿主运行与启动日志，防止每日 maintain-*.log / env-sweeper-*.log 把 dsh-web.log 顶出窗口
+      const diag = diagnoseLogs({ limit: 5, pattern: '^(?:startup-|dsh-web)' })
       for (const r of diag.runs || []) {
         for (const fp of r.failedPlugins || []) {
           const k = fp.package || fp.plugin
@@ -596,20 +602,36 @@ export function runFleetSweep(argv = process.argv.slice(2)) {
 
   let prReadyList = []
   let prBlockedList = []
+  let upstreamUpdatableList = []
   if (args.prReady) {
+    const uniqueDirs = [...new Set(items.filter((i) => i.healthStatus !== HEALTH_STATUS.HEALTHY && i.dir).map((i) => i.dir))]
     const baselineCache = new Map()
+    await Promise.all(
+      uniqueDirs.map(async (dir) => {
+        const res = await checkPrBaselineAsync(dir, { offline: args.offline, checkNpm: !args.offline })
+        baselineCache.set(dir, res)
+      }),
+    )
     for (const item of items) {
       if (item.healthStatus === HEALTH_STATUS.HEALTHY || !item.dir) continue
-      if (!baselineCache.has(item.dir)) {
-        baselineCache.set(item.dir, checkPrBaseline(item.dir, { offline: args.offline, checkNpm: !args.offline }))
-      }
       const baseline = baselineCache.get(item.dir)
       item.prBaseline = baseline
       if (baseline.ready) prReadyList.push(item)
+      else if (baseline.upstreamUpdated) upstreamUpdatableList.push(item)
       else if (baseline.status !== PR_BASELINE_STATES.NO_REMOTE) prBlockedList.push(item)
     }
     summary.prReadyCount = prReadyList.length
+    summary.upstreamUpdatableCount = upstreamUpdatableList.length
     summary.prReadyPlugins = prReadyList.map((p) => ({ name: p.name, version: p.version, dir: p.dir, remote: p.prBaseline.remote }))
+    summary.upstreamUpdatablePlugins = upstreamUpdatableList.map((p) => ({
+      name: p.name,
+      version: p.version,
+      dir: p.dir,
+      status: p.prBaseline.status,
+      npmVersion: p.prBaseline.npmVersion ?? null,
+      reason: p.prBaseline.reason,
+      action: p.prBaseline.action,
+    }))
     summary.prBlockedPlugins = prBlockedList.map((p) => ({ name: p.name, version: p.version, dir: p.dir, status: p.prBaseline.status, reason: p.prBaseline.reason }))
   }
 
@@ -677,7 +699,12 @@ const printSection = (title, list) => {
   }
 
   if (args.prReady) {
-    process.stdout.write(`\n【PR 基线筛选】可安全建 PR 分支: ${prReadyList.length} 个 | 被拦截(落后/脏工作区): ${prBlockedList.length} 个\n`)
+    process.stdout.write(
+      `\n【PR 基线筛选】可安全建 PR 分支: ${prReadyList.length} 个 | 上游已有更新(免重工): ${upstreamUpdatableList.length} 个 | 被拦截(脏/不可达): ${prBlockedList.length} 个\n`,
+    )
+    for (const p of upstreamUpdatableList) {
+      process.stdout.write(`  [UPDATE]  ${p.name}@${p.version} (${p.prBaseline.status}: ${p.prBaseline.reason} → ${p.prBaseline.action || '更新上游'})\n`)
+    }
     for (const p of prReadyList) {
       process.stdout.write(`  [READY]   ${p.name}@${p.version} (${p.prBaseline.remote})\n`)
     }

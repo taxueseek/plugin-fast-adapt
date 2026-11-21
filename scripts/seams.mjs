@@ -40,13 +40,13 @@ function cacheRootDir() {
 
 export function resolveGuideRoot({ explicit = null, hostVersion = null } = {}) {
   if (explicit) return { root: explicit, source: '--guide' }
+  // 优先使用受管默认分支快照（与 guide-sync / run.mjs 同源，覆盖最新发版条目）
+  const branchRoot = path.join(cacheRootDir(), 'harness-guides-branch', 'docs', 'upgrade-guide')
+  if (fs.existsSync(branchRoot)) return { root: branchRoot, source: 'branch-snapshot' }
   if (hostVersion) {
     const cached = syncGuides(hostVersion, { localClone: null })
     if (cached.root) return { root: cached.root, source: 'host-cache' }
   }
-  // 优先使用受管默认分支快照（与 guide-sync / run.mjs 同源，覆盖最新发版条目）
-  const branchRoot = path.join(cacheRootDir(), 'harness-guides-branch', 'docs', 'upgrade-guide')
-  if (fs.existsSync(branchRoot)) return { root: branchRoot, source: 'branch-snapshot' }
   // 兜底：缓存目录里最新的 harness-dsh-v*（无分支快照时）
   let names = []
   try {

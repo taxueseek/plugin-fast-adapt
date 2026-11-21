@@ -18,6 +18,7 @@ import { printJson, compareVersions } from './lib/scanner.mjs'
 import { listGuideVersions } from './lib/guide-parser.mjs'
 import { findGlobalDsh } from './env-doctor.mjs'
 import { cacheRoot as resolveCacheRoot } from './lib/cache-root.mjs'
+import { VERSION_VERDICT } from './lib/run-states.mjs'
 
 // dist-tags 专用端点只回标签对象（实测 67 字节）；全量包文档是 267KB，
 // 而这里只用到 dist-tags，网络、解析、缓存落盘全是白付的。
@@ -67,7 +68,7 @@ export const SPARSE_DOC_PATHS = [
 // 每次调用时求值，自检改 DSH_PFA_CACHE_DIR 后立即生效（模块级常量会让
 // 用例写进真实用户缓存，实录：合成 dist-tags 毒化真实 1h TTL 读数）。
 function metadataCachePath() {
-  return path.join(cacheRoot(), 'npm-metadata.json')
+  return path.join(defaultCacheRoot(), 'npm-metadata.json')
 }
 const METADATA_TTL_MS = 60 * 60 * 1000
 
@@ -120,7 +121,7 @@ export function resolveTargetVersion(localVersion, distTags) {
 
   if (!localVersion) {
     return {
-      verdict: 'unknown-local',
+      verdict: VERSION_VERDICT.UNKNOWN_LOCAL,
       localVersion: null,
       channels: channelEntries,
       target: distTags?.latest || null,
@@ -136,7 +137,7 @@ export function resolveTargetVersion(localVersion, distTags) {
 
   if (onChannel) {
     return {
-      verdict: 'up-to-date-on-channel',
+      verdict: VERSION_VERDICT.UP_TO_DATE_ON_CHANNEL,
       localVersion,
       channels: channelEntries,
       currentChannel: onChannel.channel,
@@ -148,7 +149,7 @@ export function resolveTargetVersion(localVersion, distTags) {
   if (!newer.length) {
     const maxChannel = [...channelEntries].sort((a, b) => compareVersions(b.version, a.version))[0]
     return {
-      verdict: 'ahead-of-upstream',
+      verdict: VERSION_VERDICT.AHEAD_OF_UPSTREAM,
       localVersion,
       channels: channelEntries,
       target: null,
@@ -161,7 +162,7 @@ export function resolveTargetVersion(localVersion, distTags) {
   // 而宿主实际跑的是 next 的 rc.3），适配目标跟着宿主真实版本走才有意义。
   const target = [...channelEntries].sort((a, b) => compareVersions(b.version, a.version))[0]
   return {
-    verdict: 'upgrade-available',
+    verdict: VERSION_VERDICT.UPGRADE_AVAILABLE,
     localVersion,
     channels: channelEntries,
     target: target.version,
@@ -469,7 +470,7 @@ export function recordMissingTag(tag, distTags, error, { cacheRoot = null } = {}
 // 此时新版指南已顺手预取进缓存）；0=无需动作（up-to-date/ahead/unknown-local）。
 // 判定失败（网络挂且无缓存）走 CLI catch 的 2，不与「有动作」混淆。
 export function upstreamCheckExit(resolution) {
-  return resolution?.verdict === 'upgrade-available' ? 1 : 0
+  return resolution?.verdict === VERSION_VERDICT.UPGRADE_AVAILABLE ? 1 : 0
 }
 
 // 靶向获取 Release Note 补全指南真空期
