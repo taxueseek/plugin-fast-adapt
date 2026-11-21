@@ -118,7 +118,10 @@ function parseErrorBlock(text) {
   return out.join('\n').replace(/\s+$/, '')
 }
 
-// Failed plugins 段：`  <name> (required)` + `    Package: ...` + `    Error: ...`
+// Failed plugins 段：`  <name> (required)` + `    Package: ...` + `    Error: ...`。
+// 错误行有两种实测形态：`Error: <原文>` 与 `failed to import: <原文>`（2026-11-21
+// 实测：后者此前被当成插件名吞成独立条目——202 条里一半是垃圾块，真实插件的
+// package 字段挂在垃圾块上丢失）。错误行必须先于「当作插件名」判定。
 function parseFailedPlugins(errorBlock) {
   if (!errorBlock) return []
   const lines = errorBlock.split('\n')
@@ -129,16 +132,18 @@ function parseFailedPlugins(errorBlock) {
   for (let i = start + 1; i < lines.length; i++) {
     const line = lines[i]
     if (/Plugins waiting for services/.test(line)) break
-    const name = line.match(/^\s+(\S.*?)( \(required\))?\s*$/)
-    if (name && !/Package:|Error:|at /.test(line)) {
-      cur = { plugin: name[1].trim(), required: Boolean(name[2]), package: null, error: null }
-      out.push(cur)
+    const err = line.match(/^\s*(?:Error:|failed to import:)\s*(.*)$/)
+    if (err) {
+      if (cur && cur.error === null) cur.error = err[1].trim() || line.trim()
       continue
     }
     const pkg = line.match(/^\s*Package:\s*(\S+)/)
     if (pkg && cur) { cur.package = pkg[1]; continue }
-    const err = line.match(/^\s*Error:\s*(.*)$/)
-    if (err && cur && cur.error === null) cur.error = err[1].trim()
+    const name = line.match(/^\s+(\S.*?)( \(required\))?\s*$/)
+    if (name && !/^\s*at /.test(line)) {
+      cur = { plugin: name[1].trim(), required: Boolean(name[2]), package: null, error: null }
+      out.push(cur)
+    }
   }
   return out
 }

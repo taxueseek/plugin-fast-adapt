@@ -7,8 +7,9 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { test, tmpPluginDir } from './harness.mjs'
 import { auditPlugin } from '../plugin-audit.mjs'
-import { discoverPlugins, inspectPlugin, checkBuild, resolveInstalledPluginDir } from '../fleet-sweep.mjs'
+import { discoverPlugins, inspectPlugin, checkBuild, resolveInstalledPluginDir, discoverHostLogOnlyPlugins } from '../fleet-sweep.mjs'
 import { LIFECYCLE_STATE } from '../lib/run-states.mjs'
+import { parseStartupLog } from '../log-doctor.mjs'
 
 const SCRIPTS = path.resolve(import.meta.dirname, '..')
 
@@ -649,4 +650,83 @@ test('目录解析：完全找不到时返回 null（诚实未解析，不猜路
   const home = tmpPluginDir('pfa-home-empty')
   assert.strictEqual(resolveInstalledPluginDir('session-digger', 'desktop', home), null)
   assert.strictEqual(resolveInstalledPluginDir('', 'desktop', home), null)
+})
+
+// ── 宿主日志 × 发现面（2026-11-21 盲区收口）────────────────────────────────
+
+const FAILED_IMPORT_LOG = `{
+  dshVersion: '0.2.2-rc.5',
+  profile: 'web',
+  error: StartupError: dsh: startup failed: 3 plugins did not activate
+
+  Failed plugins (3):
+    web-ui-agents
+      Package: @linxin666/dsh-agents
+      failed to import: Error [ERR_MODULE_NOT_FOUND]: Cannot find package '@deepseek-ai/dsh-error' imported from /x/dsh-llm/lib/index.js
+          at resolveSync (node:internal/modules/esm/loader:766:56)
+    llm (required)
+      Package: @deepseek-ai/dsh-llm
+      failed to import: Error [ERR_MODULE_NOT_FOUND]: Cannot find package '@deepseek-ai/dsh-error' imported from /x/dsh-llm/lib/index.js
+          at resolveSync (node:internal/modules/esm/loader:766:56)
+    plugin-manager
+      Package: @deepseek-ai/dsh-plugin-manager
+      Error: cannot get property "webServer" without inject
+      at auditStartupEntries (file:///x.js:1:1) {
+    [stack]: [Getter/Setter],
+    [message]: 'dsh: startup failed: 3 plugins did not activate\n'
+  }
+}`
+
+test('宿主日志解析：failed to import 行不当插件名（2026-11-21 实录：202 条一半是垃圾块、真实插件 package 字段丢失）', () => {
+  const parsed = parseStartupLog(FAILED_IMPORT_LOG)
+  const plugins = parsed.failedPlugins.map((f) => f.plugin)
+  assert.strictEqual(parsed.failedPlugins.length, 3, `应恰好 3 条不含垃圾块: ${JSON.stringify(plugins)}`)
+  const agents = parsed.failedPlugins.find((f) => f.plugin === 'web-ui-agents')
+  assert.ok(agents, 'web-ui-agents 条目应在')
+  assert.strictEqual(agents.package, '@linxin666/dsh-agents', 'Package 行应挂在正确条目上')
+  assert.match(agents.error, /ERR_MODULE_NOT_FOUND/, 'failed to import 原文应进 error 字段')
+  assert.ok(parsed.failedPlugins.every((f) => !f.plugin.startsWith('failed to import')), '错误行不能被当成插件名')
+})
+
+test('发现面收口：宿主日志点名、patch 条目没有的插件补成 HOST-LOG 项（2026-11-21 dsh-agents 盲区回归）', () => {
+  const home = tmpPluginDir('pfa-home-hostlog')
+  // 包体装在 profiles/web/node_modules，但没有任何 patch 条目指向它
+  const dir = path.join(home, 'profiles', 'web', 'node_modules', '@linxin666', 'dsh-agents')
+  fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(
+    path.join(dir, 'package.json'),
+    JSON.stringify({ name: '@linxin666/dsh-agents', version: '0.3.0', main: 'index.js' }),
+  )
+  fs.writeFileSync(path.join(dir, 'index.js'), 'export default {}')
+  const runs = [
+    {
+      failedPlugins: [
+        { plugin: 'web-ui-agents', package: '@linxin666/dsh-agents', error: 'failed to import: ERR_MODULE_NOT_FOUND' },
+        // 宿主自带模块：不进发现面（与内置过滤同一口径）
+        { plugin: 'llm', package: '@deepseek-ai/dsh-llm', error: 'failed to import: ERR_MODULE_NOT_FOUND' },
+      ],
+      inactiveEntries: [],
+    },
+  ]
+  const rawList = [{ sourceType: 'INSTALLED', name: 'dsh-existing', dir: null, profile: 'web', platform: 'web', state: LIFECYCLE_STATE.ENABLED, installed: true }]
+  const items = discoverHostLogOnlyPlugins(runs, rawList, { dshHome: home, profiles: ['web'] })
+  assert.strictEqual(items.length, 1, `只补宿主日志点名且不在清单里的: ${JSON.stringify(items.map((i) => i.name))}`)
+  assert.strictEqual(items[0].name, '@linxin666/dsh-agents')
+  assert.strictEqual(items[0].sourceType, 'HOST-LOG')
+  assert.strictEqual(items[0].platform, 'web', '按解析到的 profile 推平台')
+  assert.ok(items[0].dir, '包体在约定路径下应解析到目录，交 inspectPluginItem 真审计')
+
+  // 名字不同名、目录同一（宿主按包名点名、patch 按挂载名）：不重复上榜
+  const aliasDir = path.join(home, 'profiles', 'web', 'node_modules', 'dsh-suggestion-chips')
+  fs.symlinkSync(dir, aliasDir, 'dir')
+  const withAlias = [
+    ...rawList,
+    { sourceType: 'INSTALLED', name: 'dsh-suggestion-chips', dir: aliasDir, profile: 'web', platform: 'web', state: LIFECYCLE_STATE.ENABLED, installed: true },
+  ]
+  const items2 = discoverHostLogOnlyPlugins(
+    [{ failedPlugins: [{ plugin: 'x', package: 'dsh-suggestion-chips', error: 'boom' }], inactiveEntries: [] }],
+    withAlias,
+    { dshHome: home, profiles: ['web'] },
+  )
+  assert.deepStrictEqual(items2, [], `目录同一性去重（日志点名 ↔ patch 挂载名不同名）: ${JSON.stringify(items2.map((i) => i.name))}`)
 })

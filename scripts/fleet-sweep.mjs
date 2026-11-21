@@ -184,6 +184,17 @@ export function discoverWorkspacePlugins(roots = [process.cwd()]) {
 }
 
 // 解析已安装插件在磁盘上的真实目录（支持软链回溯到源码仓）
+// realpath 规范化：软链安装（profiles node_modules 里的 pnpm link）与源码目录
+// 是同一份文件，判定「同一插件」必须比较规范路径。/var 与 /private/var 同目录
+// 异写也由 realpathSync 统一。
+function realpathOf(p) {
+  try {
+    return fs.realpathSync(p)
+  } catch {
+    return p
+  }
+}
+
 // 包名反查表：profile node_modules 下「package.json#name → 目录」，进程内缓存。
 // 为什么存在（2026-11-21 实测）：patch 条目名是插件 id，安装目录名是 npm 包名，
 // 两者没有换算公式（id: turn-guard ↔ 包 dsh-turn-guard、save-token ↔ dsh-plugin-save-token）。
@@ -431,10 +442,64 @@ export function discoverAllPlugins(
   return list
 }
 
+// 宿主日志点名兜底发现：patch 条目不是发现面的唯一真源。实测形态（2026-11-21）：
+// @linxin666/dsh-agents 装在 profiles/{web,desktop}/node_modules、宿主每次启动都
+// 尝试激活并失败（Failed plugins 段点名 Package），但它从未挂进任何 cordis.patch.yml
+// ——只扫 patch 条目就永远看不见它。本函数把日志点名、现有清单没有的包补成
+// HOST-LOG 项；目录能解析就交给 inspectPluginItem 真审计，解析不到也以
+// 「目录未解析 + 宿主日志异常」双信号如实示警，不再静默。
+export function discoverHostLogOnlyPlugins(runs, rawList, { dshHome = null, profiles = [], includeOfficial = false } = {}) {
+  // 同一性去重按「解析目录 realpath」而不是名字：宿主日志按 package.json#name 点名
+  // （dsh-suggest-actions），patch 条目按挂载名（dsh-suggestion-chips），两者指同一
+  // 份目录——按名字去重会把同一插件列成两条。
+  const known = new Set(rawList.map((i) => i.name))
+  const knownDirs = new Set(rawList.map((i) => i.dir && realpathOf(i.dir)).filter(Boolean))
+  const seen = new Set()
+  const out = []
+  for (const run of runs || []) {
+    const failures = [
+      ...(run.failedPlugins || []).map((fp) => ({ name: fp.package || fp.plugin, error: fp.error || '宿主启动失败' })),
+      ...(run.inactiveEntries || []).map((ie) => ({ name: ie.package || ie.id, error: ie.error || '未激活' })),
+    ]
+    for (const f of failures) {
+      if (!f.name || seen.has(f.name) || known.has(f.name)) continue
+      seen.add(f.name)
+      // 宿主自带模块不算用户插件（与 discoverAllPlugins 的内置过滤同一口径）
+      if (!includeOfficial && f.name.startsWith('@deepseek-ai/')) continue
+      let dir = null
+      let foundProfile = null
+      for (const prof of profiles.length ? profiles : [null]) {
+        const d = resolveInstalledPluginDir(f.name, prof, dshHome)
+        if (d) {
+          dir = d
+          foundProfile = prof
+          break
+        }
+      }
+      // 解析出的目录已在清单里（名字不同的同一插件）→ 不重复上榜，
+      // 失败关联由 runFleetSweep 的 logFailuresByDir 按目录键补到既有条目上
+      if (dir && knownDirs.has(realpathOf(dir))) continue
+      let platform = 'core'
+      if (foundProfile === 'web') platform = 'web'
+      else if (foundProfile && foundProfile.includes('desktop')) platform = 'app'
+      out.push({
+        sourceType: 'HOST-LOG',
+        name: f.name,
+        dir,
+        profile: foundProfile || 'host-log',
+        platform,
+        state: LIFECYCLE_STATE.ENABLED,
+        installed: true,
+      })
+    }
+  }
+  return out
+}
+
 // 统一巡检与问题诊断
 export function inspectPluginItem(
   rawItem,
-  { hostInfo = null, targetVersion = null, envData = null, applyCompat = false, auditCache = null, asarPackages = null, logFailures = null } = {},
+  { hostInfo = null, targetVersion = null, envData = null, applyCompat = false, auditCache = null, asarPackages = null, logFailures = null, logFailuresByDir = null } = {},
 ) {
   const item = typeof rawItem === 'string'
     ? {
@@ -602,9 +667,13 @@ export function inspectPluginItem(
     if (healthStatus === HEALTH_STATUS.HEALTHY) healthStatus = HEALTH_STATUS.WARNING
   }
 
-  // 宿主运行时日志故障关联（来自 ~/.dsh/logs 的最近失败记录）
-  if (item.installed && item.state !== LIFECYCLE_STATE.DISABLED && logFailures?.has(pkg.name || item.name)) {
-    issues.push(`宿主日志异常: ${logFailures.get(pkg.name || item.name)}`)
+  // 宿主运行时日志故障关联（来自 ~/.dsh/logs 的最近失败记录）。
+  // 名字键优先（日志点名 = 包名或挂载名），目录键兜底（两个名字不同名的同一插件，
+  // 2026-11-21 实录：日志 dsh-suggest-actions ↔ patch 条目 dsh-suggestion-chips）。
+  const hostLogHit =
+    logFailures?.get(pkg.name || item.name) ?? (dir ? logFailuresByDir?.get(realpathOf(dir)) : null) ?? null
+  if (item.installed && item.state !== LIFECYCLE_STATE.DISABLED && hostLogHit) {
+    issues.push(`宿主日志异常: ${hostLogHit}`)
     if (healthStatus === HEALTH_STATUS.HEALTHY) healthStatus = HEALTH_STATUS.WARNING
   }
 
@@ -647,11 +716,14 @@ export async function runFleetSweep(argv = process.argv.slice(2)) {
   })
   const asarPackages = listAsarDshPackages()
   const logFailures = new Map()
+  let logFailuresByDir = new Map()
+  let diagRuns = []
   if (scanInstalled) {
     try {
       // 优先匹配宿主运行与启动日志，防止每日 maintain-*.log / env-sweeper-*.log 把 dsh-web.log 顶出窗口
       const diag = diagnoseLogs({ limit: 5, pattern: '^(?:startup-|dsh-web)' })
-      for (const r of diag.runs || []) {
+      diagRuns = diag.runs || []
+      for (const r of diagRuns) {
         for (const fp of r.failedPlugins || []) {
           const k = fp.package || fp.plugin
           if (k && !logFailures.has(k)) logFailures.set(k, fp.error || '启动失败')
@@ -661,6 +733,30 @@ export async function runFleetSweep(argv = process.argv.slice(2)) {
         }
       }
     } catch {}
+    // 宿主日志点名兜底发现（2026-11-21 实录：@linxin666/dsh-agents 装在 profiles
+    // node_modules、宿主反复激活失败，却因从未挂进任何 patch 层而进不了发现面——
+    // 发现面不能只认 patch 条目这一张网）。日志点名、现有清单没有的包在这里补进。
+    const dshHome = envData?.dshDir || process.env.DSH_PFA_DSH_HOME || path.join(os.homedir(), '.dsh')
+    const logProfiles = [...new Set((envData.installedPlugins || []).map((g) => g.profile).filter(Boolean))]
+    // 失败关联不能只按名字：宿主日志按 package.json#name 点名（dsh-suggest-actions），
+    // patch 条目按挂载名（dsh-suggestion-chips）。目录键是两个名字共用的同一性。
+    logFailuresByDir = new Map()
+    for (const [k, err] of logFailures) {
+      for (const prof of logProfiles.length ? logProfiles : [null]) {
+        const d = resolveInstalledPluginDir(k, prof, dshHome)
+        if (d) {
+          logFailuresByDir.set(realpathOf(d), err)
+          break
+        }
+      }
+    }
+    rawList.push(
+      ...discoverHostLogOnlyPlugins(diagRuns, rawList, {
+        dshHome,
+        profiles: logProfiles,
+        includeOfficial: args.includeOfficial,
+      }),
+    )
   }
   const auditCache = new Map()
   let items = rawList.map((item) =>
@@ -672,6 +768,7 @@ export async function runFleetSweep(argv = process.argv.slice(2)) {
       auditCache,
       asarPackages,
       logFailures,
+      logFailuresByDir,
     }),
   )
 

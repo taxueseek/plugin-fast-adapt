@@ -47,6 +47,8 @@
 - **包路径尾点半角点漏报**：PKG_PATH_RE 子路径段把句尾句号吃进捕获（@deepseek-ai/dsh/commands.），带点形式比 import 必落空。判据=捕获后剥尾点；回归=guide-anchors.test.mjs 尾点剥离用例。
 - **fleet 假绿与假绿显形**：profile 已声明但目录解析不到时 build 判 NOT_APPLICABLE ok:true、audit 硬造 overallScore:100（38 条假绿实测）。判据=目录未解析降 WARNING（score null 不伪造）+包名反查表（id↔包名不同名：turn-guard↔dsh-turn-guard、save-token↔dsh-plugin-save-token）+~/.dsh/plugins 候选根+宿主树守卫（解析进宿主包内的条目按内置模块跳过）；回归=fleet.test.mjs 卸载残留/反查/plugins 根/宿主树四用例。同日实测顺带发现 main 守卫软链 no-op（17 个脚本 argv[1] 与 import.meta.url 裸比较），已收口 lib/main-entry.mjs+源码门+软链端到端用例。
 
+- **发现面盲区与失败块解析缺陷（2026-11-21 第二批）**：@linxin666/dsh-agents 装在 profiles/{web,desktop}/node_modules、宿主每次启动尝试激活并失败，却因从未挂进任何 patch 层而进不了 fleet 发现面；且 parseFailedPlugins 把 `failed to import:` 错误行当成插件名（单份日志 202 条里一半是垃圾块，真实插件 package 字段挂丢）。判据=解析器错误行先于插件名判定（Error:/failed to import: 两形态）+ fleet 宿主日志点名兜底发现（discoverHostLogOnlyPlugins，按解析目录 realpath 同一性去重）+ 失败关联目录双键（宿主按包名点名 dsh-suggest-actions ↔ patch 挂载名 dsh-suggestion-chips）。回归=fleet.test.mjs 解析与发现两用例。
+
 ## 待入库（有事故记录、还没切片）
 
 - 扫描根重复报：`src` 与同级 `client`/`web`/`ui` 一并扫，`lib`/`dist` 是构建产物只在没有源码根时退回，否则同一处命中按两份文件重复报（2026-10-25 实录）。
