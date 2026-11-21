@@ -1387,6 +1387,12 @@ test('run-log doctor：运行日志 × 宿主启动日志交叉核对', () => {
     writeRunLog({ ...cleanRun, plugin: { name: 't-doc', version: '1.0.0' } }, { toolDir: null })
     writeRunLog({ ...cleanRun, plugin: { name: 't-clean', version: '1.0.0' } }, { toolDir: null })
     writeRunLog({ ...cleanRun, scan: { findingCount: null, skipped: true }, plugin: { name: 't-noscan', version: '1.0.0' } }, { toolDir: null })
+    // 夹具时间封闭：语义上宿主日志要「新于最近一次干净扫描」（失败是当下的，不是历史遗留）。
+    // 此前靠「写日志与取时间落在同一毫秒」的竞态通过——写入在前、ISO 截断在后，一旦跨
+    // 毫秒边界 mtime 就早于 run.time 被判 host-log-stale（2026-11-21 Windows 实录：同一
+    // 提交 main 绿、tag 红）。显式 utimes 到 run.time + 1min 封死竞态。
+    const currentFailureMs = Date.parse(cleanRun.time) + 60_000
+    fs.utimesSync(path.join(logsDir, 'startup-fixture.log'), new Date(currentFailureMs), new Date(currentFailureMs))
 
     const report = correlateRuns({ logsDir })
     const hit = report.plugins.find((p) => p.plugin === 't-doc')

@@ -53,3 +53,5 @@
 
 - 扫描根重复报：`src` 与同级 `client`/`web`/`ui` 一并扫，`lib`/`dist` 是构建产物只在没有源码根时退回，否则同一处命中按两份文件重复报（2026-10-25 实录）。
 - 同名符号撞车：插件里的 `path.resolve()` 与指南里的 `runtime.resolve()`（`references/heuristics.md` 规则 3）。
+- **夹具 mock 宿主树被 .gitignore 吞出库（2026-11-21 第三批，已修）**：全局 `node_modules/` 规则把 subpath-not-exported 夹具的模拟宿主树吞出版本库——磁盘有树本机全绿、CI 检出无树夹具必红，随 0.5.0/0.5.1 发布出去（resolvePackageSubpathOnHost 返回 unknown 被夹具门判红）。判据=`!fixtures/**/node_modules/` 负模式入库+自检「夹具资产全部入库」断言（fixtures/ 下每个磁盘文件必须被 git 追踪）；回归=fixtures.test.mjs 入库断言。
+- **doctor 交叉核对夹具毫秒竞态（2026-11-21 第三批，已修）**：startup 日志夹具写在 cleanRun.time 之前，log-hit-scan-clean 判定实际依赖「写入与取时落在同一整数毫秒」（run.time ISO 截断 floor、mtime 亚毫秒精度，跨毫秒边界则 mtime 早于 runTime 被判 host-log-stale）——同一提交 Windows CI main 绿 tag 红实录 flaky。判据=夹具 utimes 显式封闭到 run.time+1min（语义即「失败是当下的不是历史遗留」）；回归=self-test.mjs doctor 用例。
