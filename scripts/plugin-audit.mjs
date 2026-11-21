@@ -273,12 +273,12 @@ export function auditPlugin(pluginDir, { scanResult = null, targetVersion = null
     const isClientFile = /(?:^|[\\/])(?:client|web|ui)(?:[\\/]|$)|\.client\.[jt]sx?$|\.tsx$/i.test(rel)
     const source = fs.readFileSync(file, 'utf8')
     const bundled = isCompiledBundle(rel, source)
-    if (!bundled) {
-      sourceFiles.push({ file: rel.split(path.sep).join('/'), source })
-    }
     const scanned = bundled
       ? { imports: extractImportsFast(source), calls: [], memberAccess: [], strings: [] }
       : scanSource(source)
+    if (!bundled) {
+      sourceFiles.push({ file: rel.split(path.sep).join('/'), source, lexical: scanned._lexical })
+    }
 
     const callNames = new Set(scanned.calls.map((c) => c.name))
     const memberNames = new Set(scanned.memberAccess.map((m) => m.member))

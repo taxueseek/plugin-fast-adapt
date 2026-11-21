@@ -204,8 +204,8 @@ export function scanStandards(pluginDir, { files = null, entryFile = null } = {}
   }
 
   let exportNames = []
-  for (const { file, source } of scanned) {
-    const { code, mask, lineOf } = prepareLexicalView(source)
+  for (const { file, source, lexical } of scanned) {
+    const { code, mask, lineOf } = lexical || prepareLexicalView(source)
     const lines = codeLines(code)
 
     // 规则 1：模块顶层 await（缩进为 0）

@@ -499,7 +499,7 @@ export function discoverHostLogOnlyPlugins(runs, rawList, { dshHome = null, prof
 // 统一巡检与问题诊断
 export function inspectPluginItem(
   rawItem,
-  { hostInfo = null, targetVersion = null, envData = null, applyCompat = false, auditCache = null, asarPackages = null, logFailures = null, logFailuresByDir = null } = {},
+  { hostInfo = null, targetVersion = null, envData = null, applyCompat = false, auditCache = null, asarPackages = null, hostScopePackages = null, logFailures = null, logFailuresByDir = null } = {},
 ) {
   const item = typeof rawItem === 'string'
     ? {
@@ -517,24 +517,36 @@ export function inspectPluginItem(
   // 宿主自带模块按未带 scope 的条目 id 引用（实测：agent-default-model ↔
   // @deepseek-ai/dsh-agent-default-model，装在宿主包内或 APP asar 里）。目录
   // 归宿主管，不做体检也不算残留；@deepseek-ai/* 前缀是显式形态，一并算。
+  // 后缀兜底仅对含连字符的多段 id 启用，防止通用单词残留（如 tools/base/client）误撞官方包被豁免。
   const bareName = String(item.name || '').replace(/^@deepseek-ai\//, '')
+  const allowSuffix = bareName.includes('-')
   const suffix = `-${bareName}`
+  const matchHostPkg = (pkgSet, exactName) => {
+    if (!pkgSet) return false
+    if (pkgSet.has(exactName)) return true
+    if (!allowSuffix) return false
+    for (const p of pkgSet) {
+      if (p.endsWith(suffix)) return true
+    }
+    return false
+  }
+  const resolvedHostScopePkgs =
+    hostScopePackages ??
+    (() => {
+      if (!item.installed || dir || !hostInfo?.location) return null
+      const scopeDir = path.join(hostInfo.location, 'node_modules', '@deepseek-ai')
+      try {
+        return new Set(fs.readdirSync(scopeDir))
+      } catch {
+        return null
+      }
+    })()
   const isHostBundled =
     item.installed &&
     !dir &&
     (String(item.name || '').startsWith('@deepseek-ai/') ||
-      (asarPackages && [...asarPackages].some((p) => p === `@deepseek-ai/dsh-${bareName}` || p.endsWith(suffix))) ||
-      (() => {
-        const scopeDir = hostInfo?.location ? path.join(hostInfo.location, 'node_modules', '@deepseek-ai') : null
-        if (!scopeDir) return false
-        try {
-          return fs
-            .readdirSync(scopeDir)
-            .some((p) => p === `dsh-${bareName}` || p.endsWith(suffix))
-        } catch {
-          return false
-        }
-      })())
+      matchHostPkg(asarPackages, `@deepseek-ai/dsh-${bareName}`) ||
+      matchHostPkg(resolvedHostScopePkgs, `dsh-${bareName}`))
   // 目录解析不到（2026-11-21 实测复盘）：过去 build 判 NOT_APPLICABLE ok:true、
   // audit 硬造 overallScore:100——残留被报成满分健康。经包名反查与宿主自带
   // 排除后仍解析不到的，如实降 WARNING：没体检就没有分数（score null，不伪造）。
@@ -592,7 +604,9 @@ export function inspectPluginItem(
           {
             severity: 'MEDIUM',
             title:
-              '目录未解析: profile 已声明但按约定路径找不到插件目录（可能为卸载残留、条目 id 与包名不同名或装在约定外位置），无法体检',
+              item.sourceType === 'HOST-LOG'
+                ? '目录未解析: 宿主日志点名但按约定路径找不到插件目录，无法体检'
+                : '目录未解析: profile 已声明但按约定路径找不到插件目录（可能为卸载残留、条目 id 与包名不同名或装在约定外位置），无法体检',
           },
         ],
         peerPatch: [],
@@ -759,6 +773,13 @@ export async function runFleetSweep(argv = process.argv.slice(2)) {
     )
   }
   const auditCache = new Map()
+  // 循环外预读一次宿主 @deepseek-ai/ 包目录，免去每个 !dir 条目重复 readdirSync
+  let hostScopePackages = null
+  if (hostInfo?.location) {
+    try {
+      hostScopePackages = new Set(fs.readdirSync(path.join(hostInfo.location, 'node_modules', '@deepseek-ai')))
+    } catch {}
+  }
   let items = rawList.map((item) =>
     inspectPluginItem(item, {
       hostInfo,
@@ -767,6 +788,7 @@ export async function runFleetSweep(argv = process.argv.slice(2)) {
       applyCompat: args.applyCompat,
       auditCache,
       asarPackages,
+      hostScopePackages,
       logFailures,
       logFailuresByDir,
     }),
@@ -887,8 +909,9 @@ const printSection = (title, list) => {
     for (const r of list) {
       const issueText = r.issues.length > 0 ? r.issues[0].slice(0, 26) : '正常健康'
       const statusTag = healthLabel(r.healthStatus)
+      const scoreLabel = (r.score === null ? 'n/a' : `${r.score}/100`).padEnd(7)
       process.stdout.write(
-        `│ ${r.name.slice(0, 26).padEnd(28)} ${r.platform.padEnd(8)} ${(r.state + '/' + statusTag).padEnd(10)} ${r.buildStatus.padEnd(8)} ${(r.score === null ? 'n/a' : String(r.score)) + '/100'} ${issueText}\n`,
+        `│ ${r.name.slice(0, 26).padEnd(28)} ${r.platform.padEnd(8)} ${(r.state + '/' + statusTag).padEnd(10)} ${r.buildStatus.padEnd(8)} ${scoreLabel} ${issueText}\n`,
       )
     }
     process.stdout.write(`└${'─'.repeat(78)}\n`)

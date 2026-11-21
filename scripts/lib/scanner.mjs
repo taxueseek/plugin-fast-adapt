@@ -173,39 +173,49 @@ export function maskSource(source) {
 // 而保留长度，正则匹配到的下标才能和原文对上行号。
 export function splitSource(source) {
   const mask = maskSource(source)
-  const chars = [...source]
+  const n = source.length
+  const codeChunks = []
   const strings = []
-  let buffer = ''
+  let hasComment = false
+  let codeRunStart = 0
   let stringStart = -1
 
-  for (let i = 0; i < source.length; i++) {
-    if (mask[i] === COMMENT) {
-      chars[i] = ' '
+  for (let i = 0; i < n; i++) {
+    const m = mask[i]
+    if (m === COMMENT) {
       if (stringStart !== -1) {
-        strings.push({ value: unquote(buffer), index: stringStart })
-        buffer = ''
+        strings.push({ value: unquote(source.slice(stringStart, i)), index: stringStart })
         stringStart = -1
       }
+      if (!hasComment) hasComment = true
+      if (i > codeRunStart) codeChunks.push(source.slice(codeRunStart, i))
+      let j = i + 1
+      while (j < n && mask[j] === COMMENT) j++
+      codeChunks.push(' '.repeat(j - i))
+      i = j - 1
+      codeRunStart = j
       continue
     }
-    if (mask[i] === STRING) {
-      if (stringStart === -1) {
-        stringStart = i
-        buffer = ''
-      }
-      buffer += source[i]
+    if (m === STRING) {
+      if (stringStart === -1) stringStart = i
       continue
     }
-    // CODE：一段字符串到此结束
     if (stringStart !== -1) {
-      strings.push({ value: unquote(buffer), index: stringStart })
-      buffer = ''
+      strings.push({ value: unquote(source.slice(stringStart, i)), index: stringStart })
       stringStart = -1
     }
   }
-  if (stringStart !== -1) strings.push({ value: unquote(buffer), index: stringStart })
+  if (stringStart !== -1) {
+    strings.push({ value: unquote(source.slice(stringStart, n)), index: stringStart })
+  }
 
-  return { code: chars.join(''), strings, mask }
+  let code = source
+  if (hasComment) {
+    if (codeRunStart < n) codeChunks.push(source.slice(codeRunStart, n))
+    code = codeChunks.join('')
+  }
+
+  return { code, strings, mask }
 }
 
 // 去掉字符串字面量的首尾引号，便于匹配错误码一类内容
@@ -322,12 +332,18 @@ export function scanSource(source, { stripTypes = false } = {}) {
     calls.push({ name, line: lineOf(match.index) })
   }
 
-  return {
+  const result = {
     imports,
     memberAccess,
     calls,
     strings: strings.map((s) => ({ value: s.value, line: lineOf(s.index) })),
   }
+  // 不可枚举附加词法视图，供 plugin-audit → scanStandards 复用，避免同文件二次词法扫描且不影响 JSON/deepStrictEqual
+  Object.defineProperty(result, '_lexical', {
+    value: { code, mask, lineOf },
+    enumerable: false,
+  })
+  return result
 }
 
 function safeStrip(source) {
