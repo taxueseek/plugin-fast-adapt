@@ -1,4 +1,8 @@
 node_modules/
+# 夹具 mock 宿主树是判据资产，必须入库（2026-11-21 实录：全局 node_modules/ 把
+# fixtures/subpath-not-exported 的模拟宿主树吞出库外，本地有树全绿、CI 检出必红）
+!fixtures/**/node_modules/
+!fixtures/**/node_modules/**
 .DS_Store
 tmp/
 .pfa-backup/

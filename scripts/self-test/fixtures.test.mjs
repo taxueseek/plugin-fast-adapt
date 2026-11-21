@@ -6,6 +6,7 @@
 // 与 docs.test.mjs 的分工：那一节管文档与代码一致，这一节管判据与事故一致。
 
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { test, tests } from './harness.mjs'
@@ -67,4 +68,36 @@ test('夹具库：判据收窄的两侧都钉住（该报的报、不该报的�
   assert.ok(!failedIds.has('waterfall-real-break'), '真断链夹具应通过（判据要能报出来）')
   assert.ok(!failedIds.has('waterfall-far-next'), '远 next 夹具应通过（判据不能误报）')
   assert.ok(!failedIds.has('waterfall-object-literal-body'), '对象字面量体夹具应通过（判据不能误报）')
+})
+
+test('夹具库：夹具资产全部入库（防 .gitignore 吞夹具 mock 树）', () => {
+  // 2026-11-21 实录：全局 `node_modules/` 忽略规则把 subpath-not-exported 夹具的
+  // 模拟宿主树吞出库外——磁盘上有树所以本机自检全绿，CI 检出后没有树，
+  // resolvePackageSubpathOnHost 返回 unknown，夹具门必红。判据：fixtures/ 下每个
+  // 磁盘文件都必须被 git 追踪，忽略规则吞不掉夹具资产。
+  if (!FIXTURES_PRESENT) return { skipped: '安装副本不含 fixtures/（files 白名单）' }
+  let tracked
+  try {
+    tracked = new Set(
+      execFileSync('git', ['ls-files', 'fixtures/'], { cwd: ROOT, encoding: 'utf8' })
+        .split('\n')
+        .filter(Boolean),
+    )
+  } catch {
+    return { skipped: '不在 git 仓库内（归档副本形态），入库核对不适用' }
+  }
+  const onDisk = []
+  ;(function walk(dir) {
+    for (const name of fs.readdirSync(dir)) {
+      const p = path.join(dir, name)
+      if (fs.statSync(p).isDirectory()) walk(p)
+      else onDisk.push(path.relative(ROOT, p).split(path.sep).join('/'))
+    }
+  })(path.join(ROOT, 'fixtures'))
+  const missing = onDisk.filter((f) => !tracked.has(f))
+  assert.deepStrictEqual(
+    missing,
+    [],
+    `这些夹具文件在磁盘上但没进版本库（.gitignore 吞掉则 CI 检出后夹具必红）：${missing.join('、')}`,
+  )
 })
