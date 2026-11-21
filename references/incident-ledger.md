@@ -40,6 +40,13 @@
 
 结论：三条规则的判据**不需要再收窄**，F4 结案。场测工具是临时脚本，未入库（判据本身已由夹具与自检覆盖）。
 
+## 2026-11-21 误报收口与假绿显形（四笔，已修，回归用例在 scripts/self-test/）
+
+- **member 锚点 Migration 源误报**：dsh-suggestion-chips 9 high / dsh-files 5 high 逐条对照指南原文全为误报——Migration 迁移目标代码（ctx.slots.inject/register、ctx.sessions.create、ctx.emit、ctx.tools.register）被抽成待报锚点。判据=成员锚点只从 Change 段非延续子句抽+替换对旧符号补锚；回归=guide-anchors.test.mjs 六用例 + self-test.mjs 抽取用例（removeBundle 断言随语义翻转）。
+- **延续句锚点误报**：「keeps its form / unchanged」句里的 getSnapshot、subscribe、ATTACHMENT_* 被抽成待报锚点，插件本地同名函数（normalize.js:728 subscribe）撞车。判据=CONTINUITY_RE 延续句剔除+转折子句切分保破坏面；回归=guide-anchors.test.mjs 延续句/转折子句/常量延续三用例。
+- **包路径尾点半角点漏报**：PKG_PATH_RE 子路径段把句尾句号吃进捕获（@deepseek-ai/dsh/commands.），带点形式比 import 必落空。判据=捕获后剥尾点；回归=guide-anchors.test.mjs 尾点剥离用例。
+- **fleet 假绿与假绿显形**：profile 已声明但目录解析不到时 build 判 NOT_APPLICABLE ok:true、audit 硬造 overallScore:100（38 条假绿实测）。判据=目录未解析降 WARNING（score null 不伪造）+包名反查表（id↔包名不同名：turn-guard↔dsh-turn-guard、save-token↔dsh-plugin-save-token）+~/.dsh/plugins 候选根+宿主树守卫（解析进宿主包内的条目按内置模块跳过）；回归=fleet.test.mjs 卸载残留/反查/plugins 根/宿主树四用例。同日实测顺带发现 main 守卫软链 no-op（17 个脚本 argv[1] 与 import.meta.url 裸比较），已收口 lib/main-entry.mjs+源码门+软链端到端用例。
+
 ## 待入库（有事故记录、还没切片）
 
 - 扫描根重复报：`src` 与同级 `client`/`web`/`ui` 一并扫，`lib`/`dist` 是构建产物只在没有源码根时退回，否则同一处命中按两份文件重复报（2026-10-25 实录）。

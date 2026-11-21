@@ -57,6 +57,7 @@ import './self-test/scaffold.test.mjs'
 import './self-test/desktop.test.mjs'
 import './self-test/ghost.test.mjs'
 import './self-test/plan-a.test.mjs'
+import './self-test/guide-anchors.test.mjs'
 import './self-test/plan-b.test.mjs'
 import './self-test/plan-c.test.mjs'
 import './self-test/fleet.test.mjs'
@@ -225,7 +226,10 @@ test('抽出的锚点含包名、成员、常量', () => {
   const a = extractAnchors(g.change, g.migration)
   assert.ok(a.packages.some((p) => p.includes('dsh-api-remotes')) || a.packages.length >= 0, '锚点应为数组')
   assert.ok(a.members.includes('installBundle'), `应抽出 installBundle: ${JSON.stringify(a.members)}`)
-  assert.ok(a.members.includes('removeBundle'), '应抽出 removeBundle')
+  // 2026-11-21 实测回归：removeBundle 只出现在 Migration（迁移目标，新写法），
+  // 旧「blob 全量抽取」把它当待报锚点——已适配的插件调用它只会收到噪音。
+  // 成员锚点只从 Change 段的非延续子句抽，破坏面只在 Migration 出现时由替换对旧符号补锚。
+  assert.ok(!a.members.includes('removeBundle'), `Migration 里的迁移目标不该进待报锚点: ${JSON.stringify(a.members)}`)
   assert.ok(a.codes.includes('already-installed'), `应抽出 already-installed: ${JSON.stringify(a.codes)}`)
 })
 

@@ -67,6 +67,36 @@ const MIN_BARE_LEN = 8
 const STRONG_OBJECT_PREFIXES = new Set(['ctx', 'Service', 'Config', 'Context', 'Cordis'])
 const PKG_PATH_RE = /@deepseek-ai\/[a-z0-9][\w-]*(?:\/[a-z0-9][\w.-]*)*/g
 
+// 尾点半角点剥离（2026-11-21 实测漏报复盘）：子路径段 [\w.-]* 会把紧跟的句号
+// 一起吃进捕获（`@deepseek-ai/dsh/commands.` 句尾），拿带点形式去比插件源码的
+// import 必然落空——官方指南句尾紧跟句号是常态。捕获后统一剥尾点再入锚点。
+const stripTrailingDots = (pkg) => pkg.replace(/\.+$/, '')
+
+// 延续句判据（2026-11-21 实测误报复盘）：Change 段常顺带写「X keeps its form /
+// unchanged」划定不动的边界。全量抽取把这些没坏的符号也变成待报锚点，插件里的
+// 本地同名函数（store 的 subscribe）与无关子系统的同名方法（composer shell 的
+// getSnapshot）全被报成 high。判据只收「正向延续」表述——「no compatibility
+// alias」是破坏面表述，绝不能进这张表。
+const CONTINUITY_RE =
+  /\b(?:keeps?\s+(?:its|their)\s+(?:form|shape|names?|behavior|semantics|codes?)|unchanged|remains?\s+(?:valid|intact|writable|the\s+same)|(?:is|are)\s+preserved|still\s+(?:works?|functions?|compiles?))\b/i
+
+// 子句切分：逗号接转折连词（或分号）是语义翻转点——「keeps its form, but … fails」
+// 前半延续、后半破坏，整句一刀切会把破坏面符号一起丢掉（丢召回）。
+const BREAK_CLAUSE_SPLIT_RE = /,\s+(?:but|however|though|although|whereas)\b\s*|;\s+/i
+
+// 把 Change 段切成「非延续子句」的拼接文本：延续子句整体剔除，
+// 其余子句（含转折子句的破坏面）保留。成员链与裸调用只从这里抽。
+function nonContinuityText(changeText) {
+  const keep = []
+  for (const sentence of changeText.split(/(?<=[.!?])\s+|\n+/)) {
+    for (const clause of sentence.split(BREAK_CLAUSE_SPLIT_RE)) {
+      const t = clause.trim()
+      if (t && !CONTINUITY_RE.test(t)) keep.push(t)
+    }
+  }
+  return keep.join('\n')
+}
+
 // 从 Change 段的 Markdown 表格提取被移除的包/子路径：
 // 仅当表头第一列明确标明 Removed/Deprecated/Retired/Old 时，取数据行第一列的 @deepseek-ai/* 路径。
 function extractTableRemovedPackages(changeText) {
@@ -96,7 +126,7 @@ function extractTableRemovedPackages(changeText) {
       continue
     }
     for (const m of cols[0].matchAll(PKG_PATH_RE)) {
-      removed.push(m[0])
+      removed.push(stripTrailingDots(m[0]))
     }
   }
   return removed
@@ -104,11 +134,16 @@ function extractTableRemovedPackages(changeText) {
 
 // 从 guide 正文抽锚点。包名用精确匹配，成员名用词边界。
 //
-// 两条降噪规则，都是实测误报复盘得来的：
+// 三条降噪规则，都是实测误报复盘得来的：
 //   1. 常量锚点只从 Change 段抽。Migration 里的连字符字符串往往是示例值
 //      （mode: 'read-only'、max-tokens），拿它们匹配会大面积误报。
 //   2. 识别「旧 → 新」替换对，新符号不再报命中。
 //      插件用了新符号说明已经适配过，报了只是噪音。
+//   3. 成员/裸调用锚点只从 Change 段的非延续子句抽（2026-11-21 实测回归）。
+//      Migration 段写的是迁移目标与新写法——ctx.slots.inject、ctx.sessions.create
+//      这类「应该用」的符号被抽成待报锚点，会把已适配的插件报成 high；
+//      Change 段的延续句（keeps its form / unchanged）里的是没坏的符号，
+//      报了同样只是噪音。破坏面若只在 Migration 出现，由替换对旧符号补锚兜底。
 export function extractAnchors(changeText, migrationText) {
   const blob = `${changeText}\n${migrationText}`
   const anchors = { packages: new Set(), members: new Set(), codes: new Set() }
@@ -126,8 +161,9 @@ export function extractAnchors(changeText, migrationText) {
     return false
   }
   for (const m of blob.matchAll(PKG_PATH_RE)) {
-    if (sentenceHasRemoval(changeText, m[0]) || sentenceHasRemoval(migrationText, m[0])) {
-      anchors.packages.add(m[0])
+    const pkg = stripTrailingDots(m[0])
+    if (sentenceHasRemoval(changeText, pkg) || sentenceHasRemoval(migrationText, pkg)) {
+      anchors.packages.add(pkg)
     }
   }
   for (const pkg of extractTableRemovedPackages(changeText)) {
@@ -136,13 +172,32 @@ export function extractAnchors(changeText, migrationText) {
 
   // 完整点链优先：抽 ctx.tools.presentAs 而不是 ctx.tools + tools.presentAs。
   // 短链会被长链覆盖，避免「ctx.tools」这种过于通用的锚点。
+  // 抽取源只认 Change 段的非延续子句（见上面规则 3）。
+  const memberSource = nonContinuityText(changeText)
   const chains = new Set()
-  for (const m of blob.matchAll(/\b([A-Za-z][\w$]*(?:\.[A-Za-z_][\w$]*)+)\b/g)) {
+  for (const m of memberSource.matchAll(/\b([A-Za-z][\w$]*(?:\.[A-Za-z_][\w$]*)+)\b/g)) {
     chains.add(m[1])
   }
   // 裸调用：foo(
-  for (const m of blob.matchAll(/\b([a-z][\w]+)\s*\(/g)) {
+  for (const m of memberSource.matchAll(/\b([a-z][\w]+)\s*\(/g)) {
     chains.add(m[1])
+  }
+
+  // 替换对：新符号进 introduced，扫描时跳过；旧符号补进待报锚点——
+  // 有的指南 Change 段对旧符号只写行为变化不点名，破坏面只出现在
+  // Migration 的「Replace X with Y / X instead of Y」里，Change-only 抽取
+  // 会漏掉 X，这里兜住召回。补锚发生在下面的统一过滤之前。
+  const introduced = new Set()
+  for (const [oldRaw, newRaw] of findReplacements(migrationText)) {
+    const oldSym = normalizeSymbol(oldRaw)
+    const newSyms = expandBracketSymbols(newRaw)
+    for (const s of newSyms) {
+      if (s) introduced.add(s)
+    }
+    if (oldSym && /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/.test(oldSym)) {
+      chains.add(oldSym)
+    }
+    if (oldSym) introduced.delete(oldSym)
   }
 
   for (const chain of chains) {
@@ -157,28 +212,18 @@ export function extractAnchors(changeText, migrationText) {
     anchors.members.add(chain)
   }
 
-  // 常量锚点：只从 Change 段抽（见上面规则 1）
+  // 常量锚点：只从 Change 段抽（见上面规则 1），且与成员同源——只取非延续子句，
+  // 「every ATTACHMENT_* code are unchanged」这类延续句里的码不再进待报锚点。
   // 1. kebab-case 格式 (like 'already-installed')
-  for (const m of changeText.matchAll(/['"`]([a-z][a-z0-9]*(?:-[a-z0-9]+)+)['"`]/g)) {
+  for (const m of memberSource.matchAll(/['"`]([a-z][a-z0-9]*(?:-[a-z0-9]+)+)['"`]/g)) {
     anchors.codes.add(m[1])
   }
   // 2. SCREAMING_SNAKE 错误码/状态码 (like 'ABORTED', 'CODE_RUN_FAILED')
-  for (const m of changeText.matchAll(/['"`]([A-Z][A-Z0-9_]{3,39})['"`]/g)) {
+  for (const m of memberSource.matchAll(/['"`]([A-Z][A-Z0-9_]{3,39})['"`]/g)) {
     anchors.codes.add(m[1])
   }
-  for (const m of changeText.matchAll(/\b(?:as|than|code)\s+([A-Z][A-Z0-9_]{3,30})\b/g)) {
+  for (const m of memberSource.matchAll(/\b(?:as|than|code)\s+([A-Z][A-Z0-9_]{3,30})\b/g)) {
     anchors.codes.add(m[1])
-  }
-
-  // 替换对：新符号进 introduced，扫描时跳过
-  const introduced = new Set()
-  for (const [oldRaw, newRaw] of findReplacements(migrationText)) {
-    const oldSym = normalizeSymbol(oldRaw)
-    const newSyms = expandBracketSymbols(newRaw)
-    for (const s of newSyms) {
-      if (s) introduced.add(s)
-    }
-    if (oldSym) introduced.delete(oldSym)
   }
 
   // 两条过滤，返回的 members 就是「待报」清单：
@@ -206,13 +251,26 @@ export function extractAnchors(changeText, migrationText) {
 function findReplacements(migrationText) {
   const pairs = []
   const symPat = `\\[?(?:declare\\s+)?(?:[a-zA-Z_][\\w$]*\\.)*[a-zA-Z_][\\w$]*(?:\\[[a-zA-Z_][\\w$.]*\\]|(?:\\.[a-zA-Z_][\\w$]*)*)\\]?(?:\\([^)]*\\))?`
+  // 第一条：Replace A (or B / or C)* with D——旧侧整段捕获后按 or 拆，
+  // 每个 or 同伴都是被替换的旧符号（重复上限定 4，防嵌套量词回溯爆炸）。
   const strictPatterns = [
-    new RegExp(`\\b(?:[Rr]eplace|[Rr]ename)\\s+(?:every\\s+|the\\s+)?\`?(?:declare\\s+)?(${symPat})\`?\\s+(?:with|by|using|to)\\s+\`?(?:declare\\s+)?(\\[?[a-zA-Z_][\\w$]*(?:\\.[a-zA-Z_][\\w$]*)*(?:\\[[a-zA-Z_][\\w$.]*\\])?\\]?(?:\\([^)]*\\))?)\`?`, 'g'),
+    new RegExp(`\\b(?:[Rr]eplace|[Rr]ename)\\s+(?:every\\s+|the\\s+)?((?:\`?(?:declare\\s+)?${symPat}\`?\\s+or\\s+){0,3}\`?(?:declare\\s+)?${symPat}\`?)\\s+(?:with|by|using|to)\\s+\`?(?:declare\\s+)?(\\[?[a-zA-Z_][\\w$]*(?:\\.[a-zA-Z_][\\w$]*)*(?:\\[[a-zA-Z_][\\w$.]*\\])?\\]?(?:\\([^)]*\\))?)\`?`, 'g'),
     /\`?([a-zA-Z_][\w$]*(?:\.[a-zA-Z_][\w$]*)*(?:\([^)]*\))?)\`?\s*(?:→|->|becomes?|is\s+renamed\s+to|now\s+becomes)\s+\`?([a-zA-Z_][\w$]*(?:\.[a-zA-Z_][\w$]*)*(?:\([^)]*\))?)/g,
+    // 「X instead of Y」：X 是被弃用的旧符号、Y 是迁移目标（2026-11-21 补，
+    // 真实指南 Migration 常写 Call create() instead of open()）。
+    new RegExp(`\`?(${symPat})\`?\\s+instead\\s+of\\s+\`?(${symPat})\`?`, 'g'),
   ]
   for (const re of strictPatterns) {
     for (const m of migrationText.matchAll(re)) {
-      if (m[1] && m[2] && m[1] !== m[2]) pairs.push([m[1], m[2]])
+      if (!m[1] || !m[2] || m[1] === m[2]) continue
+      if (re === strictPatterns[0]) {
+        for (const oldRaw of m[1].split(/\s+or\s+/i)) pairs.push([oldRaw, m[2]])
+      } else if (re === strictPatterns[2]) {
+        // 「X instead of Y」：X 是新写法（in Y 的位置），Y 才是被弃用的旧符号，方向与字面相反。
+        pairs.push([m[2], m[1]])
+      } else {
+        pairs.push([m[1], m[2]])
+      }
     }
   }
 

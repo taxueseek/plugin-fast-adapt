@@ -18,6 +18,7 @@ import { execFileSync } from 'node:child_process'
 import { planPeerFix, PEER_ONLY_PACKAGES } from './lib/peer-fix.mjs'
 import { printJson } from './lib/scanner.mjs'
 import { backupBeforeWrite } from './lib/backup.mjs'
+import { isMainEntry } from './lib/main-entry.mjs'
 
 function parseArgs(argv) {
   const out = { dirs: [], installed: false, apply: false, json: false }
@@ -152,6 +153,6 @@ export function runFixPeerDeps(argv = process.argv.slice(2)) {
   return fixable.length ? 2 : 0
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename)) {
+if (isMainEntry(import.meta.url)) {
   process.exit(runFixPeerDeps())
 }

@@ -17,6 +17,7 @@ import path from 'node:path'
 import { printJson } from './lib/scanner.mjs'
 import { DEFAULT_CRASH_DIR, CRASH_REPORT_NAME, listCrashReports, parseCrashReport } from './lib/desktop-app.mjs'
 import { LOG_DOCTOR_VERDICT } from './lib/run-states.mjs'
+import { isMainEntry } from './lib/main-entry.mjs'
 
 export const DEFAULT_LOGS_DIR = path.join(os.homedir(), '.dsh', 'logs')
 
@@ -317,7 +318,7 @@ function parseArgv(argv) {
   return flags
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename)) {
+if (isMainEntry(import.meta.url)) {
   const flags = parseArgv(process.argv.slice(2))
   const report = diagnoseLogs({ logsDir: flags.logs, limit: flags.limit, pattern: flags.pattern, crashDir: flags.crashDir })
   printJson(report)

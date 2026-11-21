@@ -11,6 +11,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { execFileSync } from 'node:child_process'
 import { test, tmpPluginDir } from './harness.mjs'
 import { readPackageJson, readPackageJsonStrict, probePackageJson, hasBom } from '../lib/package-json.mjs'
 import { cacheRoot, cacheSubdir } from '../lib/cache-root.mjs'
@@ -231,4 +232,44 @@ test('指南解析：v0.2.2-rc.2 Cordis 4.0 成员链不漏报且新符号不误
     assert.ok(!a.members.includes(sym), `新符号 ${sym} 不应留在待报锚点`)
   }
   assert.ok(!a.introduced.includes('the') && !a.introduced.includes('ctx.root'), `introduced 不应含停用词或旧符号: ${JSON.stringify(a.introduced)}`)
+})
+
+// ── main 守卫（软链安全，2026-11-21 实测）───────────────────────────────────
+// 技能根对外是软链（~/.agents/skills/* 与 ~/.zcode/skills/* 都指向仓库真源），
+// Node ESM 默认解析软链：import.meta.url 是真实路径，argv[1] 是软链路径——
+// 直接比较永不相等，模块正常加载、main 守卫判 false、静默 no-op exit 0
+// （实测 `node <软链>/scripts/fleet-sweep.mjs --help` 零输出零报错）。
+// 判据单点收在 lib/main-entry.mjs（isMainEntry，两侧 realpath）。
+
+test('main 守卫整类收口：凡引用 process.argv[1] 的脚本必须过 realpath 或 isMainEntry', () => {
+  const scriptsDir = path.resolve(import.meta.dirname, '..')
+  const offenders = []
+  for (const name of fs.readdirSync(scriptsDir).sort()) {
+    if (!name.endsWith('.mjs')) continue
+    const src = fs.readFileSync(path.join(scriptsDir, name), 'utf8')
+    if (!src.includes('process.argv[1]')) continue
+    const usesHelper = src.includes('isMainEntry(import.meta.url)')
+    const realpathsArgv = /realpathSync\([^)]*process\.argv\[1\]|process\.argv\[1\][^\n]*realpathSync/.test(src)
+    if (!usesHelper && !realpathsArgv) offenders.push(name)
+  }
+  assert.deepStrictEqual(
+    offenders,
+    [],
+    `这些脚本的 argv[1] 判定没过 realpath（软链技能根直跑会静默 no-op）: ${JSON.stringify(offenders)}`,
+  )
+})
+
+test('main 守卫经软链调用不再静默 no-op（端到端：软链路径 --help 有输出）', () => {
+  const fleetScript = path.resolve(import.meta.dirname, '..', 'fleet-sweep.mjs')
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'pfa-symlink-guard-'))
+  try {
+    const link = path.join(base, 'fleet-sweep-link.mjs')
+    fs.symlinkSync(fleetScript, link, 'file')
+    const viaLink = execFileSync(process.execPath, [link, '--help'], { encoding: 'utf8' })
+    assert.ok(viaLink.includes('--json'), `软链路径调用应打印用法: ${JSON.stringify(viaLink.slice(0, 120))}`)
+    const viaReal = execFileSync(process.execPath, [fleetScript, '--help'], { encoding: 'utf8' })
+    assert.ok(viaReal.includes('--json'), '真实路径调用应打印用法')
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true })
+  }
 })

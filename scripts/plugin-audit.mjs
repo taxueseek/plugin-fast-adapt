@@ -23,6 +23,7 @@ import { packageOnHost, resolvePackageSubpathOnHost } from './lib/host-scope.mjs
 import { scanStandards, standardsScore, STANDARDS_RULES } from './lib/standards.mjs'
 import { readPackageJsonStrict } from './lib/package-json.mjs'
 import { HOST_PRESENCE } from './lib/run-states.mjs'
+import { isMainEntry } from './lib/main-entry.mjs'
 
 const STANDARDS_RULES_LENGTH = STANDARDS_RULES.length
 // 编译/打包后的巨型产物（如 lib/client.js 4.9MB/12.8 万行 esbuild 捆绑包，或压缩单行包）：
@@ -648,7 +649,7 @@ export function auditPlugin(pluginDir, { scanResult = null, targetVersion = null
   return report
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename)) {
+if (isMainEntry(import.meta.url)) {
   const args = process.argv.slice(2)
   const guideFlag = args.indexOf('--guide')
   const peerPatchFlag = args.includes('--peer-patch')

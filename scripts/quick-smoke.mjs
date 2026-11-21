@@ -25,6 +25,7 @@ import { removeDirSafely } from './lib/proc-env.mjs'
 import { printJson, resolveEntryFile, pickExistingEntry } from './lib/scanner.mjs'
 import { findGlobalDsh } from './env-doctor.mjs'
 import { readPackageJsonStrict } from './lib/package-json.mjs'
+import { isMainEntry } from './lib/main-entry.mjs'
 
 // Cordis 内建 mixin 属性（ReflectService 构造时混入 ctx，无需 inject）：
 // reflect.get/set/provide/accessor/mixin、fiber.runtime/effect、registry.inject/plugin、
@@ -328,7 +329,7 @@ export async function runQuickSmoke(pluginRoot) {
   }
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename)) {
+if (isMainEntry(import.meta.url)) {
   const targetDir = process.argv[2] || process.cwd()
 
   runQuickSmoke(targetDir)

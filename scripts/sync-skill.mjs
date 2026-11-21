@@ -18,6 +18,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { gitChildEnv } from './lib/proc-env.mjs'
+import { isMainEntry } from './lib/main-entry.mjs'
 import { fileURLToPath } from 'node:url'
 
 const TOOL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -133,7 +134,7 @@ function parseArgv(argv) {
   return flags
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename)) {
+if (isMainEntry(import.meta.url)) {
   const flags = parseArgv(process.argv.slice(2))
   if (!flags.dest) {
     process.stderr.write('用法: node scripts/sync-skill.mjs --dest <下游技能目录> [--check|--dry-run]\n')

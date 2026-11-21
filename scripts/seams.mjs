@@ -30,6 +30,7 @@ import { syncGuides } from './guide-sync.mjs'
 import { findGlobalDsh } from './env-doctor.mjs'
 import { packageOnHost, symbolSearchRoots } from './lib/host-scope.mjs'
 import { cacheRoot } from './lib/cache-root.mjs'
+import { isMainEntry } from './lib/main-entry.mjs'
 
 // 每次调用时求值：模块级常量在 import 那一刻定死，自检改 DSH_PFA_CACHE_DIR 不生效。
 function cacheRootDir() {
@@ -385,7 +386,7 @@ function parseArgv(argv) {
   return flags
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename)) {
+if (isMainEntry(import.meta.url)) {
   let flags
   try {
     flags = parseArgv(process.argv.slice(2))

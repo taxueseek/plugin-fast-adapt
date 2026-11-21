@@ -26,6 +26,7 @@ import { probeEnvironment } from './env-doctor.mjs'
 import { auditPlugin } from './plugin-audit.mjs'
 import { scanPluginFromGuideRoot } from './code-scan.mjs'
 import { syncGuides } from './guide-sync.mjs'
+import { isMainEntry } from './lib/main-entry.mjs'
 
 // ── 编排 ────────────────────────────────────────────────────────────────────
 
@@ -166,7 +167,7 @@ function parseArgv(argv) {
   return { positional, flags }
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename)) {
+if (isMainEntry(import.meta.url)) {
   const { positional, flags } = parseArgv(process.argv.slice(2))
   if (!positional.length) {
     process.stderr.write('用法: node scripts/write-gate.mjs <插件目录> [--guide <guide-root> [本机版本 目标版本]] [--skip-smoke]\n')

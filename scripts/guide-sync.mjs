@@ -19,6 +19,7 @@ import { listGuideVersions } from './lib/guide-parser.mjs'
 import { findGlobalDsh } from './env-doctor.mjs'
 import { cacheRoot as resolveCacheRoot } from './lib/cache-root.mjs'
 import { VERSION_VERDICT } from './lib/run-states.mjs'
+import { isMainEntry } from './lib/main-entry.mjs'
 
 // dist-tags 专用端点只回标签对象（实测 67 字节）；全量包文档是 267KB，
 // 而这里只用到 dist-tags，网络、解析、缓存落盘全是白付的。
@@ -573,7 +574,7 @@ export async function runGuideSync(localVersion, { clone = false, fetcher = null
   return { resolution, guides, guideVersion, metadataSource: metadata._metadataSource || 'network' }
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename)) {
+if (isMainEntry(import.meta.url)) {
   // --check：盯梢模式。退出码给 cron/agent 轮询用（1=有新版，0=无需动作，2=判定失败），
   // 有新版时顺手预取该版指南进缓存（clone=true），下次 run.mjs 零等待。
   // 版本参数缺省时自动探测本机宿主版本，零参数可直接接定时器。

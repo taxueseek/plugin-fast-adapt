@@ -36,6 +36,7 @@ import { parsePatchEntries, candidateGlobalRoots } from './env-doctor.mjs'
 import { runQuickSmoke } from './quick-smoke.mjs'
 import { verifyWithHostModules } from './lib/host-modules.mjs'
 import { readPackageJson } from './lib/package-json.mjs'
+import { isMainEntry } from './lib/main-entry.mjs'
 
 const FORMS = ['tool', 'hook', 'service', 'config', 'llm-adapter']
 
@@ -515,7 +516,7 @@ function parseArgv(argv) {
   return { positional, flags }
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename)) {
+if (isMainEntry(import.meta.url)) {
   try {
     const { positional, flags } = parseArgv(process.argv.slice(2))
     if (positional.length !== 1) {

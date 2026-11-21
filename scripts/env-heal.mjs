@@ -14,6 +14,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { printJson } from './lib/scanner.mjs'
 import { probeEnvironment } from './env-doctor.mjs'
+import { isMainEntry } from './lib/main-entry.mjs'
 
 const DSH_DIR = path.join(os.homedir(), '.dsh')
 
@@ -52,7 +53,7 @@ export function healOverlays({ dryRun = true } = {}) {
   }
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename)) {
+if (isMainEntry(import.meta.url)) {
   const apply = process.argv.includes('--apply')
   const result = healOverlays({ dryRun: !apply })
   printJson(result)

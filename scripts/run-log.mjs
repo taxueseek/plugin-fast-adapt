@@ -18,11 +18,11 @@
 import fs from 'node:fs'
 import { STAGE_STATUS, CORRELATE_VERDICT } from './lib/run-states.mjs'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { listRuns, resolveRunFile, sanitizeRun, sanitizeText, getLogRoot } from './lib/runlog.mjs'
 import { checkPrBaseline } from './lib/pr-gate.mjs'
 import { diagnoseLogs, DEFAULT_LOGS_DIR } from './log-doctor.mjs'
 import { printJson } from './lib/scanner.mjs'
+import { isMainEntry } from './lib/main-entry.mjs'
 
 const args = process.argv.slice(2)
 const command = args[0]
@@ -212,8 +212,9 @@ export function formatPrDraft(runData, { baseline = null } = {}) {
   return sanitizeText(lines.join('\n'))
 }
 
-// CLI（带主模块守卫：被 self-test import 时不执行）
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) {
+// CLI（带主模块守卫：被 self-test import 时不执行。isMainEntry 两侧过 realpath，
+// 软链技能根直跑不会静默 no-op——2026-11-21 实测，见 lib/main-entry.mjs 头注）
+if (isMainEntry(import.meta.url)) {
 if (command === 'list') {
   const limitAt = args.indexOf('--limit')
   const limit = limitAt !== -1 ? Number(args[limitAt + 1]) || 20 : 20

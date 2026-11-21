@@ -30,6 +30,7 @@ import {
 import { findGlobalDsh } from './env-doctor.mjs'
 import { printJson } from './lib/scanner.mjs'
 import { readPackageJson } from './lib/package-json.mjs'
+import { isMainEntry } from './lib/main-entry.mjs'
 
 function parseArgs(argv) {
   const out = { from: null, to: null, fetch: null, current: false, save: false, json: false, synth: false }
@@ -179,6 +180,6 @@ export async function runTypesDiffCli(argv = process.argv.slice(2)) {
   return diff.breakingCount > 0 ? 1 : 0
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename || '')) {
+if (isMainEntry(import.meta.url)) {
   Promise.resolve(runTypesDiffCli()).then((code) => process.exit(code))
 }

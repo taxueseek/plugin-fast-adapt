@@ -7,7 +7,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { test, tmpPluginDir } from './harness.mjs'
 import { auditPlugin } from '../plugin-audit.mjs'
-import { discoverPlugins, inspectPlugin, checkBuild } from '../fleet-sweep.mjs'
+import { discoverPlugins, inspectPlugin, checkBuild, resolveInstalledPluginDir } from '../fleet-sweep.mjs'
+import { LIFECYCLE_STATE } from '../lib/run-states.mjs'
 
 const SCRIPTS = path.resolve(import.meta.dirname, '..')
 
@@ -581,4 +582,71 @@ test('回归：types-diff 零依赖 npm tarball 签名提取（extractSignatureF
   assert.deepStrictEqual(pkgSig.subpaths, ['.', './client'])
   assert.ok(pkgSig.symbols.some((s) => s.name === 'createHost'))
   assert.ok(pkgSig.symbols.some((s) => s.name === 'HostConfig'))
+})
+
+test('集群治理：卸载残留不再假绿（2026-11-21 实测回归：dir=null 旧实现硬造 overallScore:100 健康分）', () => {
+  // profile 已声明但目录解析不到 → WARNING + 写明原因，分数 n/a 而不是伪造的 100
+  const residual = inspectPlugin({
+    sourceType: 'INSTALLED',
+    name: 'dsh-gone',
+    dir: null,
+    profile: 'desktop',
+    platform: 'core',
+    state: LIFECYCLE_STATE.ENABLED,
+    installed: true,
+  }, { targetVersion: '0.2.2-alpha.2' })
+  assert.strictEqual(residual.healthStatus, 'warning', `卸载残留应降为 warning: ${residual.healthStatus}`)
+  assert.strictEqual(residual.score, null, `无法体检不该有分数: ${residual.score}`)
+  assert.ok(residual.issues.some((i) => i.includes('目录未解析')), `issues 应写明目录未解析: ${JSON.stringify(residual.issues)}`)
+  assert.strictEqual(residual.unloadResidual, true, '结果应带 unloadResidual 标记')
+
+  // @deepseek-ai/* 宿主内置条目 dir=null 是常态（宿主自带模块），不算残留
+  const builtin = inspectPlugin({
+    sourceType: 'INSTALLED',
+    name: '@deepseek-ai/dsh-builtin',
+    dir: null,
+    profile: 'desktop',
+    platform: 'core',
+    state: LIFECYCLE_STATE.ENABLED,
+    installed: true,
+  }, { targetVersion: '0.2.2-alpha.2' })
+  assert.strictEqual(builtin.healthStatus, 'healthy', `宿主内置不该算残留: ${builtin.healthStatus}`)
+  assert.strictEqual(builtin.score, null, '宿主内置不做体检，分数 n/a 而不是伪造')
+  assert.strictEqual(builtin.hostBundled, true, '应带 hostBundled 标记')
+})
+
+const realEq = (a, b) => {
+  const canon = (p) => {
+    try { return fs.realpathSync(p) } catch { return p }
+  }
+  return canon(a) === canon(b)
+}
+
+test('目录解析：条目 id 与包名不同名时段边界后缀反查（2026-11-21 实测回归：id: turn-guard ↔ 包 dsh-turn-guard）', () => {
+  const home = tmpPluginDir('pfa-home-index')
+  const nm = path.join(home, 'profiles', 'desktop', 'node_modules', 'dsh-turn-guard')
+  fs.mkdirSync(nm, { recursive: true })
+  fs.writeFileSync(path.join(nm, 'package.json'), JSON.stringify({ name: 'dsh-turn-guard', version: '0.1.0' }))
+  // 精确名落空 → 后缀段匹配命中 dsh-turn-guard
+  assert.ok(realEq(resolveInstalledPluginDir('turn-guard', 'desktop', home), nm), '后缀反查应命中 dsh-turn-guard')
+  // 同名段最短者胜（dsh-x 优先于 x-dsh-x 一类长名）
+  const longNm = path.join(home, 'profiles', 'desktop', 'node_modules', 'pkg-dsh-turn-guard')
+  fs.mkdirSync(longNm, { recursive: true })
+  fs.writeFileSync(path.join(longNm, 'package.json'), JSON.stringify({ name: 'pkg-dsh-turn-guard', version: '0.1.0' }))
+  assert.ok(realEq(resolveInstalledPluginDir('turn-guard', 'desktop', home), nm), '应取最短匹配')
+  assert.ok(realEq(resolveInstalledPluginDir('dsh-turn-guard', 'desktop', home), nm), '精确包名优先')
+})
+
+test('目录解析：~/.dsh/plugins/<名> 自有插件区候选（2026-11-21 实测形态：workbuddy-image）', () => {
+  const home = tmpPluginDir('pfa-home-plugins')
+  const dir = path.join(home, 'plugins', 'workbuddy-image')
+  fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'workbuddy-image', version: '0.2.0' }))
+  assert.ok(realEq(resolveInstalledPluginDir('workbuddy-image', 'desktop', home), dir))
+})
+
+test('目录解析：完全找不到时返回 null（诚实未解析，不猜路径）', () => {
+  const home = tmpPluginDir('pfa-home-empty')
+  assert.strictEqual(resolveInstalledPluginDir('session-digger', 'desktop', home), null)
+  assert.strictEqual(resolveInstalledPluginDir('', 'desktop', home), null)
 })

@@ -20,6 +20,7 @@ import { auditPlugin, peerPatchFor, compatPatchFor } from './plugin-audit.mjs'
 import { readPackageJson, readPackageJsonStrict, probePackageJson } from './lib/package-json.mjs'
 import { NO_BACKUP, backupBeforeWrite } from './lib/backup.mjs'
 import { diagnoseLogs } from './log-doctor.mjs'
+import { isMainEntry } from './lib/main-entry.mjs'
 import { listAsarDshPackages } from './lib/desktop-app.mjs'
 import { checkPrBaselineAsync, PR_BASELINE_STATES } from './lib/pr-gate.mjs'
 import { BUILD_STATUS, LIFECYCLE_STATE, HEALTH_STATUS, PKG_PROBE_STATUS, GHOST_HOST_VERDICT } from './lib/run-states.mjs'
@@ -183,6 +184,67 @@ export function discoverWorkspacePlugins(roots = [process.cwd()]) {
 }
 
 // 解析已安装插件在磁盘上的真实目录（支持软链回溯到源码仓）
+// 包名反查表：profile node_modules 下「package.json#name → 目录」，进程内缓存。
+// 为什么存在（2026-11-21 实测）：patch 条目名是插件 id，安装目录名是 npm 包名，
+// 两者没有换算公式（id: turn-guard ↔ 包 dsh-turn-guard、save-token ↔ dsh-plugin-save-token）。
+// 精确名落空时按包名反查一次；只对未解析条目惰性建表，不在热路径上白扫。
+// 遍历同时收目录与软链（pnpm workspace 链接形态实测存在，如 @taxueseek/argo-dsh）。
+const pkgNameIndexCache = new Map()
+function packageNameIndex(baseHome, profile) {
+  const key = `${baseHome}\0${profile || ''}`
+  const hit = pkgNameIndexCache.get(key)
+  if (hit) return hit
+  const index = new Map()
+  const roots = [
+    profile ? path.join(baseHome, 'profiles', profile, 'node_modules') : null,
+    path.join(baseHome, 'profiles', 'node_modules'),
+  ].filter(Boolean)
+  for (const root of roots) {
+    let top
+    try {
+      top = fs.readdirSync(root, { withFileTypes: true })
+    } catch {
+      continue
+    }
+    for (const e of top) {
+      if (!e.isDirectory() && !e.isSymbolicLink()) continue
+      if (e.name.startsWith('@')) {
+        try {
+          for (const s of fs.readdirSync(path.join(root, e.name), { withFileTypes: true })) {
+            if (s.isDirectory() || s.isSymbolicLink()) {
+              // 目录名即包名（node_modules 布局：目录名 = package.json#name，scoped 为 @scope/name）。
+              // 这里不逐包读 package.json——实测逐包 probePackageJson（6 profile × 350 包）
+              // 让全量巡检从 1.9s 涨到 4.7s；命中候选后由 resolveInstalledPluginDir
+              // 统一过一次 package.json 存在性确认。
+              const name = `${e.name}/${s.name}`
+              if (!index.has(name)) index.set(name, path.join(root, e.name, s.name))
+            }
+          }
+        } catch {}
+      } else if (!index.has(e.name)) {
+        index.set(e.name, path.join(root, e.name))
+      }
+    }
+  }
+  pkgNameIndexCache.set(key, index)
+  return index
+}
+
+// 反查找目录：精确包名优先，其次段边界后缀匹配（条目 id: thoughtdag ↔ 包
+// dsh-thoughtdag、save-token ↔ dsh-plugin-save-token），同名段匹配取最短者
+// （最特异）；无匹配返回 null。
+function resolveByPkgName(index, pkgName) {
+  const exact = index.get(pkgName)
+  if (exact) return exact
+  const suffix = `-${pkgName}`
+  let best = null
+  for (const [name, dir] of index) {
+    if (!name.endsWith(suffix)) continue
+    if (best === null || name.length < best.length) best = name
+  }
+  return best === null ? null : index.get(best)
+}
+
 export function resolveInstalledPluginDir(pkgName, profile, dshHome = null) {
   if (!pkgName) return null
   const baseHome = dshHome || process.env.DSH_PFA_DSH_HOME || path.join(os.homedir(), '.dsh')
@@ -190,6 +252,8 @@ export function resolveInstalledPluginDir(pkgName, profile, dshHome = null) {
   const candidates = [
     profile ? path.join(baseHome, 'profiles', profile, 'node_modules', ...parts) : null,
     path.join(baseHome, 'profiles', 'node_modules', ...parts),
+    // 桌面端自有插件区（实测形态：~/.dsh/plugins/workbuddy-image）
+    path.join(baseHome, 'plugins', ...parts),
   ].filter(Boolean)
 
   for (const cand of candidates) {
@@ -202,6 +266,14 @@ export function resolveInstalledPluginDir(pkgName, profile, dshHome = null) {
         }
       }
     } catch {}
+  }
+  const byName = resolveByPkgName(packageNameIndex(baseHome, profile), pkgName)
+  if (byName && fs.existsSync(path.join(byName, 'package.json'))) {
+    try {
+      return fs.realpathSync(byName)
+    } catch {
+      return byName
+    }
   }
   return null
 }
@@ -292,11 +364,16 @@ export function discoverAllPlugins(
         if (seenInProfile.has(pkgName)) continue
 
         const resolvedDir = resolveInstalledPluginDir(pkgName, prof, dshHome)
-        // 默认过滤官方内置 @deepseek-ai/dsh-* 服务条目（它们是宿主自带模块，除非用户显式 --include-official）
-        if (!includeOfficial && pkgName.startsWith('@deepseek-ai/dsh-')) {
-          const isHostBuiltin =
-            !resolvedDir || (hostLoc && (resolvedDir === hostLoc || resolvedDir.startsWith(hostLoc + path.sep)))
-          if (isHostBuiltin) continue
+        // 默认过滤官方内置 @deepseek-ai/dsh-* 服务条目（它们是宿主自带模块，除非用户显式 --include-official）。
+        // 判据按「解析目录落在宿主包树内」而不是只按条目名前缀：宿主模块常以未带
+        // scope 的条目 id 被引用（agent-default-model ↔ @deepseek-ai/dsh-agent-default-model），
+        // 包名反查会把它解析进宿主包自己的 node_modules——不拦就会拿宿主的
+        // package.json 去过用户插件审计，报出用户改不了的 peer 声明问题。
+        const inHostTree = Boolean(
+          resolvedDir && hostLoc && (resolvedDir === hostLoc || resolvedDir.startsWith(hostLoc + path.sep)),
+        )
+        if (!includeOfficial && (inHostTree || (!resolvedDir && pkgName.startsWith('@deepseek-ai/dsh-')))) {
+          continue
         }
 
         seenInProfile.add(pkgName)
@@ -372,6 +449,31 @@ export function inspectPluginItem(
     : rawItem
 
   const dir = item.dir
+  // 宿主自带模块按未带 scope 的条目 id 引用（实测：agent-default-model ↔
+  // @deepseek-ai/dsh-agent-default-model，装在宿主包内或 APP asar 里）。目录
+  // 归宿主管，不做体检也不算残留；@deepseek-ai/* 前缀是显式形态，一并算。
+  const bareName = String(item.name || '').replace(/^@deepseek-ai\//, '')
+  const suffix = `-${bareName}`
+  const isHostBundled =
+    item.installed &&
+    !dir &&
+    (String(item.name || '').startsWith('@deepseek-ai/') ||
+      (asarPackages && [...asarPackages].some((p) => p === `@deepseek-ai/dsh-${bareName}` || p.endsWith(suffix))) ||
+      (() => {
+        const scopeDir = hostInfo?.location ? path.join(hostInfo.location, 'node_modules', '@deepseek-ai') : null
+        if (!scopeDir) return false
+        try {
+          return fs
+            .readdirSync(scopeDir)
+            .some((p) => p === `dsh-${bareName}` || p.endsWith(suffix))
+        } catch {
+          return false
+        }
+      })())
+  // 目录解析不到（2026-11-21 实测复盘）：过去 build 判 NOT_APPLICABLE ok:true、
+  // audit 硬造 overallScore:100——残留被报成满分健康。经包名反查与宿主自带
+  // 排除后仍解析不到的，如实降 WARNING：没体检就没有分数（score null，不伪造）。
+  const isUnloadResidual = Boolean(item.installed && !dir && !isHostBundled)
   // 目标版本按平台分派：APP 桌面插件跑的是 APP 自捆的宿主，不是 npm 全局那份。
   // 两者错开时（2026-11-05 实测：APP 0.2.2-rc.1 vs npm 0.2.1-rc.5）用 npm 版本去判
   // APP 插件，会把「APP 新版里已移除的套件包」与「APP 新版才加的套件包」一起判错，
@@ -409,6 +511,28 @@ export function inspectPluginItem(
         })
       } catch (err) {
         audit = { overallScore: 0, scores: {}, findings: [{ severity: 'CRITICAL', title: err.message }] }
+      }
+    } else if (isHostBundled) {
+      // 宿主自带模块（app asar / 宿主包内）：不体检不打分，也不算残留。
+      audit = { overallScore: null, scores: {}, findings: [], peerPatch: [], compatPatch: [], hostBundled: true }
+    } else if (isUnloadResidual) {
+      // 目录解析不到（2026-11-21 实测复盘）：旧实现走到这里 build 判
+      // NOT_APPLICABLE ok:true、audit 硬造 overallScore:100——残留被报成满分健康。
+      // 经包名反查与宿主自带排除后仍解析不到的，如实降 WARNING：score 置 null
+      // （没体检就没有分数，不伪造），用 MEDIUM 命中把 healthStatus 压到 WARNING。
+      audit = {
+        overallScore: null,
+        scores: {},
+        findings: [
+          {
+            severity: 'MEDIUM',
+            title:
+              '目录未解析: profile 已声明但按约定路径找不到插件目录（可能为卸载残留、条目 id 与包名不同名或装在约定外位置），无法体检',
+          },
+        ],
+        peerPatch: [],
+        compatPatch: [],
+        unloadResidual: true,
       }
     } else {
       audit = {
@@ -466,7 +590,7 @@ export function inspectPluginItem(
     healthStatus = HEALTH_STATUS.BROKEN
     const highTitles = findings.filter((f) => f.severity === 'CRITICAL' || f.severity === 'HIGH').map((f) => f.title)
     issues.push(...highTitles)
-  } else if (mediumCount > 0 || audit.overallScore < 85) {
+  } else if (mediumCount > 0 || (typeof audit.overallScore === 'number' && audit.overallScore < 85)) {
     if (healthStatus !== HEALTH_STATUS.BROKEN) healthStatus = HEALTH_STATUS.WARNING
     const medTitles = findings.filter((f) => f.severity === 'MEDIUM').map((f) => f.title)
     issues.push(...medTitles)
@@ -499,6 +623,8 @@ export function inspectPluginItem(
     findingsCount: findings.length,
     peerPatch: audit.peerPatch || [],
     compatPatch: audit.compatPatch || [],
+    ...(audit.unloadResidual ? { unloadResidual: true } : {}),
+    ...(audit.hostBundled ? { hostBundled: true } : {}),
     ...(appliedPatches ? { appliedPatches } : {}),
   }
 }
@@ -665,7 +791,7 @@ const printSection = (title, list) => {
       const issueText = r.issues.length > 0 ? r.issues[0].slice(0, 26) : '正常健康'
       const statusTag = healthLabel(r.healthStatus)
       process.stdout.write(
-        `│ ${r.name.slice(0, 26).padEnd(28)} ${r.platform.padEnd(8)} ${(r.state + '/' + statusTag).padEnd(10)} ${r.buildStatus.padEnd(8)} ${(String(r.score) + '/100').padEnd(6)} ${issueText}\n`,
+        `│ ${r.name.slice(0, 26).padEnd(28)} ${r.platform.padEnd(8)} ${(r.state + '/' + statusTag).padEnd(10)} ${r.buildStatus.padEnd(8)} ${(r.score === null ? 'n/a' : String(r.score)) + '/100'} ${issueText}\n`,
       )
     }
     process.stdout.write(`└${'─'.repeat(78)}\n`)
@@ -717,6 +843,6 @@ const printSection = (title, list) => {
   process.exit(exitCode)
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
+if (isMainEntry(import.meta.url)) {
   runFleetSweep()
 }

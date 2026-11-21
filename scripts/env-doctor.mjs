@@ -38,6 +38,7 @@ function dshDir() {
 // 不再反向依赖 CLI 入口。readPackageJson / candidateGlobalRoots 也被本文件
 // 后半段的覆盖层、共享农场等检查复用，一并从这里取。
 import { findGlobalDsh, readPackageJson, candidateGlobalRoots } from './lib/host-discovery.mjs'
+import { isMainEntry } from './lib/main-entry.mjs'
 export { findGlobalDsh, candidateGlobalRoots }
 
 // ── profiles 覆盖层 ────────────────────────────────────────────────────────
@@ -803,7 +804,7 @@ export function summarizeEnvironment(report) {
 
 const ENV_USAGE = '用法: node scripts/env-doctor.mjs [<插件目录>] [--brief|--full]'
 
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename)) {
+if (isMainEntry(import.meta.url)) {
   const argv = process.argv.slice(2)
   if (argv.includes('--help') || argv.includes('-h')) {
     process.stderr.write(`${ENV_USAGE}\n  --brief  省略 patch 行原文、截断进程命令（日常诊断用，体积约降 94%）\n  --full   默认，输出完整报告\n`)

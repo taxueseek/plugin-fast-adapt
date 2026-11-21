@@ -72,6 +72,20 @@ guide 的 Migration 说的是「把 A 改成 B」。A 是问题，B 是解决方
 
 **实测**：argo 插件报了 `startActivation` 命中，而 guide 说 `startActivation` 正是迁移目标，插件已经适配过了。
 
+### 规则 5：成员锚点只从 Change 段的非延续子句抽（2026-11-21 实测收口）
+
+规则 4 只处理「Migration 里写明了替换对」的形态。实测 dsh-suggestion-chips 与 dsh-files 两个**在 rc.5 上正常运行**的插件各扫出 10 与 12 条命中，逐条对照指南原文与代码现场，14 条 high 里 12 条是误报，根源全在锚点来源：
+
+1. **Migration 段的迁移目标代码成了锚点**。`ctx.slots.inject` / `ctx.sessions.create` / `ctx.emit` 都出现在 Migration 的「新写法」示例里——插件用的正是这些新 API，报了就是打脸规则 4 的承诺。修法：成员链与裸调用不再从 Change+Migration 全文抽，只从 Change 段抽；破坏面只在 Migration 出现的，由替换对旧符号补锚兜住召回（含 `Replace A or B with C` 的 or 同伴与 `X instead of Y` 的方向判定——Y 才是旧符号）。
+2. **Change 段延续句里的没坏符号成了锚点**。指南常顺带写「`getSnapshot()` and `subscribe()` keeps its form」「every `ATTACHMENT_*` code are unchanged」来划定不动的边界，全量抽取把这些没坏的符号也变成待报锚点，插件里本地 store 的同名 `subscribe`、composer shell 的 `getSnapshot` 全被报成 high。修法：Change 段先按句读切子句（逗号+but/however 是语义翻转点，整句一刀切会把转折子句里的破坏面一起丢掉——丢召回），含延续标记（keeps its form / unchanged / remains valid / still works）的子句整体剔除，其余子句照常抽。判据只收「正向延续」表述，`no compatibility alias` 是破坏面表述，绝不能进延续词表。
+3. **仍未机械可判的残类**：`ctx.tools.register` 一类「同名 API 语义变更」（guide 的 Change 段写「`register(definition, { when })` adds a condition」——API 没改名，只是旧用法坏了）。锚点抽取无法区分插件用的是旧用法还是已带 `{ when }` 的新用法，除非做调用形状分析（超出词法扫描的边界）。这类命中保留为触碰点级信号，人工看一眼新选项是否已采用。
+
+**实测前后对比**：dsh-suggestion-chips 10 条 → 2 条（剩 1 high 触碰点 + 1 info），dsh-files 12 条 → 8 条（4 high 误报消失，`data-plugin-css` 是真命中保留——指南明说 no longer carry，插件 dock.tsx:46 还在用）。
+
+### 规则 6：包路径尾点半角点剥离（漏报方向）
+
+子路径正则 `@deepseek-ai/[a-z0-9][\w-]*(?:/[a-z0-9][\w.-]*)*` 的 `[\w.-]*` 会把紧跟的句号吃进捕获（`@deepseek-ai/dsh/commands.` 句尾形态）。拿带点形式去比插件源码的 import 必然落空——官方指南句尾紧跟句号是常态。修法：捕获后统一剥尾点再入锚点。这是与误报对称的漏报类：扫描器安静不等于查过。
+
 ## 三、常量锚点只从 Change 段抽
 
 `read-only`、`max-tokens` 这类连字符字符串在 Migration 段里往往是示例值（`Its default mode is 'read-only'`），不是变更项。

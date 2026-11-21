@@ -16,6 +16,7 @@ import { loadGuides, listGuideVersions } from './lib/guide-parser.mjs'
 import { loadSynthesizedGuides } from './lib/types-diff.mjs'
 import { findGlobalDsh } from './env-doctor.mjs'
 import { packageOnHost } from './lib/host-scope.mjs'
+import { isMainEntry } from './lib/main-entry.mjs'
 
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', '.trash', 'coverage'])
 const SOURCE_EXT = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'])
@@ -395,7 +396,7 @@ export function scanPluginFromGuideRoot(pluginDir, guideRoot, options = {}) {
   return scanPlugin(pluginDir, guides, options)
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename)) {
+if (isMainEntry(import.meta.url)) {
   const pluginDir = process.argv[2] || process.cwd()
   const guideRoot = process.argv[3]
   const localVersion = process.argv[4] || null

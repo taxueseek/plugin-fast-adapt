@@ -19,6 +19,7 @@ import { scanStandards, standardsScore, STANDARDS_RULES } from './lib/standards.
 import { findSourceFiles, pickScanRoots } from './code-scan.mjs'
 import { printJson } from './lib/scanner.mjs'
 import { probePackageJson } from './lib/package-json.mjs'
+import { isMainEntry } from './lib/main-entry.mjs'
 
 function parseArgs(argv) {
   const out = { dir: null, json: false, compact: false, rules: false, focusRule: null }
@@ -214,6 +215,6 @@ export function runStandardsScan(argv = process.argv.slice(2)) {
   return blockers.length ? 2 : 0
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename)) {
+if (isMainEntry(import.meta.url)) {
   process.exit(runStandardsScan())
 }

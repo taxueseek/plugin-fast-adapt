@@ -22,6 +22,7 @@ import path from 'node:path'
 import { CODEMOD_RULES, planCodemods, applyCodemodPlan } from './lib/codemod.mjs'
 import { readPluginSources, readLoadedModuleGraph } from './standards-scan.mjs'
 import { printJson } from './lib/scanner.mjs'
+import { isMainEntry } from './lib/main-entry.mjs'
 
 function parseArgs(argv) {
   const out = { dir: null, apply: false, json: false, rules: false, focusRule: null }
@@ -144,6 +145,6 @@ export function runCodemodCli(argv = process.argv.slice(2)) {
 }
 
 // 直接运行 CLI
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename || '')) {
+if (isMainEntry(import.meta.url)) {
   process.exit(runCodemodCli())
 }
