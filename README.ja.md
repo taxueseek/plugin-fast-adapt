@@ -255,7 +255,7 @@ npm test   # node scripts/self-test.mjs、307 個のアサーション
 | スクリプト | 責務 |
 | --- | --- |
 | `scripts/cli.mjs` | npm 入口（`npx plugin-fast-adapt`）。run.mjs へ転送 |
-| `scripts/run.mjs` | 全チェーンのワンコマンド編成（環境→バージョン→ガイド→走査→監査→スモーク→typecheck）。統一レポートとローカル実行ログを出力。`scan.coverage` はガイドがどの版までカバーしたかを記録し、`--strict` は走査の未知を失敗扱い。`--real-smoke` は元リポジトリの verify-runtime にブリッジして実コールドブート層を追加 |
+| `scripts/run.mjs` | 全チェーンのワンコマンド編成（環境→バージョン→ガイド→走査→監査→スモーク→typecheck）。統一レポートとローカル実行ログを出力。`dshReleases` からの互換ウィンドウ導出、`--profile <web\|desktop>` ホスト固定、純 JS の `check`/`typecheck`、`--run-tests`、`--strict`、`--real-smoke` 実コールドブートに対応 |
 | `scripts/run-log.mjs` | 実行ログの閲覧（list/show）、突き合わせ（doctor：実行ログ × ホスト起動ログ）、サニタイズ書き出し（sanitize） |
 | `scripts/seams.mjs` | シーム照会：パッケージ名 / API シンボルの公式ガイドアンカー表とローカルホストの二重ソース判定。明示的なガイドルートがないときはデフォルトブランチの管理スナップショットを優先 |
 | `scripts/scaffold.mjs` | ゼロからプラグイン生成：コマンド 1 つで 5 形態の実行可能プラグインを出力（package.json 不変条件＋形態別の完全入口＋マウント層＋命名投影）。生成時点で検証 |
@@ -270,8 +270,8 @@ npm test   # node scripts/self-test.mjs、307 個のアサーション
 | `scripts/standards-scan.mjs` | 上流の常設ルール検出（機械判定可能な 7 項目、defensive-patterns の出所付き）。`--rules` でルール表を出力 |
 | `scripts/codemod.mjs` | 決定論的なコード・パッケージ面の自動修復（Loader 入口のエクスポート面、peer 依存、トップレベル await）。デフォルト dry-run、`--apply` で書き込み＋バックアップ |
 | `scripts/types-diff.mjs` | ホスト .d.ts とエクスポート面の差分。基線バージョンごとに仮想ガイドを合成して書き出し |
-| `scripts/fix-peer-deps.mjs` | ホストコアパッケージを dependencies から peerDependencies へ一括移動。デフォルト dry-run、`--apply` で書き込み＋バックアップ |
-| `scripts/fleet-sweep.mjs` | フリート全体の一括管理と巡回。行列ボードと JSON レポートを出力。`--apply-compat` は台帳一括書き込みの前にバックアップし、`--pr-ready` は安全に PR 出せるプラグインを選別（APP は `app.asar` 同梱パッケージで判定） |
+| `scripts/fix-peer-deps.mjs` | ホストコアパッケージを dependencies から peerDependencies へ一括移動（`--installed` はコアライブラリや非プラグインの推移依存を除外）。デフォルト dry-run、`--apply` で書き込み＋バックアップ |
+| `scripts/fleet-sweep.mjs` | フリート全体の一括管理と巡回。行列ボードと JSON レポートを出力。`tmp/` と `fixtures/` を除外し、`--profile` 絞り込みと `--dedupe` 実パス重複排除に対応。`--apply-compat` は台帳一括書き込みの前にバックアップし、`--pr-ready` は安全に PR 出せるプラグインを選別（APP は `app.asar` 同梱パッケージで判定） |
 | `scripts/log-doctor.mjs` | `~/.dsh/logs/` のホスト障害をワンコマンド解析（startup ヘッダ / 失敗プラグイン / 待ちサービス / シグナル集計） |
 | `scripts/sync-skill.mjs` | スキル面を下流スキルディレクトリへ同期。`--check` でドリフト確認 |
 | `scripts/self-test.mjs` | セルフテスト |

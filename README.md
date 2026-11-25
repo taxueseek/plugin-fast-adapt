@@ -260,7 +260,7 @@ To gate your own plugin's repository at commit time (smoke/typecheck as hard gat
 | Script | Responsibility |
 | --- | --- |
 | `scripts/cli.mjs` | npm entry (`npx plugin-fast-adapt`), forwards to run.mjs |
-| `scripts/run.mjs` | One-command orchestration of the full chain (env → version → guide → scan → audit → smoke → typecheck), unified report plus a local run log; `--real-smoke` bridges upstream verify-runtime for a real-cold-boot tier |
+| `scripts/run.mjs` | One-command orchestration of the full chain (env → version → guide → scan → audit → smoke → typecheck), unified report plus a local run log; derives scan windows from `dshReleases`, supports `--profile <web\|desktop>` host anchoring, pure-JS `check`/`typecheck`, `--run-tests`, `--strict`, and `--real-smoke` cold boot |
 | `scripts/run-log.mjs` | Run-log viewing (list/show), cross-checking (doctor: run logs × host startup logs) and sanitised export (sanitize) |
 | `scripts/seams.mjs` | Seam query: dual-source verdict for one package/API symbol across official guide anchors and the local host install; prefers the managed default-branch snapshot when no explicit guide root is given |
 | `scripts/scaffold.mjs` | Scaffold a plugin from zero: one command emits a runnable plugin in any of the five forms (package.json invariants + complete form entry + patch layer + naming projections), verified on creation |
@@ -275,8 +275,8 @@ To gate your own plugin's repository at commit time (smoke/typecheck as hard gat
 | `scripts/standards-scan.mjs` | Upstream standing-rule detection (7 mechanically-decidable rules with defensive-patterns provenance); `--rules` prints the table |
 | `scripts/codemod.mjs` | Deterministic code/package-surface autofix (Loader entry exports, peer deps, top-level await); dry-run by default, `--apply` writes with a backup |
 | `scripts/types-diff.mjs` | Host .d.ts and export-surface diff; synthesises virtual guides keyed by baseline version |
-| `scripts/fix-peer-deps.mjs` | Batch-move host core packages from dependencies into peerDependencies; dry-run by default, `--apply` writes with a backup |
-| `scripts/fleet-sweep.mjs` | Fleet-wide governance and inspection with a matrix board and JSON report; `--apply-compat` backs up before batch-writing ledgers, `--pr-ready` shortlists plugins safe to PR upstream (APP judged via `app.asar` bundled packages) |
+| `scripts/fix-peer-deps.mjs` | Batch-move host core packages from dependencies into peerDependencies (`--installed` filters out core libs and non-plugin transitive deps); dry-run by default, `--apply` writes with a backup |
+| `scripts/fleet-sweep.mjs` | Fleet-wide governance and inspection with a matrix board and JSON report; skips `tmp/` and `fixtures/`, supports `--profile` filtering and `--dedupe` by realpath; `--apply-compat` backs up before batch-writing ledgers, `--pr-ready` shortlists plugins safe to PR upstream (APP judged via `app.asar` bundled packages) |
 | `scripts/log-doctor.mjs` | One-command diagnosis of `~/.dsh/logs/` (startup header / failed plugins / waiting services / signal summary) |
 | `scripts/sync-skill.mjs` | Sync the skill surface to a downstream skill directory; `--check` reports drift |
 | `scripts/self-test.mjs` | Self-test |

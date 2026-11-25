@@ -254,7 +254,7 @@ npm test   # node scripts/self-test.mjs，307 项断言
 | 脚本 | 职责 |
 | --- | --- |
 | `scripts/cli.mjs` | npm 入口（`npx plugin-fast-adapt`），转发到 run.mjs |
-| `scripts/run.mjs` | 一键编排全流程（环境→定版→指南→扫描→体检→冒烟→typecheck），出统一报告并写本地运行日志；`scan.coverage` 记录指南覆盖到哪一版，`--strict` 把扫描未知当失败；`--real-smoke` 桥接原仓库 verify-runtime 补真冷启动档 |
+| `scripts/run.mjs` | 一键编排全流程（环境→定版→指南→扫描→体检→冒烟→typecheck），出统一报告并写本地运行日志；支持 `dshReleases` 兼容窗口推导、`--profile <web\|desktop>` 宿主锚定、纯 JS 插件 `check`/`typecheck` 与 `--run-tests` 单测、`--strict` 与 `--real-smoke` 真冷启动档 |
 | `scripts/run-log.mjs` | 运行日志查看（list/show）、交叉核对（doctor：运行日志×宿主启动日志）与脱敏导出（sanitize） |
 | `scripts/seams.mjs` | 接缝查询：一个包名/API 符号在官方指南锚点表与本机宿主里的双源结论；无显式指南根时优先默认分支受管快照 |
 | `scripts/scaffold.mjs` | 从零造插件：一条命令生成五形态可运行插件（package.json 不变量＋完整形态入口＋挂载层＋命名投影），生成即验证 |
@@ -269,8 +269,8 @@ npm test   # node scripts/self-test.mjs，307 项断言
 | `scripts/standards-scan.mjs` | 上游常设规则检出（7 条机械可判项，带 defensive-patterns 出处）；`--rules` 出规则表 |
 | `scripts/codemod.mjs` | 确定性代码与包面自动修补（Loader 入口导出面、peer 依赖、顶层 await）；默认 dry-run，`--apply` 才落盘并备份 |
 | `scripts/types-diff.mjs` | 宿主 .d.ts 与导出面差分，按基线版本合成虚拟指南落盘 |
-| `scripts/fix-peer-deps.mjs` | 批量把宿主核心包从 dependencies 挪进 peerDependencies；默认 dry-run，`--apply` 才落盘并备份 |
-| `scripts/fleet-sweep.mjs` | 集群批量治理与巡检，输出矩阵看板与 JSON 报告；`--apply-compat` 批量写账本前先备份，`--pr-ready` 筛出可安全提 PR 的插件（APP 按 `app.asar` 捆绑包判定） |
+| `scripts/fix-peer-deps.mjs` | 批量把宿主核心包从 dependencies 挪进 peerDependencies（`--installed` 自动过滤核心库与非插件传递依赖）；默认 dry-run，`--apply` 才落盘并备份 |
+| `scripts/fleet-sweep.mjs` | 集群批量治理与巡检，输出矩阵看板与 JSON 报告；自动排除 `tmp/` 与 `fixtures/`，支持 `--profile` 按环境筛选与 `--dedupe` 真实目录去重；`--apply-compat` 批量写账本前先备份，`--pr-ready` 筛出可安全提 PR 的插件（APP 按 `app.asar` 捆绑包判定） |
 | `scripts/log-doctor.mjs` | 一键解析 `~/.dsh/logs/` 的宿主故障（startup 头部/失败插件/等待服务/信号汇总） |
 | `scripts/sync-skill.mjs` | 把技能面同步到下游技能目录，`--check` 查漂移 |
 | `scripts/self-test.mjs` | 自检 |
