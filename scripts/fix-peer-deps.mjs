@@ -36,7 +36,23 @@ function parseArgs(argv) {
   return out
 }
 
-/** 列出本机各 profile 下已安装的插件目录（含 scoped 包）。 */
+const CORE_PEER_SET = new Set(PEER_ONLY_PACKAGES)
+
+/**
+ * 判断 node_modules 里的包是否为 DSH 插件而非底层传递依赖。
+ * 2026-11-22 实测：全扫 profiles node_modules 时把 schemastery 自身（dependencies.cosmokit）
+ * 误列为 6 条待修补插件。核心库自身与既无 dsh 字段也非 dsh 插件命名的传递依赖一律跳过。
+ */
+function isInstalledDshPluginPkg(pkg) {
+  if (!pkg || typeof pkg !== 'object') return false
+  const pkgName = String(pkg.name || '')
+  if (CORE_PEER_SET.has(pkgName)) return false
+  if (pkg.dsh != null) return true
+  if (/(?:^|\/)dsh-/.test(pkgName) || /-dsh$/.test(pkgName)) return true
+  return false
+}
+
+/** 列出本机各 profile 下已安装的插件目录（含 scoped 包，过滤底层传递依赖）。 */
 function listInstalledPluginDirs() {
   const profilesRoot = process.env.DSH_PFA_PROFILES_ROOT || path.join(process.env.HOME || '', '.dsh', 'profiles')
   const out = []
@@ -60,7 +76,15 @@ function listInstalledPluginDirs() {
           walk(full, depth + 1)
           continue
         }
-        if (fs.existsSync(path.join(full, 'package.json'))) out.push({ dir: full, profile, name: e.name })
+        const pkgFile = path.join(full, 'package.json')
+        if (!fs.existsSync(pkgFile)) continue
+        try {
+          const pkg = JSON.parse(fs.readFileSync(pkgFile, 'utf8'))
+          if (!isInstalledDshPluginPkg(pkg)) continue
+        } catch {
+          // package.json 损坏时保留给后续 planOne 报 unreadable
+        }
+        out.push({ dir: full, profile, name: e.name })
       }
     }
     walk(nm, 0)

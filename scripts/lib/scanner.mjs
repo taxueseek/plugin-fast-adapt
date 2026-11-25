@@ -528,20 +528,48 @@ export function isDshPackage(name) {
 // dsh-image-gen 实录）。
 export const isDshHostPackage = (name) => name === '@deepseek-ai/dsh' || name.startsWith('@deepseek-ai/dsh-')
 
+// 从 dsh.compatibility / engines.dsh 提取兼容基线版本：
+// 1. 优先取 dsh.compatibility.dshReleases 中标记为 compatible 的最高已验证版本
+//    （例如 argo-dsh 已验证到 0.2.2-rc.5，在 0.2.3-alpha.2 宿主下窗口应为 0.2.2-rc.5 → 0.2.3-alpha.2，
+//    而不是因缺少 @deepseek-ai/dsh peer 而坍缩成 0.2.3-alpha.2 → 0.2.3-alpha.2 零宽窗口）。
+// 2. 其次取 dsh.compatibility.dsh 或 engines.dsh 范围的下限。
+function compatFloor(compatibility = null, engines = null) {
+  if (compatibility && typeof compatibility === 'object') {
+    const releases = compatibility.dshReleases
+    if (releases && typeof releases === 'object') {
+      const verified = Object.entries(releases)
+        .filter(([, compat]) => compat === 'compatible' || compat === true)
+        .map(([ver]) => parseVersion(ver))
+        .filter(Boolean)
+        .sort(compareVersions)
+      if (verified.length) return verified[verified.length - 1].raw
+    }
+    const compatRange = peerFloor(compatibility.dsh)
+    if (compatRange) return compatRange
+  }
+  if (engines && typeof engines === 'object') {
+    const engineRange = peerFloor(engines.dsh)
+    if (engineRange) return engineRange
+  }
+  return null
+}
+
 // 扫描窗口：起点取插件在宿主包上声明的 peer 下限（适配走廊 (floor, target]），
-// 终点由调用方给（--target 或宿主版本）。来源三档：flag（--from 显式指定）
-// > peer（宿主包 peer 下限）> host（宿主当前版本）。
+// 终点由调用方给（--target 或宿主版本）。来源四档：flag（--from 显式指定）
+// > peer（宿主包 peer 下限）> compat（dsh.compatibility.dshReleases 最高兼容版或范围下限）
+// > host（宿主当前版本）。
 // 倒挂（起点高于终点）说明声明或输入有误，回退宿主版本并在 fallback 留痕——
 // 不静默，否则下游只看到「无指南根或无窗口」却不知道为什么。
-export function computeWindow({ peers = {}, hostVersion = null, from = null, target = null }) {
+export function computeWindow({ peers = {}, compatibility = null, engines = null, hostVersion = null, from = null, target = null }) {
   const floors = Object.entries(peers)
     .filter(([name]) => isDshHostPackage(name))
     .map(([, range]) => peerFloor(range))
     .filter(Boolean)
     .map((v) => parseVersion(v))
     .sort(compareVersions)
-  let local = from || floors[0]?.raw || hostVersion
-  let source = from ? 'flag' : floors.length ? 'peer' : 'host'
+  const compatVer = compatFloor(compatibility, engines)
+  let local = from || floors[0]?.raw || compatVer || hostVersion
+  let source = from ? 'flag' : floors.length ? 'peer' : compatVer ? 'compat' : 'host'
   let fallback = null
   if (local && target && compareVersions(local, target) > 0) {
     fallback = { rejectedFrom: local, to: hostVersion, reason: '窗口倒挂（起点高于终点），回退宿主版本' }

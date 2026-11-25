@@ -7,6 +7,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { test, tmpPluginDir } from './harness.mjs'
 import { auditPlugin, peerPatchFor, compatPatchFor } from '../plugin-audit.mjs'
+import { computeWindow } from '../lib/scanner.mjs'
 import { cleanGitEnv } from '../lib/proc-env.mjs'
 
 const SCRIPTS = path.resolve(import.meta.dirname, '..')
@@ -397,4 +398,71 @@ test('方案 B 形态判定：不含 tsconfig 的安装副本 typecheck 判 skip
   assert.strictEqual(report.typecheck.status, 'skipped', '安装副本不含 tsconfig 应判 skipped，不是 fail')
   assert.match(report.typecheck.reason, /tsconfig/, 'reason 应点明形态原因')
   assert.ok(report.typecheck.hint, '应给出「这条不是构建失败」的说明，避免误读成构建红')
+})
+
+test('computeWindow：无宿主 peer 时从 dsh.compatibility.dshReleases 最高兼容版推导窗口起点', () => {
+  const w = computeWindow({
+    peers: {},
+    compatibility: {
+      dsh: '^0.2.0-rc.1 || ^0.2.2-0',
+      dshReleases: { '0.2.2-rc.1': 'compatible', '0.2.2-rc.5': 'compatible' },
+    },
+    hostVersion: '0.2.3-alpha.2',
+    target: '0.2.3-alpha.2',
+  })
+  assert.strictEqual(w.local, '0.2.2-rc.5', '应取 dshReleases 最高已验证兼容版本')
+  assert.strictEqual(w.target, '0.2.3-alpha.2')
+  assert.strictEqual(w.source, 'compat')
+  assert.strictEqual(w.fallback, null)
+})
+
+test('run.mjs：纯 JS 插件无 tsconfig 时执行不依赖 tsc 的 typecheck/check，--run-tests 执行自有单测', () => {
+  const dir = tmpPluginDir('plan-b-pure-js-check')
+  fs.writeFileSync(
+    path.join(dir, 'package.json'),
+    JSON.stringify({
+      name: 't-pure-js-check',
+      version: '1.0.0',
+      type: 'module',
+      main: './index.js',
+      scripts: {
+        check: 'node --check index.js',
+        typecheck: 'npm run check',
+        test: 'node -e "process.exit(0)"',
+      },
+    }),
+  )
+  fs.writeFileSync(path.join(dir, 'index.js'), 'export const name = "t-pure-js-check"\nexport function apply() {}\n')
+
+  const out = execFileSync(
+    process.execPath,
+    [path.join(SCRIPTS, 'run.mjs'), dir, '--offline', '--no-smoke', '--no-log', '--run-tests', '--target', '0.2.2-rc.5'],
+    { encoding: 'utf8' },
+  )
+  const report = JSON.parse(out.slice(0, out.lastIndexOf('}') + 1))
+  assert.strictEqual(report.typecheck.status, 'ok', '不依赖 tsc 的纯 JS typecheck/check 应执行通过')
+  assert.strictEqual(report.tests.status, 'ok', '--run-tests 应执行插件自带 npm test 并通过')
+})
+
+test('run.mjs --compact：priorityCounts 真实透传 audit 计数，不再恒为全 0', () => {
+  const dir = tmpPluginDir('plan-b-compact-counts')
+  fs.writeFileSync(
+    path.join(dir, 'package.json'),
+    JSON.stringify({ name: 't-compact-counts', version: '1.0.0', type: 'module', main: './index.js', dsh: { bundle: {} } }),
+  )
+  // 触发一条性能 P1（生产代码 readFileSync）
+  fs.writeFileSync(
+    path.join(dir, 'index.js'),
+    'import fs from "node:fs"\nexport const name = "t-compact-counts"\nexport function apply() { return fs.readFileSync("a.txt", "utf8") }\n',
+  )
+
+  const out = execFileSync(
+    process.execPath,
+    [path.join(SCRIPTS, 'run.mjs'), dir, '--offline', '--no-smoke', '--no-typecheck', '--no-log', '--compact', '--target', '0.2.2-rc.5'],
+    { encoding: 'utf8' },
+  )
+  const parsed = JSON.parse(out)
+  const p1Blockers = parsed.blockers.filter((b) => b.source === 'audit' && b.priority === 'P1').length
+  assert.ok(p1Blockers >= 1, '应检出至少 1 条 audit P1')
+  assert.strictEqual(parsed.priorityCounts.P1, p1Blockers, 'compact priorityCounts.P1 应与 audit P1 命中数一致')
 })

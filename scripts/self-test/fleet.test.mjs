@@ -730,3 +730,48 @@ test('发现面收口：宿主日志点名、patch 条目没有的插件补成 H
   )
   assert.deepStrictEqual(items2, [], `目录同一性去重（日志点名 ↔ patch 挂载名不同名）: ${JSON.stringify(items2.map((i) => i.name))}`)
 })
+
+test('discoverPlugins：工作区扫描跳过 tmp 与 fixtures 测试夹具目录', () => {
+  const ws = tmpPluginDir('fleet-skip-tmp')
+  const realDir = path.join(ws, 'my-plugin')
+  const tmpEval = path.join(ws, 'tmp', 'eval-plugin')
+  const fixtureDir = path.join(ws, 'fixtures', 'bad-plugin')
+  for (const d of [realDir, tmpEval, fixtureDir]) {
+    fs.mkdirSync(d, { recursive: true })
+    fs.writeFileSync(path.join(d, 'package.json'), JSON.stringify({ name: path.basename(d), version: '1.0.0', dsh: {} }))
+  }
+  const found = discoverPlugins([ws])
+  assert.ok(found.includes(realDir), '正常插件目录应被发现')
+  assert.ok(!found.includes(tmpEval), 'tmp/ 下的测试夹具不得混入工作区扫描')
+  assert.ok(!found.includes(fixtureDir), 'fixtures/ 下的夹具不得混入工作区扫描')
+})
+
+test('fix-peer-deps --installed：过滤核心库 schemastery 等非 DSH 插件传递依赖', () => {
+  const fakeProfiles = tmpPluginDir('fix-peer-filter-profiles')
+  const nm = path.join(fakeProfiles, 'web', 'node_modules')
+  const coreLib = path.join(nm, 'schemastery')
+  const pluginDir = path.join(nm, 'dsh-sample-plugin')
+  fs.mkdirSync(coreLib, { recursive: true })
+  fs.mkdirSync(pluginDir, { recursive: true })
+  fs.writeFileSync(
+    path.join(coreLib, 'package.json'),
+    JSON.stringify({ name: 'schemastery', version: '3.19.0', dependencies: { cosmokit: '^1.8.1' } }),
+  )
+  fs.writeFileSync(
+    path.join(pluginDir, 'package.json'),
+    JSON.stringify({ name: 'dsh-sample-plugin', version: '1.0.0', dsh: {}, dependencies: { '@deepseek-ai/schemastery': '^3.19.0' } }),
+  )
+
+  let stdout = ''
+  try {
+    stdout = execFileSync(process.execPath, [path.join(SCRIPTS, 'fix-peer-deps.mjs'), '--installed', '--json'], {
+      encoding: 'utf8',
+      env: { ...process.env, DSH_PFA_PROFILES_ROOT: fakeProfiles },
+    })
+  } catch (err) {
+    stdout = err.stdout || ''
+  }
+  const parsed = JSON.parse(stdout)
+  assert.strictEqual(parsed.fixable, 1, '仅应命中真正的 DSH 插件')
+  assert.strictEqual(parsed.results[0].name, 'dsh-sample-plugin')
+})

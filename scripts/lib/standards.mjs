@@ -225,9 +225,23 @@ export function scanStandards(pluginDir, { files = null, entryFile = null } = {}
     }
 
     // 规则 4：跨包相对 import / 绝对路径 import
+    // 2026-11-25 实测（@taxueseek/argo-dsh）：浏览器客户端文件通过插件自注册的 HTTP 静态路由加载
+    // 同源 ESM 模块（如 import('/argo/workbench-client.js')、import ... from '/argo/workbench-md.js'）
+    // 是合法的浏览器根相对 URL，并非绑死本机目录的绝对文件系统路径；
+    // 只有命中已知本机文件系统根前缀、含源码/包树段（/src/、/packages/、/node_modules/），
+    // 或出现在非客户端文件里的 '/' 开头 import 才判定为绝对路径违规。
+    const isClientFile = /(?:^|\/)(?:client|web|ui)(?:\/|[-_.])|[-_.]client\.(?:m?js|cjs|tsx?)$/i.test(file)
+    const isOsAbsPath = (src) =>
+      /^\/(?:Users|home|root|tmp|var|private|opt|etc|usr|Volumes|mnt|data|srv|proc|sys|Applications|Library|System|abs|workspace|workspaces)\//.test(src) ||
+      /(?:^|\/)(?:src|packages|node_modules)\//.test(src)
+    const isBrowserStaticRoute = (src) =>
+      isClientFile && !isOsAbsPath(src) && /^\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)+$/.test(src)
+
     for (const imp of collectImportSources(code, mask, lineOf)) {
       if (imp.source.startsWith('/')) {
-        push('cross-package-relative-import', file, imp.line, { evidence: imp.source })
+        if (!isBrowserStaticRoute(imp.source)) {
+          push('cross-package-relative-import', file, imp.line, { evidence: imp.source })
+        }
         continue
       }
       if (!imp.source.startsWith('..')) continue

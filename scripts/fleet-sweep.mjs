@@ -34,6 +34,8 @@ function parseArgs(argv) {
   let json = false
   let strict = false
   let target = null
+  let profile = null
+  let dedupe = false
   let filterWeb = false
   let filterApp = false
   let filterRunning = false
@@ -59,9 +61,11 @@ function parseArgs(argv) {
     } else if (a === '--include-official') includeOfficial = true
     else if (a === '--pr-ready') prReady = true
     else if (a === '--offline') offline = true
+    else if (a === '--dedupe') dedupe = true
     else if (a === '--json') json = true
     else if (a === '--strict') strict = true
     else if (a === '--target') target = argv[++i] ?? null
+    else if (a === '--profile') profile = argv[++i] ?? null
     else if (a === '--help' || a === '-h') {
       process.stdout.write(
         '用法: node scripts/fleet-sweep.mjs [目录...] [选项]\n\n' +
@@ -69,6 +73,8 @@ function parseArgs(argv) {
           '  [目录...]          扫描指定工作区目录（默认同时扫描当前工作区与安装环境）\n' +
           '  --installed        仅扫描本机 DSH profiles 中已安装的插件\n' +
           '  --workspace        仅扫描本地工作区源码插件\n' +
+          '  --profile <名称>   仅筛选指定 profile（如 web / desktop / desktop-diag2）\n' +
+          '  --dedupe           按真实目录合并同源多 profile 重复条目\n' +
           '  --web              仅筛选 Web 平台插件\n' +
           '  --app / --desktop  仅筛选 Desktop (APP) 桌面端插件\n' +
           '  --running          仅筛选当前正在活跃运行中的插件\n' +
@@ -95,6 +101,8 @@ function parseArgs(argv) {
     json,
     strict,
     target,
+    profile,
+    dedupe,
     filterWeb,
     filterApp,
     filterRunning,
@@ -138,6 +146,9 @@ export function checkBuild(pluginRoot) {
   return { ok: true, status: BUILD_STATUS.OK, entryRel }
 }
 
+// 工作区默认忽略的临时与测试夹具目录（2026-11-22 实测：tmp/eval-plugin 混入故障高危清单）
+const WORKSPACE_SKIP_DIRS = new Set(['node_modules', 'tmp', 'temp', 'fixtures', '__fixtures__', 'testdata'])
+
 // 探测工作区候选插件
 export function discoverWorkspacePlugins(roots = [process.cwd()]) {
   const candidates = new Set()
@@ -151,7 +162,7 @@ export function discoverWorkspacePlugins(roots = [process.cwd()]) {
     try {
       const entries = fs.readdirSync(root, { withFileTypes: true })
       for (const e of entries) {
-        if (!e.isDirectory() || e.name.startsWith('.') || e.name === 'node_modules') continue
+        if (!e.isDirectory() || e.name.startsWith('.') || WORKSPACE_SKIP_DIRS.has(e.name)) continue
         const sub = path.join(root, e.name)
         const subPkg = path.join(sub, 'package.json')
         if (fs.existsSync(subPkg)) {
@@ -162,7 +173,7 @@ export function discoverWorkspacePlugins(roots = [process.cwd()]) {
         }
         if (e.name === 'packages' || e.name === 'plugins') {
           for (const subEntry of fs.readdirSync(sub, { withFileTypes: true })) {
-            if (!subEntry.isDirectory() || subEntry.name.startsWith('.')) continue
+            if (!subEntry.isDirectory() || subEntry.name.startsWith('.') || WORKSPACE_SKIP_DIRS.has(subEntry.name)) continue
             const leaf = path.join(sub, subEntry.name)
             if (fs.existsSync(path.join(leaf, 'package.json'))) candidates.add(leaf)
           }
@@ -170,7 +181,7 @@ export function discoverWorkspacePlugins(roots = [process.cwd()]) {
           // 兼容类似 Deepseek/ 这种工作区分组目录：仅在子目录自身不是包时下探一层 DSH 插件
           try {
             for (const subEntry of fs.readdirSync(sub, { withFileTypes: true })) {
-              if (!subEntry.isDirectory() || subEntry.name.startsWith('.') || subEntry.name === 'node_modules') continue
+              if (!subEntry.isDirectory() || subEntry.name.startsWith('.') || WORKSPACE_SKIP_DIRS.has(subEntry.name)) continue
               const leaf = path.join(sub, subEntry.name)
               const leafPkg = readPackageJson(leaf)
               if (leafPkg && isPluginForm(leafPkg)) candidates.add(leaf)
@@ -795,11 +806,38 @@ export async function runFleetSweep(argv = process.argv.slice(2)) {
   )
 
   // 条件筛选过滤
+  if (args.profile) items = items.filter((x) => x.profile === args.profile)
   if (args.filterWeb) items = items.filter((x) => x.platform === 'web')
   if (args.filterApp) items = items.filter((x) => x.platform === 'app')
   if (args.filterRunning) items = items.filter((x) => x.state === LIFECYCLE_STATE.RUNNING)
   if (args.filterDisabled) items = items.filter((x) => x.state === LIFECYCLE_STATE.DISABLED)
   if (args.workspaceOnly) items = items.filter((x) => x.sourceType === 'WORKSPACE')
+
+  // --dedupe：按真实目录（无目录时按包名+平台）合并多 profile 重复条目，保留最高优先级状态
+  if (args.dedupe) {
+    const stateRank = {
+      [LIFECYCLE_STATE.RUNNING]: 4,
+      [LIFECYCLE_STATE.ENABLED]: 3,
+      [LIFECYCLE_STATE.WORKSPACE]: 2,
+      [LIFECYCLE_STATE.DISABLED]: 1,
+    }
+    const merged = new Map()
+    for (const item of items) {
+      const key = item.dir ? realpathOf(item.dir) : `${item.name}::${item.platform}`
+      const existing = merged.get(key)
+      if (!existing) {
+        merged.set(key, { ...item, profiles: item.profile ? [item.profile] : [] })
+        continue
+      }
+      if (item.profile && !existing.profiles.includes(item.profile)) {
+        existing.profiles.push(item.profile)
+      }
+      if ((stateRank[item.state] ?? 0) > (stateRank[existing.state] ?? 0)) {
+        merged.set(key, { ...item, profiles: existing.profiles })
+      }
+    }
+    items = [...merged.values()]
+  }
 
   // 分类统计
   const total = items.length
@@ -938,9 +976,18 @@ const printSection = (title, list) => {
   process.stdout.write(`【健康结论】健康: ${healthy} | 需优化: ${warning} | 故障高危: ${broken}\n`)
 
   if (broken > 0) {
-    process.stdout.write(`\n下一步指路: 存在 ${broken} 个故障插件，请使用单兵深度适配进行修复:\n`)
-    for (const r of items.filter((x) => x.healthStatus === HEALTH_STATUS.BROKEN && x.dir)) {
-      process.stdout.write(`  node scripts/run.mjs ${r.dir}\n`)
+    const seenBrokenDirs = new Set()
+    const uniqueBroken = items.filter((x) => {
+      if (x.healthStatus !== HEALTH_STATUS.BROKEN || !x.dir) return false
+      const key = realpathOf(x.dir)
+      if (seenBrokenDirs.has(key)) return false
+      seenBrokenDirs.add(key)
+      return true
+    })
+    process.stdout.write(`\n下一步指路: 存在 ${broken} 个故障条目（去重后 ${uniqueBroken.length} 个独立目录），请使用单兵深度适配进行修复:\n`)
+    for (const r of uniqueBroken) {
+      const profArg = r.profile && r.profile !== 'workspace' ? ` --profile ${r.profile}` : ''
+      process.stdout.write(`  node scripts/run.mjs ${r.dir}${profArg}\n`)
     }
   }
 

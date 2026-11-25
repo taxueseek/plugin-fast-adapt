@@ -60,11 +60,11 @@ let currentToolVersion = '0.2.1'
   if (toolPkg?.version) currentToolVersion = toolPkg.version
 }
 
-// 只有 --target/--from 带值，其余都是布尔开关。旧实现按「前一个参数不以 -- 开头」
+// 只有 --target/--from/--profile 带值，其余都是布尔开关。旧实现按「前一个参数不以 -- 开头」
 // 认插件目录，`run.mjs --offline <目录>` 会把目录当成 --offline 的值而报用法错误。
-const VALUE_FLAGS = new Set(['target', 'from'])
-const BOOLEAN_FLAGS = new Set(['offline', 'no-clone', 'no-smoke', 'no-typecheck', 'no-log', 'real-smoke', 'strict', 'help', 'force', 'check-upstream', 'compact'])
-const USAGE = '用法: node scripts/run.mjs <插件目录> [--target <版本>] [--from <版本>] [--no-clone] [--no-smoke] [--no-typecheck] [--no-log] [--real-smoke] [--offline] [--strict] [--force] [--check-upstream] [--compact]'
+const VALUE_FLAGS = new Set(['target', 'from', 'profile'])
+const BOOLEAN_FLAGS = new Set(['offline', 'no-clone', 'no-smoke', 'no-typecheck', 'no-log', 'real-smoke', 'strict', 'help', 'force', 'check-upstream', 'compact', 'run-tests'])
+const USAGE = '用法: node scripts/run.mjs <插件目录> [--target <版本>] [--from <版本>] [--profile <web|desktop>] [--no-clone] [--no-smoke] [--no-typecheck] [--no-log] [--real-smoke] [--run-tests] [--offline] [--strict] [--force] [--check-upstream] [--compact]'
 
 function parseArgv(argv) {
   const positional = []
@@ -187,15 +187,30 @@ function realSmokeEnvGap(tail) {
   return null
 }
 
+// 判断 script 命令是否依赖 TypeScript 编译器 / tsconfig.json。
+// 2026-11-25 实测（@taxueseek/argo-dsh）：纯 JS 插件声明 "typecheck": "npm run check"
+// （内层为 node --check），不含 tsconfig.json 却完全可执行；只有调用 tsc/tsgo/vue-tsc
+// 或引用 tsconfig 的脚本才因缺失 tsconfig.json 而判 skipped（保护 typecheck-installed-copy 夹具）。
+function scriptRequiresTsconfig(scriptCmd, allScripts = {}, depth = 0) {
+  if (!scriptCmd || typeof scriptCmd !== 'string' || depth > 3) return false
+  if (/\b(?:tsc|tsgo|vue-tsc)\b|tsconfig/i.test(scriptCmd)) return true
+  const subRef = scriptCmd.match(/\b(?:npm|pnpm|yarn)\s+(?:run\s+)?([A-Za-z0-9:_-]+)/)
+  if (subRef && allScripts && typeof allScripts[subRef[1]] === 'string') {
+    return scriptRequiresTsconfig(allScripts[subRef[1]], allScripts, depth + 1)
+  }
+  return false
+}
+
 function runTypecheck(pluginRoot, stages) {
   const pkg = readPackageJson(pluginRoot)
   if (!pkg) {
     stages.typecheck = { status: TYPECHECK_STATUS.SKIPPED, reason: 'package.json 不可读' }
     return
   }
-  const script = pkg.scripts?.typecheck
+  const scriptName = pkg.scripts?.typecheck ? 'typecheck' : pkg.scripts?.check ? 'check' : null
+  const script = scriptName ? pkg.scripts[scriptName] : null
   if (!script) {
-    stages.typecheck = { status: TYPECHECK_STATUS.SKIPPED, reason: '未声明 typecheck script' }
+    stages.typecheck = { status: TYPECHECK_STATUS.SKIPPED, reason: '未声明 typecheck 或 check script' }
     return
   }
   // 安装副本形态：package.json 的 typecheck 脚本引用 tsconfig，但 npm pack 的 files
@@ -203,9 +218,10 @@ function runTypecheck(pluginRoot, stages) {
   // 于是 tsc 报 TS5058「path does not exist」——这不是插件构建失败，是形态不适用。
   // 判 fail 会给出退出码 2，把人推去修一个不存在的构建问题；本机 47 个有目录的
   // 条目里 44 个是这种形态，历史至少 2 条真实假失败（dsh-workbuddy-connect）。
-  if (!fs.existsSync(path.join(pluginRoot, 'tsconfig.json'))) {
+  if (scriptRequiresTsconfig(script, pkg.scripts) && !fs.existsSync(path.join(pluginRoot, 'tsconfig.json'))) {
     stages.typecheck = {
       status: TYPECHECK_STATUS.SKIPPED,
+      script: scriptName,
       reason: '目标不含 tsconfig.json，源码级构建验证不适用（安装副本常见：files 白名单不含 tsconfig）',
       durationMs: 0,
       hint: '这条不是构建失败。要验构建请指向插件源码仓（含 tsconfig 的那份），或把 tsconfig 加进 package.json 的 files。',
@@ -215,13 +231,13 @@ function runTypecheck(pluginRoot, stages) {
   const runner = fs.existsSync(path.join(pluginRoot, 'pnpm-lock.yaml')) ? 'pnpm' : 'npm'
   const started = Date.now()
   try {
-    const out = execFileSync(runner, ['run', 'typecheck'], {
+    const out = execFileSync(runner, ['run', scriptName], {
       cwd: pluginRoot,
       encoding: 'utf8',
       shell: SPAWN_SHELL,
       maxBuffer: 32 * 1024 * 1024,
     })
-    stages.typecheck = { status: TYPECHECK_STATUS.OK, runner, durationMs: Date.now() - started, tail: out.split('\n').slice(-5).join('\n') }
+    stages.typecheck = { status: TYPECHECK_STATUS.OK, script: scriptName, runner, durationMs: Date.now() - started, tail: out.split('\n').slice(-5).join('\n') }
   } catch (err) {
     const missing = toolchainMissing(runner, err)
     stages.typecheck = missing
@@ -229,7 +245,8 @@ function runTypecheck(pluginRoot, stages) {
           // 工具链缺失不是插件的问题：单列为 skipped，不判 fail，
           // 否则「本机没装 pnpm」会被当成「插件编译不过」，把人推去修不存在的构建问题。
           status: TYPECHECK_STATUS.SKIPPED,
-          reason: `${runner} 不在 PATH，typecheck 无法执行`,
+          script: scriptName,
+          reason: `${runner} 不在 PATH，${scriptName} 无法执行`,
           runner,
           durationMs: Date.now() - started,
           tail: String(err.stdout || err.message || '').split('\n').slice(-12).join('\n'),
@@ -237,10 +254,46 @@ function runTypecheck(pluginRoot, stages) {
         }
       : {
           status: TYPECHECK_STATUS.FAIL,
+          script: scriptName,
           runner,
           durationMs: Date.now() - started,
           tail: String(err.stdout || err.message || '').split('\n').slice(-12).join('\n'),
-          hint: 'typecheck 红说明插件当前连编译都过不了——适配前先修构建（taxue-dsh-artisan 0.3.1 发布态即红，本轮实测）。',
+          hint: `${scriptName} 红说明插件当前连语法或编译都过不了——适配前先修构建（taxue-dsh-artisan 0.3.1 发布态即红，本轮实测）。`,
+        }
+  }
+}
+
+function runPluginTests(pluginRoot, stages) {
+  const pkg = readPackageJson(pluginRoot)
+  if (!pkg?.scripts?.test) {
+    stages.tests = { status: TYPECHECK_STATUS.SKIPPED, reason: '未声明 test script' }
+    return
+  }
+  const runner = fs.existsSync(path.join(pluginRoot, 'pnpm-lock.yaml')) ? 'pnpm' : 'npm'
+  const started = Date.now()
+  try {
+    const out = execFileSync(runner, ['test'], {
+      cwd: pluginRoot,
+      encoding: 'utf8',
+      shell: SPAWN_SHELL,
+      maxBuffer: 32 * 1024 * 1024,
+      timeout: 120_000,
+    })
+    stages.tests = { status: TYPECHECK_STATUS.OK, runner, durationMs: Date.now() - started, tail: out.split('\n').slice(-8).join('\n') }
+  } catch (err) {
+    const missing = toolchainMissing(runner, err)
+    stages.tests = missing
+      ? {
+          status: TYPECHECK_STATUS.SKIPPED,
+          reason: `${runner} 不在 PATH，test 无法执行`,
+          runner,
+          durationMs: Date.now() - started,
+        }
+      : {
+          status: TYPECHECK_STATUS.FAIL,
+          runner,
+          durationMs: Date.now() - started,
+          tail: String(err.stdout || err.stderr || err.message || '').split('\n').slice(-12).join('\n'),
         }
   }
 }
@@ -369,7 +422,16 @@ stages.env = {
   ghostHost: env.ghostHost ?? null,
   falseGreen: env.falseGreen ?? null,
 }
-const hostVersion = env.globalDsh?.version ?? null
+const selectedProfile = valueOf('profile')
+const isDesktopProfile = Boolean(selectedProfile && /^(?:desktop|app)(?:$|[-_])/i.test(selectedProfile))
+const hostVersion = isDesktopProfile && env.desktopApp?.hostVersion
+  ? env.desktopApp.hostVersion
+  : env.globalDsh?.version ?? null
+const hostSource = isDesktopProfile && env.desktopApp?.hostVersion ? 'desktop-app' : 'global-npm'
+if (selectedProfile) {
+  stages.env.selectedProfile = selectedProfile
+  stages.env.hostSource = hostSource
+}
 if (env.desktopApp?.mismatch) {
   stages.env.desktopMismatch = env.desktopApp.mismatch
 }
@@ -384,7 +446,7 @@ if ((env.overlayFindings?.length ?? 0) > 0) {
 // ── 账本守卫：三元版本匹配 (Plugin, Host, Skill) 且源码无修改时秒级稳态直通 ─────
 const pluginName = pluginPkg?.name ?? null
 const lastRun = pluginName ? getLatestSuccessfulRun(pluginName) : null
-const isCustomRun = Boolean(valueOf('from') || valueOf('target') || flag('real-smoke') || flag('force') || flag('strict'))
+const isCustomRun = Boolean(valueOf('from') || valueOf('target') || selectedProfile || flag('real-smoke') || flag('run-tests') || flag('force') || flag('strict'))
 
 if (lastRun && !isCustomRun && hostVersion && pluginPkg?.version) {
   const isHostSame = lastRun.hostVersion === hostVersion
@@ -508,6 +570,8 @@ if (checkUpstream && !offline && !pluginUpstream) {
 // 0.2.1-rc.3 倒挂，扫描静默跳过还记满分）。
 const windowInfo = computeWindow({
   peers: pluginPkg.peerDependencies || {},
+  compatibility: pluginPkg.dsh?.compatibility || null,
+  engines: pluginPkg.engines || null,
   hostVersion,
   from: valueOf('from'),
   target: explicitTarget || hostVersion || officialTarget,
@@ -629,8 +693,11 @@ if (!buildCheck.ok) {
   smokeResult = runStep('quick-smoke.mjs', [pluginDir], 'smoke', stages)
 }
 
-// 7. typecheck（默认开；执行插件自有的 typecheck script，与冒烟同信任级）
+// 7. typecheck（默认开；执行插件自有的 typecheck 或 check script，与冒烟同信任级）
 if (!flag('no-typecheck')) runTypecheck(pluginDir, stages)
+
+// 7.5 插件自带单测（默认关；--run-tests 显式启用）
+if (flag('run-tests')) runPluginTests(pluginDir, stages)
 
 // 8. 真冷启动（默认关；--real-smoke 显式启用，装进干净 profile 真启动宿主）
 const realSmoke = flag('real-smoke') ? runRealSmoke(pluginDir) : null
@@ -655,7 +722,13 @@ const report = {
   time: new Date().toISOString(),
   plugin: { name: pluginPkg.name, version: pluginPkg.version, dir: pluginDir },
   tool: { version: toolVersion },
-  host: { version: hostVersion, officialTarget, versionVerdict: versionResult?.resolution?.verdict ?? null, versionReason: versionResult?.resolution?.reason ?? null },
+  host: {
+    version: hostVersion,
+    ...(selectedProfile ? { profile: selectedProfile, source: hostSource } : {}),
+    officialTarget,
+    versionVerdict: versionResult?.resolution?.verdict ?? null,
+    versionReason: versionResult?.resolution?.reason ?? null,
+  },
   window: { local: windowLocal, target: windowTarget, source: windowInfo.source, fallback: windowInfo.fallback },
   env: stages.env,
   version: versionResult?.resolution ?? null,
@@ -688,6 +761,7 @@ const report = {
     ? {
         scores: auditReport.scores,
         overallScore: auditReport.overallScore,
+        priorityCounts: auditReport.priorityCounts,
         findings: auditReport.findings,
         versionAdvice: auditReport.versionAdvice ?? null,
         peerPatch: auditReport.peerPatch ?? null,
@@ -696,6 +770,7 @@ const report = {
     : null,
   smoke: projectSmokeReport(smokeResult, stages.smoke),
   typecheck: stages.typecheck ?? { skipped: true },
+  ...(stages.tests ? { tests: stages.tests } : {}),
   realSmoke,
   durationMs,
 }
@@ -703,8 +778,8 @@ const report = {
 // 汇总结论（给人看的一屏话）
 const criticalOrHigh = report.scan?.criticalOrHigh ?? 0
 const verdictLines = []
-verdictLines.push(`插件 ${pluginPkg.name}@${pluginPkg.version} × 宿主 ${hostVersion ?? '未知'}（窗口 ${windowLocal} → ${windowTarget}）`)
-if (report.env?.desktopMismatch) verdictLines.push(`⚠ ${report.env.desktopMismatch}`)
+verdictLines.push(`插件 ${pluginPkg.name}@${pluginPkg.version} × 宿主 ${hostVersion ?? '未知'}${selectedProfile ? ` [profile:${selectedProfile}]` : ''}（窗口 ${windowLocal} → ${windowTarget}）`)
+if (report.env?.desktopMismatch && !selectedProfile) verdictLines.push(`⚠ ${report.env.desktopMismatch}`)
 if (report.env?.ghostHost?.verdict === GHOST_HOST_VERDICT.STALE) verdictLines.push(`⚠ 幽灵宿主：${report.env.ghostHost.reason}——先重启宿主，否则改完也验不到`)
 if (pluginUpstream?.upstreamUpdated) {
   verdictLines.push(`⚠ 插件上游已有更新（${pluginUpstream.status}）：${pluginUpstream.reason}——建议先执行 ${pluginUpstream.action || '拉取上游'}，避免重复适配`)
@@ -753,9 +828,14 @@ if (report.smoke?.status === SMOKE_STATUS.ERROR || report.smoke?.success === fal
 } else if (report.smoke?.success != null) {
   verdictLines.push(`冒烟通过（${report.smoke.registeredToolsCount} 工具，${report.smoke.durationMs}ms）`)
 }
-if (report.typecheck?.status === TYPECHECK_STATUS.FAIL) verdictLines.push('typecheck 红——适配前先修构建')
-else if (report.typecheck?.status === TYPECHECK_STATUS.OK) verdictLines.push('typecheck 通过')
+if (report.typecheck?.status === TYPECHECK_STATUS.FAIL) verdictLines.push(`${report.typecheck.script || 'typecheck'} 红——适配前先修构建`)
+else if (report.typecheck?.status === TYPECHECK_STATUS.OK) verdictLines.push(`${report.typecheck.script || 'typecheck'} 通过`)
 else if (report.typecheck?.status === TYPECHECK_STATUS.SKIPPED) verdictLines.push(`typecheck 跳过（${report.typecheck.reason}）`)
+if (report.tests) {
+  if (report.tests.status === TYPECHECK_STATUS.OK) verdictLines.push(`插件单测通过（${report.tests.durationMs}ms）`)
+  else if (report.tests.status === TYPECHECK_STATUS.FAIL) verdictLines.push('⚠ 插件单测失败——看 report.tests.tail')
+  else verdictLines.push(`插件单测跳过（${report.tests.reason}）`)
+}
 if (realSmoke) {
   if (realSmoke.skipped) verdictLines.push(`真冷启动跳过——${realSmoke.reason}`)
   else if (realSmoke.status === REAL_SMOKE_STATUS.OK) verdictLines.push(`真冷启动通过（${realSmoke.durationMs}ms，verify-runtime 四类归因全绿）`)
@@ -771,14 +851,15 @@ if (!flag('no-log')) {
 
 // 失败即指路：退出码 2 的原因各给一句「下一步」，排障路径从读文档变成读输出
 // --strict 额外把「扫描没跑 / 指南没覆盖到目标版本」当失败；默认不加，
-// 保持既有退出码语义（0 干净、2 命中或构建/真冷启动失败）。
+// 保持既有退出码语义（0 干净、2 命中或构建/真冷启动/插件单测失败）。
 const scanUnknown = Boolean(report.scan?.skipped) || report.scan?.coverage?.complete === false
 const strictFail = flag('strict') && scanUnknown
-const exitFail = criticalOrHigh > 0 || report.typecheck?.status === TYPECHECK_STATUS.FAIL || realSmoke?.status === REAL_SMOKE_STATUS.FAIL || strictFail
+const exitFail = criticalOrHigh > 0 || report.typecheck?.status === TYPECHECK_STATUS.FAIL || report.tests?.status === TYPECHECK_STATUS.FAIL || realSmoke?.status === REAL_SMOKE_STATUS.FAIL || strictFail
 const next = []
 if (exitFail) {
   if (criticalOrHigh > 0) next.push('按 scan.findings 的 migration 逐条清命中（evidence 行原文可核对是否误报）')
   if (report.typecheck?.status === TYPECHECK_STATUS.FAIL) next.push('typecheck 红——先修构建（尾部输出在 report.typecheck.tail）')
+  if (report.tests?.status === TYPECHECK_STATUS.FAIL) next.push('插件自带单测失败——先修单测（尾部输出在 report.tests.tail）')
   if (realSmoke?.status === REAL_SMOKE_STATUS.FAIL) next.push('真冷启动失败——realSmoke.tail 有四类归因')
   if (strictFail) {
     next.push(report.scan?.skipped

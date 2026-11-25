@@ -1,0 +1,13 @@
+{
+  "id": "client-route-import",
+  "source": "本机实测 2026-11-25（@taxueseek/argo-dsh client.js 与 workbench-client.js 误报 P1）",
+  "symptom": "浏览器客户端文件通过插件自注册的 HTTP 静态路由加载同源 ESM（/argo/workbench-client.js、/argo/workbench-md.js），被报成「绝对路径 import 绑死本机布局」",
+  "rootCause": "cross-package-relative-import 规则对所有 '/' 开头 import 一律报违规，未区分本机 OS 文件系统绝对路径与浏览器端 origin-relative HTTP 路由",
+  "fix": "客户端文件中不命中 OS 文件系统根前缀且不含 /src/ /packages/ /node_modules/ 的静态路由路径豁免，其余绝对路径继续必报",
+  "check": {
+    "kind": "standards",
+    "args": [],
+    "assert": "findings.filter(f => f.rule === 'cross-package-relative-import').length === 0"
+  },
+  "fingerprint": "standards:cross-package-relative-import:browser-static-route"
+}

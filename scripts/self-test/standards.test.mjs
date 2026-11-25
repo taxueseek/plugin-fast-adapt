@@ -123,6 +123,30 @@ test('规则 cross-package-relative-import：只报跑出包根的相对路径�
 
   const bare = scan([{ file: 'lib/index.js', source: "import { a } from '@deepseek-ai/dsh-util'\n" }])
   assert.strictEqual(bare.findings.filter((f) => f.rule === 'cross-package-relative-import').length, 0, '包名 import 合法')
+
+  const clientRoute = scan([
+    { file: 'dsh/client.js', source: "export const m = () => import('/argo/workbench-client.js')\n" },
+    { file: 'dsh/workbench-client.js', source: "import { CSS } from '/argo/workbench-md.js'\nexport const c = CSS\n" },
+  ])
+  assert.strictEqual(
+    clientRoute.findings.filter((f) => f.rule === 'cross-package-relative-import').length,
+    0,
+    '浏览器客户端 HTTP 静态路由 import 应豁免',
+  )
+
+  const clientOsAbs = scan([{ file: 'dsh/client.js', source: "import { x } from '/Users/dev/secret.js'\n" }])
+  assert.strictEqual(
+    clientOsAbs.findings.filter((f) => f.rule === 'cross-package-relative-import').length,
+    1,
+    '客户端里的本机文件系统绝对路径仍必报',
+  )
+
+  const serverRoute = scan([{ file: 'dsh/index.js', source: "import { x } from '/argo/workbench-md.js'\n" }])
+  assert.strictEqual(
+    serverRoute.findings.filter((f) => f.rule === 'cross-package-relative-import').length,
+    1,
+    '非客户端文件里的 / 开头 import 仍必报',
+  )
 })
 
 test('standardsScore：按分级扣分且不为负', () => {

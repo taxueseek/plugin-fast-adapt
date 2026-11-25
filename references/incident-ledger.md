@@ -29,6 +29,7 @@
 | `typecheck-installed-copy` | 对已安装副本跑 typecheck，`tsc -p tsconfig.json` 报 TS18003/TS5058 被判成构建失败并给退出码 2；安装副本的 `files` 白名单不含 tsconfig，本机 47 个有目录条目里 44 个是这种形态 | 本机实测 2026-11-06（dsh-workbuddy-connect 8 次运行指向已安装副本，2 次 `typecheck=fail`） | `fixtures/typecheck-installed-copy/` |
 | `fastpass-shape-projection` | 账本直通记录被 `run-log list` 显示成「命中=? 体检=? scan=?」、被 doctor 判成「代码侧未核查」，而记录里 `phases.scan` 明明是 `ok`；基线缺结论时 `null` 还会在直通链上自我复制 | 本机实测 2026-11-19 | `fixtures/fastpass-shape-projection/` |
 | `subpath-not-exported` | 插件导入宿主包未在 `package.json#exports` 公开的子路径（如 `@deepseek-ai/dsh-subagent/internal`），包存在检查放过但启动必抛 `ERR_PACKAGE_PATH_NOT_EXPORTED` | 本机实测 2026-11-21（`@linxin666/dsh-agents` 20 次报错） | `fixtures/subpath-not-exported/` |
+| `client-route-import` | 浏览器客户端文件通过插件 HTTP 静态路由导入同源 ESM（如 `/argo/workbench-md.js`），被误报成绑死本机目录的绝对路径 import | 本机实测 2026-11-25（`@taxueseek/argo-dsh` 2 处 P1 误报） | `fixtures/client-route-import/` |
 
 ## F4 场测结论（2026-11-09）
 
