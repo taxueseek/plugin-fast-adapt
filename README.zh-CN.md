@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文 | [日本語](README.ja.md)
 
-[![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D22.13-blue.svg)](package.json) [![外部依赖](https://img.shields.io/badge/外部依赖-0-blue.svg)](#依赖与自检) [![自检](https://img.shields.io/badge/自检-307项断言-brightgreen.svg)](#依赖与自检)
+[![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D22.13-blue.svg)](package.json) [![外部依赖](https://img.shields.io/badge/外部依赖-0-blue.svg)](#依赖与自检) [![自检](https://img.shields.io/badge/自检-313项断言-brightgreen.svg)](#依赖与自检)
 
 > **内置安全防护。** 核心诊断与扫描命令（`env-doctor`、`code-scan`、`plugin-audit`、`log-doctor`、`seams`）严格只读（`run-log` 同为只读，仅 `sanitize --out <file>` 会把脱敏导出写入指定路径）；`env-heal` 默认 dry-run，执行时移入 `~/.dsh/.trash/` 而非直接删除。自动改代码仅限 3 类机械可判定场景，必须显式传入 `--apply` / `--apply-compat` 才写入，且写入前强制备份至 `.pfa-backup/`（已受 `.gitignore` 与发布门禁拦截）。工具绝不修改 DSH 本体或 `~/.dsh` 配置，并默认锚定本地版本、零网络请求。
 
@@ -22,7 +22,7 @@
 | 验证一次改动 | 3600 秒真宿主冷启动 → 毫秒级内存冒烟（支持未构建产物硬拦截与宿主模块软链兜底） |
 | 幽灵宿主 | 磁盘已换新、进程还在跑旧代码时报警（比进程启动时间，不读版本号） |
 | 假绿检测 | `tsconfig` 的 `paths` 指向不存在的 checkout 时报警（本地门禁可能全绿而实际已坏） |
-| 自检 | 307 项断言，离线可跑 |
+| 自检 | 313 项断言，离线可跑 |
 | 外部依赖 | 0（只用 Node 内置模块 + `git`/`npm` 命令） |
 | 跨平台 | 原生支持 macOS、Linux 标准路径、Termux 移动端与容器环境（支持 XDG 规范） |
 | 造插件 | 一条命令出五形态可运行插件，生成即验证 |
@@ -53,7 +53,7 @@ DSH（DeepSeek Harness）是一个「所有功能都以插件形式存在」的 
 - **跨平台与容器自适应**：消除绝对路径硬编码，扩展适配 Linux 发行版标准路径（`/usr/lib/node_modules`）、Termux 移动端（`$PREFIX/lib/node_modules`）与 `npm_config_prefix`，支持环境变量 `DSH_HOST_PATH` / `DSH_LOCATION` 直接覆盖，严格遵循 XDG 缓存规范
 - **验证便宜**：内存级 Cordis 冒烟毫秒到秒级出结果，不用真宿主冷启动；需要真证据时 `--real-smoke` 再补干净 profile 真装真启档
 - **零外部依赖**：只用 Node 内置模块加 `git`/`npm` 命令，没有 TypeScript、没有 AST 库、没有网络请求库
-- **可复现**：307 项自检离线可跑；CI 在 push 和 PR 上跑 ubuntu/macOS/Windows 三平台，打 tag 时另跑发布预检
+- **可复现**：313 项自检离线可跑；CI 在 push 和 PR 上跑 ubuntu/macOS/Windows 三平台，打 tag 时另跑发布预检
 - **不止适配**：`scaffold.mjs` 一条命令生成五形态可运行插件（真基类装载验证），`write-gate.mjs` 写完出「出生证」
 - **静默失败有判据**：`ghostHost` 比对进程启动时间与磁盘变更时间，抓「磁盘新版、内存旧版」；`falseGreen` 抓 `tsconfig` 的 `paths` 指向不存在 checkout 时 TypeScript 的静默回落。两条都只报不判，证据写在输出里
 - **边界诚实**：冒烟通过不等于宿主兼容，这句话写在工具输出里；体检的软指标只透传，不替用户说「合格」
@@ -97,10 +97,13 @@ Claude Code marketplace：
 /plugin install plugin-fast-adapt
 ```
 
-npm（带 `plugin-fast-adapt` 命令，转发到一键编排）：
+npm（提供 `doctor` / `fleet` / `check` / `new` 四个子命令，直接传 `<插件目录>` 仍向下兼容转发到 `run.mjs`）：
 
 ```sh
-npx plugin-fast-adapt <插件目录>
+npx plugin-fast-adapt doctor --brief          # 整机环境与幽灵宿主诊断
+npx plugin-fast-adapt fleet                   # 扫描整机已装插件与工作区，输出健康看板
+npx plugin-fast-adapt check <插件目录>         # 单插件全链路扫描与冒烟
+npx plugin-fast-adapt new <ns>/<name> --form tool  # 一条命令生成可运行插件
 ```
 
 手动安装：
@@ -240,7 +243,7 @@ node scripts/write-gate.mjs <插件目录>   # 出生证：硬门禁自动判，
 自检：
 
 ```sh
-npm test   # node scripts/self-test.mjs，307 项断言
+npm test   # node scripts/self-test.mjs，313 项断言
 ```
 
 开发者建议启用提交前门禁（一次性）：`git config core.hooksPath .githooks`——commit 时自动跑自检，改完真源忘了 sync-skill 在这一刻被拦。
@@ -253,7 +256,7 @@ npm test   # node scripts/self-test.mjs，307 项断言
 
 | 脚本 | 职责 |
 | --- | --- |
-| `scripts/cli.mjs` | npm 入口（`npx plugin-fast-adapt`），转发到 run.mjs |
+| `scripts/cli.mjs` | npm CLI 入口（`npx plugin-fast-adapt doctor\|fleet\|check\|new`），兼容 `<插件目录>` 转发到 run.mjs |
 | `scripts/run.mjs` | 一键编排全流程（环境→定版→指南→扫描→体检→冒烟→typecheck），出统一报告并写本地运行日志；支持 `dshReleases` 兼容窗口推导、`--profile <web\|desktop>` 宿主锚定、纯 JS 插件 `check`/`typecheck` 与 `--run-tests` 单测、`--strict` 与 `--real-smoke` 真冷启动档 |
 | `scripts/run-log.mjs` | 运行日志查看（list/show）、交叉核对（doctor：运行日志×宿主启动日志）与脱敏导出（sanitize） |
 | `scripts/seams.mjs` | 接缝查询：一个包名/API 符号在官方指南锚点表与本机宿主里的双源结论；无显式指南根时优先默认分支受管快照 |

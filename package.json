@@ -1,7 +1,16 @@
 {
   "name": "plugin-fast-adapt",
-  "version": "0.5.4",
+  "version": "0.5.5",
   "description": "Adapt DeepSeek Harness (DSH) plugins to new host releases: official-guide-driven breaking-change scans, in-memory smoke tests, fleet governance, five-form plugin scaffolding. Agent-native skill, zero dependencies",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "agent-skills",
+    "breaking-changes",
+    "upgrade-guide",
+    "plugin-scaffold"
+  ],
   "type": "module",
   "main": "./lib/index.js",
   "exports": {

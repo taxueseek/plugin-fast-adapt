@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md) | [日本語](README.ja.md)
 
-[![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D22.13-blue.svg)](package.json) [![Dependencies](https://img.shields.io/badge/dependencies-0-blue.svg)](#dependencies) [![Self-test](https://img.shields.io/badge/self--test-307%20passing-brightgreen.svg)](#dependencies)
+[![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D22.13-blue.svg)](package.json) [![Dependencies](https://img.shields.io/badge/dependencies-0-blue.svg)](#dependencies) [![Self-test](https://img.shields.io/badge/self--test-313%20passing-brightgreen.svg)](#dependencies)
 
 > **Built-in safety protections.** Core inspection commands (`env-doctor`, `code-scan`, `plugin-audit`, `log-doctor`, `seams`) are strictly read-only (`run-log` likewise, except `sanitize --out <file>`, which writes the sanitised export); `env-heal` is dry-run by default and moves files to `~/.dsh/.trash/` instead of deleting them. Automatic code edits are restricted to three mechanically-decidable classes, require explicit `--apply` / `--apply-compat`, and back up originals to `.pfa-backup/` (excluded from `git` and `npm pack`). It never modifies DSH itself or `~/.dsh` configs, and defaults to local version anchoring with zero network requests.
 
@@ -22,7 +22,7 @@ English | [简体中文](README.zh-CN.md) | [日本語](README.ja.md)
 | Verifying one change | 3,600 s real host cold start → millisecond-scale in-memory smoke test (with unbuilt check & host module fallback) |
 | Ghost host | Warns when the disk has new code but the running process still executes the old one (compares process start time, not version strings) |
 | Fake-green check | Warns when `tsconfig` `paths` point at a missing checkout, where TypeScript silently falls back to published types |
-| Self-test | 307 assertions, runs offline |
+| Self-test | 313 assertions, runs offline |
 | External dependencies | 0 (Node built-ins + the `git`/`npm` commands only) |
 | Cross-platform | Native support for macOS, Linux standard paths, Termux Android, and containers (XDG-compliant) |
 | Scaffolding | One command emits a runnable plugin in five forms, verified on creation, then a write gate issues the birth certificate |
@@ -53,7 +53,7 @@ This project takes a different approach: **maintain the method of obtaining know
 - **Cross-platform & container ready**: eliminates hardcoded directory assumptions, supporting Linux standard paths (`/usr/lib/node_modules`), Termux on Android (`$PREFIX/lib/node_modules`), `npm_config_prefix`, `DSH_HOST_PATH` / `DSH_LOCATION` env overrides, and XDG cache specs
 - **Cheap verification**: in-memory Cordis smoke test returns in milliseconds to seconds without a real host cold start; `--real-smoke` provides real-host isolated profile boot verification
 - **Zero external dependencies**: Node built-ins plus `git`/`npm` commands only
-- **Reproducible**: 307 assertions, runs offline; CI runs on ubuntu, macOS, and Windows
+- **Reproducible**: 313 assertions, runs offline; CI runs on ubuntu, macOS, and Windows
 - **More than adaptation**: `scaffold.mjs` emits a runnable plugin in five forms in one command, and `write-gate.mjs` issues a birth certificate
 - **Silent failures have hard evidence**: `ghostHost` compares process start time against disk change time; `falseGreen` catches TypeScript silent fallbacks
 - **Honest about its limits**: passing smoke test ≠ host compatibility, and the tool states this clearly in its output
@@ -97,10 +97,13 @@ Claude Code marketplace:
 /plugin install plugin-fast-adapt
 ```
 
-npm (ships a `plugin-fast-adapt` command that forwards to the one-command pipeline):
+npm (ships a `plugin-fast-adapt` CLI with `doctor`, `fleet`, `check`, and `new` subcommands; passing `<plugin-dir>` directly still forwards to `run.mjs`):
 
 ```sh
-npx plugin-fast-adapt <plugin-dir>
+npx plugin-fast-adapt doctor --brief          # local environment & ghost-host check
+npx plugin-fast-adapt fleet                   # sweep all installed & workspace plugins
+npx plugin-fast-adapt check <plugin-dir>      # full single-plugin pipeline
+npx plugin-fast-adapt new <ns>/<name> --form tool  # scaffold a runnable plugin
 ```
 
 Manual install:
@@ -246,7 +249,7 @@ No TypeScript, no AST library, no HTTP client. Runs on Node 22.13+ (`import.meta
 Self-test:
 
 ```sh
-npm test   # node scripts/self-test.mjs, 307 assertions
+npm test   # node scripts/self-test.mjs, 313 assertions
 ```
 
 Contributors should enable the pre-commit gate (one time): `git config core.hooksPath .githooks` — every commit runs the self-test, so a forgotten downstream sync is caught at commit time.
@@ -259,7 +262,7 @@ To gate your own plugin's repository at commit time (smoke/typecheck as hard gat
 
 | Script | Responsibility |
 | --- | --- |
-| `scripts/cli.mjs` | npm entry (`npx plugin-fast-adapt`), forwards to run.mjs |
+| `scripts/cli.mjs` | npm CLI entry (`npx plugin-fast-adapt doctor\|fleet\|check\|new`), keeps `<plugin-dir>` forwarding to run.mjs |
 | `scripts/run.mjs` | One-command orchestration of the full chain (env → version → guide → scan → audit → smoke → typecheck), unified report plus a local run log; derives scan windows from `dshReleases`, supports `--profile <web\|desktop>` host anchoring, pure-JS `check`/`typecheck`, `--run-tests`, `--strict`, and `--real-smoke` cold boot |
 | `scripts/run-log.mjs` | Run-log viewing (list/show), cross-checking (doctor: run logs × host startup logs) and sanitised export (sanitize) |
 | `scripts/seams.mjs` | Seam query: dual-source verdict for one package/API symbol across official guide anchors and the local host install; prefers the managed default-branch snapshot when no explicit guide root is given |

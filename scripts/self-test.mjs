@@ -70,6 +70,7 @@ import './self-test/plugin-form.test.mjs'
 import './self-test/hardening.test.mjs'
 import './self-test/docs.test.mjs'
 import './self-test/fixtures.test.mjs'
+import './self-test/cli.test.mjs'
 
 process.stderr.write('plugin-fast-adapt 自检\n\n')
 

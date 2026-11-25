@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md) | 日本語
 
-[![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D22.13-blue.svg)](package.json) [![Dependencies](https://img.shields.io/badge/dependencies-0-blue.svg)](#依存関係とセルフテスト) [![Self-test](https://img.shields.io/badge/self--test-307%20passing-brightgreen.svg)](#依存関係とセルフテスト)
+[![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D22.13-blue.svg)](package.json) [![Dependencies](https://img.shields.io/badge/dependencies-0-blue.svg)](#依存関係とセルフテスト) [![Self-test](https://img.shields.io/badge/self--test-313%20passing-brightgreen.svg)](#依存関係とセルフテスト)
 
 > **組み込みの安全設計。** 主要な診断・走査コマンド（`env-doctor`、`code-scan`、`plugin-audit`、`log-doctor`、`seams`）は厳格な読み取り専用です（`run-log` も読み取り専用で、`sanitize --out <file>` のみ指定パスへ書き込みます）。`env-heal` はデフォルトで dry-run であり、実行時も直接削除せず `~/.dsh/.trash/` へ退避します。コードの自動修正は機械的に判定可能な 3 種類に限定され、明示的な `--apply` / `--apply-compat` 指定時のみ書き込み、事前に `.pfa-backup/` へバックアップします（`.gitignore` および公開ゲートで誤同梱を防止）。DSH 本体や `~/.dsh` 設定は一切変更せず、デフォルトではローカル環境にアンカーしてネットワーク要求ゼロで動作します。
 
@@ -22,7 +22,7 @@
 | 変更 1 件の検証 | 3,600 秒の実ホストコールドスタート → ミリ秒級のインメモリスモークテスト（未ビルド成果物のハード遮断とホストモジュールのフォールバック付き） |
 | ゴーストホスト | ディスクは新コードなのに実行中プロセスが旧コードを動かしているときに警告（バージョン文字列ではなくプロセス起動時刻を比較） |
 | 偽グリーン検出 | `tsconfig` の `paths` が存在しない checkout を指しているときに警告（ローカルゲートが全緑でも実際には壊れている状態） |
-| セルフテスト | 307 個のアサーション、オフラインで実行可能 |
+| セルフテスト | 313 個のアサーション、オフラインで実行可能 |
 | 外部依存 | 0（Node 組み込みモジュール + `git`/`npm` コマンドのみ） |
 | クロスプラットフォーム | macOS、Linux 標準パス、Termux モバイル、コンテナ環境をネイティブサポート（XDG 準拠） |
 | プラグイン生成 | コマンド 1 つで 5 形態の実行可能プラグインを生成し、生成時点で検証 |
@@ -53,7 +53,7 @@ DSH（DeepSeek Harness）は「すべての機能がプラグインとして存�
 - **クロスプラットフォームとコンテナ対応**：絶対パスのハードコードを排除し、Linux 標準パス（`/usr/lib/node_modules`）、Termux（`$PREFIX/lib/node_modules`）、`npm_config_prefix` に対応。環境変数 `DSH_HOST_PATH` / `DSH_LOCATION` での直接上書きと、XDG キャッシュ仕様の厳格な遵守
 - **検証が安い**：インメモリ Cordis スモークテストはミリ秒から秒で結果を出し、実ホストのコールドスタート不要。実際の証拠が必要なときは `--real-smoke` でクリーンな profile への実インストール・実起動を追加
 - **外部依存ゼロ**：Node 組み込みモジュールと `git`/`npm` コマンドのみ。TypeScript も AST ライブラリも HTTP クライアントも不要
-- **再現可能**：307 個のアサーションをオフラインで実行可能。CI は ubuntu / macOS / Windows の 3 プラットフォームで実行し、タグを打つとリリースプレフライトが走る
+- **再現可能**：313 個のアサーションをオフラインで実行可能。CI は ubuntu / macOS / Windows の 3 プラットフォームで実行し、タグを打つとリリースプレフライトが走る
 - **適応だけではない**：`scaffold.mjs` がコマンド 1 つで 5 形態の実行可能プラグインを生成（実基底クラスでのロード検証付き）、`write-gate.mjs` が完成時に「出生証明書」を発行
 - **サイレント失敗にも判定基準あり**：`ghostHost` はプロセス起動時刻とディスク変更時刻を比較して「ディスクは新版、メモリは旧版」を捕捉。`falseGreen` は `tsconfig` の `paths` が存在しない checkout を指すときの TypeScript のサイレントフォールバックを捕捉。どちらも報告のみで判断を代行せず、証拠は出力に書かれる
 - **限界への誠実さ**：スモークテストの合格 ≠ ホスト互換。この一文はツールの出力自体に書かれている
@@ -97,10 +97,13 @@ Claude Code marketplace:
 /plugin install plugin-fast-adapt
 ```
 
-npm（`plugin-fast-adapt` コマンド付き。ワンコマンドパイプラインへ転送）:
+npm（`doctor` / `fleet` / `check` / `new` サブコマンド付き。`<plugin-dir>` 直接指定も引き続き `run.mjs` へ転送）:
 
 ```sh
-npx plugin-fast-adapt <plugin-dir>
+npx plugin-fast-adapt doctor --brief          # ローカル環境・ゴーストホスト診断
+npx plugin-fast-adapt fleet                   # インストール済み・ワークスペース全プラグインを一括監査
+npx plugin-fast-adapt check <plugin-dir>      # 単一プラグイン全工程パイプライン
+npx plugin-fast-adapt new <ns>/<name> --form tool  # 5形態プラグインを1コマンド生成
 ```
 
 手動インストール:
@@ -241,7 +244,7 @@ TypeScript も AST ライブラリも HTTP クライアントも不要。Node 22
 セルフテスト:
 
 ```sh
-npm test   # node scripts/self-test.mjs、307 個のアサーション
+npm test   # node scripts/self-test.mjs、313 個のアサーション
 ```
 
 開発者はコミット前ゲートの有効化を推奨（1 回だけ）: `git config core.hooksPath .githooks`——コミットのたびにセルフテストが走り、下流同期のし忘れはその瞬間に止められます。
@@ -254,7 +257,7 @@ npm test   # node scripts/self-test.mjs、307 個のアサーション
 
 | スクリプト | 責務 |
 | --- | --- |
-| `scripts/cli.mjs` | npm 入口（`npx plugin-fast-adapt`）。run.mjs へ転送 |
+| `scripts/cli.mjs` | npm CLI 入口（`npx plugin-fast-adapt doctor\|fleet\|check\|new`）。`<plugin-dir>` 直接転送も互換維持 |
 | `scripts/run.mjs` | 全チェーンのワンコマンド編成（環境→バージョン→ガイド→走査→監査→スモーク→typecheck）。統一レポートとローカル実行ログを出力。`dshReleases` からの互換ウィンドウ導出、`--profile <web\|desktop>` ホスト固定、純 JS の `check`/`typecheck`、`--run-tests`、`--strict`、`--real-smoke` 実コールドブートに対応 |
 | `scripts/run-log.mjs` | 実行ログの閲覧（list/show）、突き合わせ（doctor：実行ログ × ホスト起動ログ）、サニタイズ書き出し（sanitize） |
 | `scripts/seams.mjs` | シーム照会：パッケージ名 / API シンボルの公式ガイドアンカー表とローカルホストの二重ソース判定。明示的なガイドルートがないときはデフォルトブランチの管理スナップショットを優先 |
