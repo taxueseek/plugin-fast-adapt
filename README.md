@@ -1,62 +1,80 @@
+<div align="center">
+
 # plugin-fast-adapt
 
-English | [简体中文](README.zh-CN.md) | [日本語](README.ja.md)
+**Upgrade DeepSeek Harness without breaking your plugins.**
 
-[![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D22.13-blue.svg)](package.json) [![Dependencies](https://img.shields.io/badge/dependencies-0-blue.svg)](#dependencies) [![Self-test](https://img.shields.io/badge/self--test-313%20passing-brightgreen.svg)](#dependencies)
+Diagnose your DSH host, sweep all installed & workspace plugins in one health board, scan breaking changes directly against official upgrade guides, smoke-test in milliseconds, and scaffold five runnable plugin forms — zero dependencies.
 
-> **Built-in safety protections.** Core inspection commands (`env-doctor`, `code-scan`, `plugin-audit`, `log-doctor`, `seams`) are strictly read-only (`run-log` likewise, except `sanitize --out <file>`, which writes the sanitised export); `env-heal` is dry-run by default and moves files to `~/.dsh/.trash/` instead of deleting them. Automatic code edits are restricted to three mechanically-decidable classes, require explicit `--apply` / `--apply-compat`, and back up originals to `.pfa-backup/` (excluded from `git` and `npm pack`). It never modifies DSH itself or `~/.dsh` configs, and defaults to local version anchoring with zero network requests.
+[![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![npm](https://img.shields.io/npm/v/plugin-fast-adapt.svg)](https://www.npmjs.com/package/plugin-fast-adapt) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Dependencies](https://img.shields.io/badge/dependencies-0-blue.svg)](#dependencies) [![Self-test](https://img.shields.io/badge/self--test-313%20passing-brightgreen.svg)](#dependencies)
 
-> **Every time DSH ships a new release, existing plugins can stop working.** This skill reads the vendor's official upgrade guide directly, scans your plugin code, and reports which breaking changes you hit together with the vendor's own fix instructions; it also scaffolds a runnable plugin from zero in one command and verifies it. **Adapted through 0.2.2-rc.4, field-verified on 0.2.2-rc.5**: official guides cover 18 versions from `v0.1.7-rc.2` through `0.2.2-rc.4` (folding in Release Notes as virtual guides when guide entries lag); verified live on the current `next` channel & local global host **0.2.2-rc.5** (with desktop APP bundled at `0.2.2-rc.2`), returning an honest `up-to-date-on-channel` verdict, saving a `v0.2.2-rc.5` signature snapshot, passing health audit (100/100) and in-memory smoke (4ms). Because `0.2.2-rc.5` has no vendor guide doc yet, the ledger explicitly states coverage stops at `0.2.2-rc.4` and the scan cannot be called clean instead of pretending otherwise. Also features local environment anchoring, Release Note targeted extraction, and fleet multi-dimensional governance.
+English | [简体中文](README.zh-CN.md) | [日本語](README.ja.md) · Latest field-verified: **DSH `0.2.2-rc.5`** (18 official guide versions) · [Safety posture](#safety-posture)
 
-> **Execution & privilege boundary.** `quick-smoke` and `write-gate` are not a simulation: they import the plugin's entry module and run it **in the current Node process** — no `node:vm`, no worker thread, no subprocess. The plugin inherits the privileges of whoever ran the command (files, network, environment variables). Run them only on code you wrote or reviewed, never on an untrusted directory; use `--real-smoke` for an isolated install and boot inside a clean profile. See [Safety posture](#safety-posture).
+</div>
 
-## At a glance
+---
 
-| | |
-| --- | --- |
-| Upstream ships a new release | Works immediately, zero changes (reads vendor sources and release notes, no hand-curated cards) |
-| DSH Host Compatibility | Covers `v0.1.7-rc.2` through **0.2.2-rc.4** (18 versions, folding in Release Notes as virtual guides); field-verified live on latest `next` channel host **0.2.2-rc.5** (desktop APP bundled `0.2.2-rc.2`). For undocumented newer versions like `0.2.2-rc.5`, the coverage ledger explicitly states the scan cannot be called clean |
-| Fleet Governance Board | One-click sweep across Web/APP installed plugins & workspace code with life-cycle matrix |
-| Version Authority | Strictly anchors to the local installed host version by default (Plan B: 0 network requests) |
-| Scan false positives | 12 → 0 (four noise-reduction layers + word boundary regex + virtual guide deduplication) |
-| Verifying one change | 3,600 s real host cold start → millisecond-scale in-memory smoke test (with unbuilt check & host module fallback) |
-| Ghost host | Warns when the disk has new code but the running process still executes the old one (compares process start time, not version strings) |
-| Fake-green check | Warns when `tsconfig` `paths` point at a missing checkout, where TypeScript silently falls back to published types |
-| Self-test | 313 assertions, runs offline |
-| External dependencies | 0 (Node built-ins + the `git`/`npm` commands only) |
-| Cross-platform | Native support for macOS, Linux standard paths, Termux Android, and containers (XDG-compliant) |
-| Scaffolding | One command emits a runnable plugin in five forms, verified on creation, then a write gate issues the birth certificate |
+## Quick start (30 seconds)
 
-## What problem it solves
+### Run directly via CLI (for DSH users & plugin authors)
 
-DSH (DeepSeek Harness) is an AI runtime framework where everything is a plugin, and the trouble is that every new release can break existing plugins. The common workaround is hand-written upgrade cards: dozens of cards per version range, each recording what broke and how to fix it. That path has three problems it cannot get around:
+```sh
+npx plugin-fast-adapt doctor --brief               # check host version, stale overlays, ghost processes & tsconfig fake-green
+npx plugin-fast-adapt fleet                        # sweep all installed (Web/Desktop) & workspace plugins in one health board
+npx plugin-fast-adapt check <plugin-dir>           # full single-plugin pass: env → guide → scan → audit → 4ms smoke → typecheck
+npx plugin-fast-adapt new <ns>/<name> --form tool  # scaffold a runnable plugin in five forms & verify on creation
+```
 
-1. **Cards go stale the moment they are written**. A single upstream jump can touch thousands of files, and there are "corridor gaps" the cards never cover.
-2. **A large knowledge base crowds out reasoning**. In the paper's evaluation a weaker model (qwen3.8-27b) scored -3.07 pp worse with the full card library loaded (equal-weight difference over 56 tasks: 7 improved, 18 regressed, 31 flat).
-3. **Verification is expensive**. Every change needs a real host cold start (a 3,600-second timeout is on record), and stale packages left in the profiles overlay after a host upgrade break plugin loading.
+### Install as an AI Agent Skill (Claude Code / Codex / Cursor / DSH)
 
-This project takes a different approach: **maintain the method of obtaining knowledge, not the knowledge itself.** The authoritative description of breaking changes lives in the vendor harness repository at `docs/upgrade-guide/<version>/<topic>/guide.md`, updated with each release in a fixed format (`## Change` for what changed, `## Migration` for how to fix it); version information lives in the npm registry's `dist-tags`. Both are vendor sources, so the skill catches up the moment upstream ships.
+```sh
+npx skills add taxueseek/plugin-fast-adapt
+```
 
-### Advantages
+<details>
+<summary>Other install options (Claude Code Marketplace / manual / DSH native bundle)</summary>
 
-- **Adapted through 0.2.2-rc.4, field-verified on 0.2.2-rc.5**: reads the official `docs/upgrade-guide/` and Release Notes directly across 18 versions (`v0.1.7-rc.2` → `0.2.2-rc.4`), converting Release Notes into virtual guides where guide entries lag. Verified live on 2026-11-19 against DSH `0.2.2-rc.5` (npm `next` channel; desktop APP `0.2.2-rc.2`): honest `up-to-date-on-channel` verdict, `v0.2.2-rc.5` signature snapshot persisted, and explicit disclosure that `rc.5` lacks vendor docs yet. Also supports virtual guide generation and a 3-tuple compatibility ledger
-- **Local environment authority anchoring (zero network reliance)**: defaults to the locally installed DSH host version (Plan B, 0 external network requests), eliminating upstream network jitters and GitHub rate limits; uses `--check-upstream` for explicit check
-- **Fleet multi-dimensional governance board**: introduces `fleet-sweep.mjs` to inspect workspace code, installed Web plugins, APP desktop plugins, and active processes in a multi-stage life-cycle matrix, with `--apply-compat` batch safe patching. APP plugins are judged against the real `app.asar` bundled packages instead of the npm tree, workspace grouping directories (e.g. `Deepseek/`) are searched one level deeper, and host startup failures from `~/.dsh/logs` are folded into the board
-- **PR baseline guard**: before opening a PR against another plugin, `run-log.mjs sanitize --pr-draft` and `fleet-sweep.mjs --pr-ready` check `origin/HEAD`, the npm latest version and worktree cleanliness, and block when the local copy is stale or dirty — preventing a fork built on an outdated snapshot
-- **Hard guards against false positives & unbuilt traps**:
-  - Four noise-reduction layers + regex word boundaries (preventing `ABORTED` matching `FS_ABORTED`)
-  - Virtual release note & official guide deduplication
-  - Unbuilt TypeScript plugin hard gate (blocks and guides `pnpm run build` when missing `lib/index.js`)
-  - Bundle Resolution Shadow detection for host-bundled packages
-  - Exit code 143 (`SIGTERM`) acknowledged as graceful shutdown, eliminating false crash alarms
-  - Auto Schemastery `Config({})` parsing and temporary host `node_modules` fallback symlinking during smoke tests
-- **Cross-platform & container ready**: eliminates hardcoded directory assumptions, supporting Linux standard paths (`/usr/lib/node_modules`), Termux on Android (`$PREFIX/lib/node_modules`), `npm_config_prefix`, `DSH_HOST_PATH` / `DSH_LOCATION` env overrides, and XDG cache specs
-- **Cheap verification**: in-memory Cordis smoke test returns in milliseconds to seconds without a real host cold start; `--real-smoke` provides real-host isolated profile boot verification
-- **Zero external dependencies**: Node built-ins plus `git`/`npm` commands only
-- **Reproducible**: 313 assertions, runs offline; CI runs on ubuntu, macOS, and Windows
-- **More than adaptation**: `scaffold.mjs` emits a runnable plugin in five forms in one command, and `write-gate.mjs` issues a birth certificate
-- **Silent failures have hard evidence**: `ghostHost` compares process start time against disk change time; `falseGreen` catches TypeScript silent fallbacks
-- **Honest about its limits**: passing smoke test ≠ host compatibility, and the tool states this clearly in its output
+Claude Code marketplace:
+
+```sh
+/plugin marketplace add taxueseek/plugin-fast-adapt
+/plugin install plugin-fast-adapt
+```
+
+Manual install:
+
+```sh
+git clone https://github.com/taxueseek/plugin-fast-adapt.git
+# Point your agent at the repository root (where SKILL.md lives) as a skill directory
+# Cursor users: cp -r plugin-fast-adapt/* .cursor/skills/plugin-fast-adapt/
+```
+
+</details>
+
+## What it looks like
+
+```text
+Plugin my-plugin@1.2.0 × Host 0.2.2-rc.5 (window 0.2.1-rc.1 → 0.2.2-rc.4)
+  scan       0 breaking hits (18 official guides + Release Notes virtual guides)
+  audit      100/100 (perf 100 / resilience 100 / budget 100 / lifecycle 100)
+  smoke      PASS in 4ms (in-memory Cordis mock, 0 undeclared-inject violations)
+  typecheck  PASS
+  note       0.2.2-rc.5 has no vendor guide yet — coverage stops at 0.2.2-rc.4
+```
+
+## Why plugin-fast-adapt
+
+**Maintain the method of obtaining knowledge, not hand-curated upgrade cards.** Official breaking changes live in DeepSeek's `docs/upgrade-guide/<version>/<topic>/guide.md` and Release Notes; version state lives in npm `dist-tags`. Reading vendor sources directly means the tool catches up the moment upstream ships.
+
+| Pain point | Traditional approach | `plugin-fast-adapt` |
+| --- | --- | --- |
+| Upstream ships a new release | Wait for hand-written upgrade cards (corridor gaps; -3.07 pp on weaker models with full card context) | Reads official `docs/upgrade-guide/` & Release Notes directly — zero lag |
+| Verifying one fix | Real host cold start (up to 3,600 s timeout) | Millisecond in-memory Cordis smoke test (4ms); add `--real-smoke` for clean-profile real boot |
+| Breaking-change scan noise | Naive regex: 12 findings, all 12 false positives | Four noise-reduction layers + word-boundary & semantic gates: **12 → 0 false positives**, with `guideFile:line` provenance |
+| Silent post-upgrade failures | Manual log & overlay hunting | `doctor` proves `ghostHost` (running old process), `falseGreen` (broken `tsconfig` paths), and stale overlays (`env-heal` moves to `.trash/`) |
+| Multi-plugin / Web + APP governance | Inspect plugins one by one | `fleet` sweeps Web, Desktop (`app.asar`), active processes & workspace in one lifecycle matrix, with `--apply-compat` & `--pr-ready` |
+| Authoring a new plugin | Copy boilerplate & guess naming rules | `new` scaffolds 5 runnable forms (`tool` / `hook` / `service` / `config` / `llm-adapter`) with real base-class load checks & `write-gate` |
+| Portability & trust | Heavy toolchain, hidden writes | **0 external dependencies** (Node 22.13+ built-ins + `git`/`npm`), macOS / Linux / Windows / Termux / containers, **313 offline assertions** |
 
 ## Four lanes
 
@@ -72,7 +90,10 @@ scripts/                      shared toolbox for all lanes, not split per lane
 references/                   noise rules, migration SOP, CI template
 ```
 
-`build`, `diagnose` and `review` also ship optional top-level aliases so they can trigger on their own (they are not required — the main skill reads the lane document by intent):
+<details>
+<summary>Optional top-level skill aliases (build / diagnose / review)</summary>
+
+`build`, `diagnose` and `review` also ship optional top-level aliases so they can trigger on their own (not required — the main skill reads the lane document by intent):
 
 ```sh
 ln -s <repo>/sub-skills/build    ~/.agents/skills/dsh-plugin-build
@@ -80,39 +101,9 @@ ln -s <repo>/sub-skills/diagnose ~/.agents/skills/dsh-plugin-diagnose
 ln -s <repo>/sub-skills/review   ~/.agents/skills/dsh-plugin-review
 ```
 
-The aliases exist so "author a plugin", "installed but not working" and "review this code" each get their own trigger surface instead of competing inside one `description`. Host loaders cap `description` at 1024 characters and drop the whole skill when it overflows (they do not truncate); the self-test now guards that limit.
+Host loaders cap `description` at 1024 characters and drop the whole skill when it overflows; the self-test guards that limit.
 
-## Install
-
-With the [skills CLI](https://github.com/vercel-labs/skills) (recommended — one command installs to every supported agent):
-
-```sh
-npx skills add taxueseek/plugin-fast-adapt
-```
-
-Claude Code marketplace:
-
-```sh
-/plugin marketplace add taxueseek/plugin-fast-adapt
-/plugin install plugin-fast-adapt
-```
-
-npm (ships a `plugin-fast-adapt` CLI with `doctor`, `fleet`, `check`, and `new` subcommands; passing `<plugin-dir>` directly still forwards to `run.mjs`):
-
-```sh
-npx plugin-fast-adapt doctor --brief          # local environment & ghost-host check
-npx plugin-fast-adapt fleet                   # sweep all installed & workspace plugins
-npx plugin-fast-adapt check <plugin-dir>      # full single-plugin pipeline
-npx plugin-fast-adapt new <ns>/<name> --form tool  # scaffold a runnable plugin
-```
-
-Manual install:
-
-```sh
-git clone https://github.com/taxueseek/plugin-fast-adapt.git
-# Point your agent at the repository root (where SKILL.md lives) as a skill directory
-# Cursor users: cp -r plugin-fast-adapt/* .cursor/skills/plugin-fast-adapt/
-```
+</details>
 
 ## Pipeline
 
@@ -298,6 +289,7 @@ To gate your own plugin's repository at commit time (smoke/typecheck as hard gat
 
 ## Safety posture
 
+- **Execution & privilege boundary**: `quick-smoke` and `write-gate` import the plugin's entry module and run it **in the current Node process** (no `node:vm`, no worker thread, no subprocess). The plugin inherits the privileges of whoever ran the command (files, network, environment variables). Run them only on code you wrote or reviewed, never on an untrusted directory; use `--real-smoke` for an isolated install and boot inside a clean profile
 - `env-doctor`, `code-scan`, `plugin-audit`, `log-doctor`, `seams` are strictly read-only; `run-log` is read-only except for `sanitize --out <file>`, which writes the sanitised result to the given path
 - `env-heal` is dry-run by default and moves rather than deletes when applied (into `~/.dsh/.trash/<date>/`)
 - `sync-skill` writes to a downstream skill directory explicitly, copying only the fixed skill surface (`SKILL.md`/`README*`/`references`/`scripts`/`sub-skills`); `--check`/`--dry-run` let you inspect first
@@ -332,6 +324,6 @@ The two projects complement each other:
 | Stale overlay packages | Manual troubleshooting | `env-doctor` inspection + `env-heal` healing (dry-run by default) |
 | Weaker models | Full card library in context, -3.07 pp | Six independent scripts, one small output each |
 | Code-level scanning | None | Anchor matching + four noise-reduction layers |
-| Fleet-wide sweep | `plugin-fleet-sweep` owns breadth | The six-step pipeline owns depth |
+| Fleet-wide sweep | `plugin-fleet-sweep` | Built-in `fleet-sweep.mjs` (Web / Desktop `app.asar` / workspace matrix + `--apply-compat` / `--pr-ready`) |
 
-A fleet-wide sweep after a host upgrade goes to upstream's [plugin-fleet-sweep](https://github.com/oh-my-dsh/dsh-plugin-upgrade-skill/tree/main/skills/plugin-fleet-sweep) (breadth), and each flagged plugin comes back to this project's six-step pipeline for a deep pass (depth). For historical corridors the official guide does not cover (before v0.1.7-rc.2), this project's SOP references upstream's cards and scripts — segments with a guide use this project's `code-scan`, segments without use upstream's `plan-migration.mjs` and cards, and runtime verification uses upstream's `verify-runtime.mjs` (directly bridgeable via this project's `run.mjs --real-smoke`).
+For historical corridors the official guide does not cover (before v0.1.7-rc.2), this project's SOP references upstream's cards and scripts — segments with a guide use this project's `code-scan`, segments without use upstream's `plan-migration.mjs` and cards, and runtime verification uses upstream's `verify-runtime.mjs` (directly bridgeable via this project's `run.mjs --real-smoke`).

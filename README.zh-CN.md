@@ -1,62 +1,80 @@
+<div align="center">
+
 # plugin-fast-adapt
 
-[English](README.md) | 简体中文 | [日本語](README.ja.md)
+**升级 DSH 不再炸插件。**
 
-[![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D22.13-blue.svg)](package.json) [![外部依赖](https://img.shields.io/badge/外部依赖-0-blue.svg)](#依赖与自检) [![自检](https://img.shields.io/badge/自检-313项断言-brightgreen.svg)](#依赖与自检)
+一键体检整机已装插件、直连官方升级指南扫描破坏性变更、毫秒级内存冒烟验证与五形态造插件——零依赖，支持 CLI 与 Agent Skill 双形态。
 
-> **内置安全防护。** 核心诊断与扫描命令（`env-doctor`、`code-scan`、`plugin-audit`、`log-doctor`、`seams`）严格只读（`run-log` 同为只读，仅 `sanitize --out <file>` 会把脱敏导出写入指定路径）；`env-heal` 默认 dry-run，执行时移入 `~/.dsh/.trash/` 而非直接删除。自动改代码仅限 3 类机械可判定场景，必须显式传入 `--apply` / `--apply-compat` 才写入，且写入前强制备份至 `.pfa-backup/`（已受 `.gitignore` 与发布门禁拦截）。工具绝不修改 DSH 本体或 `~/.dsh` 配置，并默认锚定本地版本、零网络请求。
+[![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![npm](https://img.shields.io/npm/v/plugin-fast-adapt.svg)](https://www.npmjs.com/package/plugin-fast-adapt) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![外部依赖](https://img.shields.io/badge/外部依赖-0-blue.svg)](#依赖与自检) [![自检](https://img.shields.io/badge/自检-313项断言-brightgreen.svg)](#依赖与自检)
 
-> **DSH 每次发新版，老插件就可能启动不了。** 这个技能直连 DeepSeek 官方升级指南，扫你的插件代码，报出踩了哪几条破坏性变更、官方给的修法是什么；还能一条命令从零造出可运行的插件。**已适配到 0.2.2-rc.4，并在 0.2.2-rc.5 上实测通过**：官方指南已覆盖 `v0.1.7-rc.2` 至 `0.2.2-rc.4` 共 18 个版本（无指南条目时由官方 Release Note 转虚拟指南补上）；在当前 npm `next` 通道与本机全局宿主 **0.2.2-rc.5**（桌面 APP 捆绑 `0.2.2-rc.2`）上实机验证通过——定版诚实判 `up-to-date-on-channel`，留存 `v0.2.2-rc.5` 签名快照，体检 100/100、内存冒烟 4ms 通过。因 `0.2.2-rc.5` 尚无官方指南文档，账本会明说「只覆盖到 `0.2.2-rc.4`，不能当查干净」，绝不假装全覆盖。支持本地环境权威锚定、Release Note 破坏性变更提取与整机集群多维批量治理。
+[English](README.md) | 简体中文 | [日本語](README.ja.md) · 最新实机验证：**DSH `0.2.2-rc.5`**（官方指南覆盖 18 个版本）· [安全姿态](#安全姿态)
 
-> **执行与权限边界。** `quick-smoke` 与 `write-gate` 不是模拟执行：它们在**当前 Node 进程内 import 插件入口模块**真跑，没有 `node:vm`、没有 worker 线程、没有子进程。插件因此能读写文件、发网络请求、读环境变量，权限与跑这条命令的人完全一致。请只对自己写的或审过的代码运行，不要扫描来路不明的目录；需要真隔离验证请使用 `--real-smoke`（在干净 profile 里真装真启）。详见[安全姿态](#安全姿态)。
+</div>
 
-## 速览
+---
 
-| | |
-| --- | --- |
-| 上游发新版 | 无需任何改动，直接可用（直连官方源与 Release Notes，不维护滞后卡片） |
-| DSH 宿主适配 | 覆盖 `v0.1.7-rc.2` 至 **0.2.2-rc.4**（18 个版本，含 Release Note 转虚拟指南补全）；已在最新 `next` 通道宿主 **0.2.2-rc.5**（桌面 APP 捆绑 `0.2.2-rc.2`）实测通过；对尚未出指南的新版本（如 `0.2.2-rc.5`），覆盖度账本会明说覆盖上限并提示「不能当查干净」 |
-| 集群治理看板 | 一键扫描整机 Web / APP 插件与工作区，按运行态生命周期多维矩阵呈现 |
-| 定版权威 | 默认收敛到本机真实宿主版本（方案 B 零网络请求，防上游频控） |
-| 扫描误报 | 12 处 → 0（四层降噪 + 常量词边界正则 + 虚拟指南去重） |
-| 验证一次改动 | 3600 秒真宿主冷启动 → 毫秒级内存冒烟（支持未构建产物硬拦截与宿主模块软链兜底） |
-| 幽灵宿主 | 磁盘已换新、进程还在跑旧代码时报警（比进程启动时间，不读版本号） |
-| 假绿检测 | `tsconfig` 的 `paths` 指向不存在的 checkout 时报警（本地门禁可能全绿而实际已坏） |
-| 自检 | 313 项断言，离线可跑 |
-| 外部依赖 | 0（只用 Node 内置模块 + `git`/`npm` 命令） |
-| 跨平台 | 原生支持 macOS、Linux 标准路径、Termux 移动端与容器环境（支持 XDG 规范） |
-| 造插件 | 一条命令出五形态可运行插件，生成即验证 |
+## 30 秒上手
 
-## 它解决什么
+### 直接命令行运行（DSH 用户与插件作者通用）
 
-DSH（DeepSeek Harness）是一个「所有功能都以插件形式存在」的 AI 运行框架，麻烦在于每次发新版，老插件就可能启动不了。常见的应对是手写升级卡片：每个版本区间写几十张卡，记清什么坏了、怎么修。这条路有三个绕不过去的问题：
+```sh
+npx plugin-fast-adapt doctor --brief               # 整机环境体检：宿主版本、覆盖层残留包、幽灵进程、假绿检测
+npx plugin-fast-adapt fleet                        # 一键扫描整机已装插件（Web / APP）与工作区，输出健康看板
+npx plugin-fast-adapt check <插件目录>              # 单插件全链路：定版 → 指南 → 扫描 → 体检 → 4ms 冒烟 → typecheck
+npx plugin-fast-adapt new <ns>/<name> --form tool  # 一条命令生成五形态可运行插件，生成即验证
+```
 
-1. **卡片写完就过时**。上游一次跃迁能改动数千个文件，卡片之间还有覆盖不到的「走廊缺口」。
-2. **大知识库挤占推理空间**。论文实测，弱模型（qwen3.8-27b）带全套卡片库答题，56 题等权差 -3.07 pp（7 题改善、18 题退化、31 题持平）。
-3. **验证太贵**。改一次验一次要等真宿主冷启动，实测有过 3600 秒超时；宿主升级后 profiles 覆盖层残留旧包，还会导致插件装载冲突。
+### 作为 AI Agent Skill 安装（Claude Code / Codex / Cursor / DSH）
 
-本项目的取舍是：**不维护知识，只维护取知识的方法。** 破坏性变更的权威描述在 DeepSeek 官方仓库的 `docs/upgrade-guide/<版本>/<主题>/guide.md`，官方发版时同步更新，格式固定（`## Change` 讲什么变了，`## Migration` 讲怎么改）；版本信息在 npm registry 的 `dist-tags`。两处都是官方源，所以上游发新版的那一刻，这个技能就自动跟上了。
+```sh
+npx skills add taxueseek/plugin-fast-adapt
+```
 
-### 优势
+<details>
+<summary>其他安装方式（Claude Code Marketplace / 手动安装）</summary>
 
-- **适配到 0.2.2-rc.4，0.2.2-rc.5 实测通过**：直连官方 `docs/upgrade-guide/` 与 Release Notes，覆盖 `v0.1.7-rc.2` 至 `0.2.2-rc.4` 共 18 个版本（指南滞后时由 Release Note 转虚拟指南补上）。2026-11-19 在 DSH `0.2.2-rc.5`（npm `next` 最新通道；桌面 APP 捆绑 `0.2.2-rc.2`）实机验证通过——定版诚实判 `up-to-date-on-channel`，留存 `v0.2.2-rc.5` 签名快照，并诚实披露 `rc.5` 尚无官方文档。支持虚拟指南自动生成与三元版本账本快速探测
-- **本地环境权威锚定（零网络依赖）**：默认定版本严格收敛到本机已安装的 DSH 宿主版本（方案 B，零外部网络请求），免除官方源网络波动与 GitHub 频控影响；显式 `--check-upstream` 才核对上游
-- **集群全域多维治理看板**：新增 `fleet-sweep.mjs`，一键扫描整机 Web 插件、APP 桌面端插件、工作区源码与运行中服务，输出五大生命周期矩阵看板，支持 `--apply-compat` 批量安全修补；APP 插件按 `app.asar` 真实捆绑包判定套件存在性（不再错用 npm 树），工作区分组目录（如 `Deepseek/`）下钻一层发现插件，并把 `~/.dsh/logs` 的宿主启动失败关联进看板
-- **PR 基线真源守卫**：向其他插件提 PR 前用 `run-log.mjs sanitize --pr-draft` 与 `fleet-sweep.mjs --pr-ready` 核对 `origin/HEAD`、npm 最新版与工作区干净度，本地落后或有未提交改动时拦截，防止基于过期副本建分支导致上游分叉
-- **误报与低级错误硬守卫**：
-  - 四层降噪 + 常量词边界正则匹配（避免 `ABORTED` 误伤 `FS_ABORTED`）
-  - 虚拟 Release 指南与官方真实指南自动去重
-  - 未构建 TypeScript 插件硬拦截（未见 `lib/index.js` 等入口即阻断并指引 `pnpm run build`）
-  - 宿主同名内置包遮蔽（Bundle Resolution Shadow）检测，防官方同名包静默覆盖
-  - 宿主冷启动退出码 143（`SIGTERM`）优雅停机正常判定，杜绝假死误报
-  - 冒烟自动解析 Schemastery `Config({})` 填充默认值，未安装 node_modules 的单文件插件自动挂载宿主依赖兜底
-- **跨平台与容器自适应**：消除绝对路径硬编码，扩展适配 Linux 发行版标准路径（`/usr/lib/node_modules`）、Termux 移动端（`$PREFIX/lib/node_modules`）与 `npm_config_prefix`，支持环境变量 `DSH_HOST_PATH` / `DSH_LOCATION` 直接覆盖，严格遵循 XDG 缓存规范
-- **验证便宜**：内存级 Cordis 冒烟毫秒到秒级出结果，不用真宿主冷启动；需要真证据时 `--real-smoke` 再补干净 profile 真装真启档
-- **零外部依赖**：只用 Node 内置模块加 `git`/`npm` 命令，没有 TypeScript、没有 AST 库、没有网络请求库
-- **可复现**：313 项自检离线可跑；CI 在 push 和 PR 上跑 ubuntu/macOS/Windows 三平台，打 tag 时另跑发布预检
-- **不止适配**：`scaffold.mjs` 一条命令生成五形态可运行插件（真基类装载验证），`write-gate.mjs` 写完出「出生证」
-- **静默失败有判据**：`ghostHost` 比对进程启动时间与磁盘变更时间，抓「磁盘新版、内存旧版」；`falseGreen` 抓 `tsconfig` 的 `paths` 指向不存在 checkout 时 TypeScript 的静默回落。两条都只报不判，证据写在输出里
-- **边界诚实**：冒烟通过不等于宿主兼容，这句话写在工具输出里；体检的软指标只透传，不替用户说「合格」
+Claude Code marketplace：
+
+```sh
+/plugin marketplace add taxueseek/plugin-fast-adapt
+/plugin install plugin-fast-adapt
+```
+
+手动安装：
+
+```sh
+git clone https://github.com/taxueseek/plugin-fast-adapt.git
+# 把仓库根目录（SKILL.md 所在处）作为 skill 目录接入你的 agent
+# Cursor 用户：cp -r plugin-fast-adapt/* .cursor/skills/plugin-fast-adapt/
+```
+
+</details>
+
+## 运行效果速览
+
+```text
+插件 my-plugin@1.2.0 × 宿主 0.2.2-rc.5（窗口 0.2.1-rc.1 → 0.2.2-rc.4）
+  扫描      0 处破坏性命中（18 版官方指南 + Release Notes 虚拟指南）
+  体检      100/100（性能 100 / 弹性 100 / 预算 100 / 生命周期 100）
+  冒烟      4ms 通过（内存级 Cordis Mock，未声明 inject 零违规）
+  类型检查   PASS
+  诚实提示   0.2.2-rc.5 尚无官方指南文档，覆盖上限停在 0.2.2-rc.4
+```
+
+## 为什么用 plugin-fast-adapt
+
+**不维护过时的升级卡片，只维护直取官方知识的方法。** 破坏性变更的权威描述在 DeepSeek 官方仓库的 `docs/upgrade-guide/<版本>/<主题>/guide.md` 与 Release Notes，版本状态在 npm `dist-tags`。上游发新版的那一刻，这个工具就自动跟上。
+
+| 高频痛点 | 传统做法 | `plugin-fast-adapt` |
+| --- | --- | --- |
+| 上游发新版 | 手写升级卡片滞后、有走廊缺口（弱模型带全量卡片答题 -3.07 pp） | 直连官方 `docs/upgrade-guide/` 与 Release Notes，发版即生效 |
+| 改完验证一次 | 真宿主冷启动，实测最长 3600 秒超时 | 内存级 Cordis 冒烟 4ms 出结果；需要真宿主证据再加 `--real-smoke` |
+| 代码扫描误报 | 朴素正则 12 处命中全是误报 | 四层降噪 + 词边界与包名语义门：**12 → 0 误报**，每条直指 `guideFile:line` |
+| 升级后隐性故障 | 肉眼翻日志、手删残留包 | `doctor` 自动取证 `ghostHost`（旧进程）与 `falseGreen`（tsconfig 假绿），`env-heal` 安全移入 `.trash/` |
+| 多插件 / 桌面端治理 | 逐个目录手工排查 | `fleet` 一键扫描 Web / Desktop（`app.asar`）/ 活跃进程与工作区，支持 `--apply-compat` 与 `--pr-ready` |
+| 从零写新插件 | 抄模板、猜命名与挂载规则 | `new` 一条命令生成五形态可运行插件，真基类装载校验 + `write-gate` 出「出生证」 |
+| 环境兼容与可信度 | 依赖重、黑盒改代码 | **0 外部依赖**（Node 22.13+ 内置模块 + `git`/`npm`），跨 macOS / Linux / Windows / Termux，**313 项自检**离线全绿 |
 
 ## 四条车道
 
@@ -72,7 +90,10 @@ scripts/                      四条车道共用的工具箱，不随车道分�
 references/                   降噪规则、迁移 SOP、CI 模板
 ```
 
-`build`、`diagnose` 与 `review` 还各有一个顶层别名，可以让它们独立响应触发词（不建也能用，主技能会按意图读对应车道文档）：
+<details>
+<summary>可选顶层触发别名（build / diagnose / review）</summary>
+
+`build`、`diagnose` 与 `review` 各带一个顶层别名，可独立响应触发词（不建也能用，主技能会按意图读对应车道文档）：
 
 ```sh
 ln -s <repo>/sub-skills/build    ~/.agents/skills/dsh-plugin-build
@@ -80,39 +101,9 @@ ln -s <repo>/sub-skills/diagnose ~/.agents/skills/dsh-plugin-diagnose
 ln -s <repo>/sub-skills/review   ~/.agents/skills/dsh-plugin-review
 ```
 
-别名的作用是让「造插件」「装了没生效」和「代码审查」这几类独立目标有自己的触发面，不必挤在主技能一个 description 里。宿主加载器对 `description` 有 1024 字符硬上限，超了整条技能会被丢弃而不是截断——这条现在由自检门禁守住。
+宿主加载器对 `description` 有 1024 字符硬上限，超了整条技能会被丢弃——这条由自检门禁守住。
 
-## 安装
-
-用 skills CLI（推荐，一条命令装到它支持的 agent）：
-
-```sh
-npx skills add taxueseek/plugin-fast-adapt
-```
-
-Claude Code marketplace：
-
-```sh
-/plugin marketplace add taxueseek/plugin-fast-adapt
-/plugin install plugin-fast-adapt
-```
-
-npm（提供 `doctor` / `fleet` / `check` / `new` 四个子命令，直接传 `<插件目录>` 仍向下兼容转发到 `run.mjs`）：
-
-```sh
-npx plugin-fast-adapt doctor --brief          # 整机环境与幽灵宿主诊断
-npx plugin-fast-adapt fleet                   # 扫描整机已装插件与工作区，输出健康看板
-npx plugin-fast-adapt check <插件目录>         # 单插件全链路扫描与冒烟
-npx plugin-fast-adapt new <ns>/<name> --form tool  # 一条命令生成可运行插件
-```
-
-手动安装：
-
-```sh
-git clone https://github.com/taxueseek/plugin-fast-adapt.git
-# 把仓库根目录（SKILL.md 所在处）作为 skill 目录接入你的 agent
-# Cursor 用户：cp -r plugin-fast-adapt/* .cursor/skills/plugin-fast-adapt/
-```
+</details>
 
 ## 流程
 
@@ -292,6 +283,7 @@ npm test   # node scripts/self-test.mjs，313 项断言
 
 ## 安全姿态
 
+- **执行与权限边界**：`quick-smoke` 与 `write-gate` 在**当前 Node 进程内 import 插件入口模块**真跑（没有 `node:vm`、没有 worker 线程、没有子进程），插件权限与运行命令的用户一致。请只对自己写的或审过的代码运行，不要扫描来路不明的目录；需要真隔离验证请使用 `--real-smoke`（在干净 profile 里真装真启）
 - `env-doctor`、`code-scan`、`plugin-audit`、`log-doctor`、`seams` 完全只读；`run-log` 默认只读，只有 `sanitize --out <文件>` 会写脱敏结果到指定路径
 - `env-heal` 默认 dry-run，真动手也是移动不删除（进 `~/.dsh/.trash/<日期>/`）
 - `sync-skill` 显式写下游技能目录，只复制固定技能面（`SKILL.md`/`README*`/`references`/`scripts`/`sub-skills`），`--check`/`--dry-run` 供先确认
@@ -326,6 +318,6 @@ npm test   # node scripts/self-test.mjs，313 项断言
 | 覆盖层旧包残留 | 靠人肉排障 | `env-doctor` 巡检 + `env-heal` 自愈（默认 dry-run） |
 | 弱模型表现 | 全套卡片进上下文，-3.07 pp | 六个独立脚本，每步只产出一份小输出 |
 | 代码级扫描 | 无 | 锚点匹配 + 四层降噪 |
-| 批量巡检 | `plugin-fleet-sweep` 管广度 | 六步流水线管深度 |
+| 批量巡检 | `plugin-fleet-sweep` | 内置 `fleet-sweep.mjs`（Web / 桌面 `app.asar` / 工作区矩阵 + `--apply-compat` / `--pr-ready`） |
 
-宿主升级后的整批插件巡检走上游的 [plugin-fleet-sweep](https://github.com/oh-my-dsh/dsh-plugin-upgrade-skill/tree/main/skills/plugin-fleet-sweep)（批量管广度），筛出的个体回到本项目六步流水线深查（本 skill 管深度）。官方指南覆盖不到的历史走廊（v0.1.7-rc.2 之前），本项目的 SOP 引用原项目的卡片和脚本——有 guide 的段用本项目的 `code-scan`，没 guide 的段用原项目的 `plan-migration.mjs` 和卡片，运行时验证用原项目的 `verify-runtime.mjs`（本项目 `run.mjs --real-smoke` 已可直接桥接它）。
+官方指南覆盖不到的历史走廊（v0.1.7-rc.2 之前），本项目的 SOP 引用原项目的卡片和脚本——有 guide 的段用本项目的 `code-scan`，没 guide 的段用原项目的 `plan-migration.mjs` 和卡片，运行时验证用原项目的 `verify-runtime.mjs`（本项目 `run.mjs --real-smoke` 已可直接桥接它）。
