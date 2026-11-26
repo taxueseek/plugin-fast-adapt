@@ -2,9 +2,9 @@
 
 # plugin-fast-adapt
 
-**升级 DSH 不再炸插件。**
+**宿主一升级，插件就报错？30 秒帮你查清原因并修好。**
 
-一键体检整机已装插件、直连官方升级指南扫描破坏性变更、毫秒级内存冒烟验证与五形态造插件——零依赖，支持 CLI 与 Agent Skill 双形态。
+`plugin-fast-adapt` 直接对照 DeepSeek Harness 官方升级指南，自动扫描插件里的不兼容写法、清理本机残留进程与旧缓存、用毫秒级内存测试验证修复效果；同时支持一键生成标准插件模板。**零第三方依赖**，内置 313 项自检，支持命令行与 AI Agent Skill 两种用法。
 
 [![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![npm](https://img.shields.io/npm/v/plugin-fast-adapt.svg)](https://www.npmjs.com/package/plugin-fast-adapt) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![外部依赖](https://img.shields.io/badge/外部依赖-0-blue.svg)](#依赖与自检) [![自检](https://img.shields.io/badge/自检-313项断言-brightgreen.svg)](#依赖与自检)
 
@@ -19,10 +19,10 @@
 ### 直接命令行运行（DSH 用户与插件作者通用）
 
 ```sh
-npx plugin-fast-adapt doctor --brief               # 整机环境体检：宿主版本、覆盖层残留包、幽灵进程、假绿检测
-npx plugin-fast-adapt fleet                        # 一键扫描整机已装插件（Web / APP）与工作区，输出健康看板
-npx plugin-fast-adapt check <插件目录>              # 单插件全链路：定版 → 指南 → 扫描 → 体检 → 4ms 冒烟 → typecheck
-npx plugin-fast-adapt new <ns>/<name> --form tool  # 一条命令生成五形态可运行插件，生成即验证
+npx plugin-fast-adapt doctor --brief               # 整机环境体检：查宿主版本、残留缓存、卡死的旧进程与错误配置
+npx plugin-fast-adapt fleet                        # 一键巡检整机已装插件（Web / 桌面端）与本地工作区，输出健康看板
+npx plugin-fast-adapt check <插件目录>              # 单插件全面体检：环境 → 官方指南 → 兼容扫描 → 规范检查 → 4ms 冒烟 → 类型检查
+npx plugin-fast-adapt new <ns>/<name> --form tool  # 一条命令生成可直接运行的插件模板（支持 5 种形态）并自动验证
 ```
 
 ### 作为 AI Agent Skill 安装（Claude Code / Codex / Cursor / DSH）

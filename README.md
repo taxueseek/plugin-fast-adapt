@@ -2,9 +2,9 @@
 
 # plugin-fast-adapt
 
-**Upgrade DeepSeek Harness without breaking your plugins.**
+**Keep your DeepSeek Harness plugins working across every host upgrade.**
 
-Diagnose your DSH host, sweep all installed & workspace plugins in one health board, scan breaking changes directly against official upgrade guides, smoke-test in milliseconds, and scaffold five runnable plugin forms — zero dependencies.
+When DSH updates, plugins often break silently due to SDK shifts, leftover cache files, or outdated configs. `plugin-fast-adapt` checks your environment, scans your plugin code directly against official upgrade guides, verifies fixes with millisecond in-memory tests, and scaffolds new plugins from scratch — with **zero external dependencies** and **313 built-in checks**.
 
 [![CI](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml/badge.svg)](https://github.com/taxueseek/plugin-fast-adapt/actions/workflows/ci.yml) [![npm](https://img.shields.io/npm/v/plugin-fast-adapt.svg)](https://www.npmjs.com/package/plugin-fast-adapt) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE) [![Dependencies](https://img.shields.io/badge/dependencies-0-blue.svg)](#dependencies) [![Self-test](https://img.shields.io/badge/self--test-313%20passing-brightgreen.svg)](#dependencies)
 
@@ -19,10 +19,10 @@ English | [简体中文](README.zh-CN.md) | [日本語](README.ja.md) · Latest 
 ### Run directly via CLI (for DSH users & plugin authors)
 
 ```sh
-npx plugin-fast-adapt doctor --brief               # check host version, stale overlays, ghost processes & tsconfig fake-green
-npx plugin-fast-adapt fleet                        # sweep all installed (Web/Desktop) & workspace plugins in one health board
-npx plugin-fast-adapt check <plugin-dir>           # full single-plugin pass: env → guide → scan → audit → 4ms smoke → typecheck
-npx plugin-fast-adapt new <ns>/<name> --form tool  # scaffold a runnable plugin in five forms & verify on creation
+npx plugin-fast-adapt doctor --brief               # check host version, leftover files, stale processes & broken configs
+npx plugin-fast-adapt fleet                        # scan all installed (Web/Desktop) & workspace plugins in one overview
+npx plugin-fast-adapt check <plugin-dir>           # full check: env → official guide → breaking scan → audit → 4ms smoke → typecheck
+npx plugin-fast-adapt new <ns>/<name> --form tool  # create a ready-to-run plugin template (5 types) & verify immediately
 ```
 
 ### Install as an AI Agent Skill (Claude Code / Codex / Cursor / DSH)
